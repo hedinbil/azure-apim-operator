@@ -117,7 +117,7 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	token, err := identity.GetManagementToken(ctx, r.Client)
+	token, err := identity.GetManagementToken(ctx, r.Client, "aks-openapi-operator", "aks-openapi-operator", "578e8159-3cd3-4036-9b16-eca64560a31c")
 	if err != nil {
 		logger.Error(err, "Failed to get Azure management token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil

@@ -2,12 +2,8 @@ package identity
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -15,55 +11,53 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-func GetManagementToken(ctx context.Context, kubeClient client.Client) (string, error) {
+func GetManagementToken(ctx context.Context, kubeClient client.Client, namespace string, serviceAccountName string, tenantID string) (string, error) {
 	logger := ctrl.Log.WithName("identity")
 
-	// Step 1: Get current pod and namespace from environment
-	podName := os.Getenv("HOSTNAME") // Kubernetes sets this to the pod name
-	namespaceBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
-	if err != nil {
-		return "", fmt.Errorf("failed to read pod namespace: %w", err)
-	}
-	namespace := string(namespaceBytes)
+	// Read the ServiceAccount to extract the workload identity client ID annotation
+	// var sa corev1.ServiceAccount
+	// if err := kubeClient.Get(ctx, types.NamespacedName{
+	// 	Name:      serviceAccountName,
+	// 	Namespace: namespace,
+	// }, &sa); err != nil {
+	// 	logger.Error(err, "❌ Failed to get ServiceAccount")
+	// 	return "", err
+	// }
 
-	// Step 2: Get Pod to find the ServiceAccount name
-	var pod corev1.Pod
-	if err := kubeClient.Get(ctx, types.NamespacedName{Name: podName, Namespace: namespace}, &pod); err != nil {
-		return "", fmt.Errorf("failed to get pod %s/%s: %w", namespace, podName, err)
-	}
+	// clientID, ok := sa.Annotations["azure.workload.identity/client-id"]
+	// if !ok || clientID == "" {
+	// 	err := fmt.Errorf("service account missing 'azure.workload.identity/client-id' annotation")
+	// 	logger.Error(err, "❌ Missing client ID annotation on service account")
+	// 	return "", err
+	// }
 
-	saName := pod.Spec.ServiceAccountName
-	if saName == "" {
-		saName = "default"
-	}
-
-	// Step 3: Get the ServiceAccount to extract the annotation
-	var sa corev1.ServiceAccount
-	if err := kubeClient.Get(ctx, types.NamespacedName{Name: saName, Namespace: namespace}, &sa); err != nil {
-		return "", fmt.Errorf("failed to get service account %s/%s: %w", namespace, saName, err)
-	}
-
-	clientID, ok := sa.Annotations["azure.workload.identity/client-id"]
-	if !ok || clientID == "" {
-		return "", fmt.Errorf("client ID annotation not found on service account %s/%s", namespace, saName)
-	}
-
-	// Step 4: Create credential using the client ID
+	// Build the WorkloadIdentityCredential manually
 	cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
-		ClientID: clientID,
+		ClientID:      "d7e57310-e862-41e6-9a55-7c492327a69b",
+		TenantID:      tenantID,
+		TokenFilePath: "/var/run/secrets/azure/tokens/azure-identity-token",
 	})
 	if err != nil {
-		logger.Error(err, "failed to create workload identity credential")
-		return "", fmt.Errorf("failed to create credential: %w", err)
+		logger.Error(err, "❌ Failed to create workload identity credential")
+		return "", err
 	}
 
-	// Step 5: Get token
+	// cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
+	// 	ClientID: "d7e57310-e862-41e6-9a55-7c492327a69b",
+	// })
+	// if err != nil {
+	// 	logger.Error(err, "failed to create workload identity credential")
+	// 	return "", fmt.Errorf("failed to create credential: %w", err)
+	// }
+
+	// Acquire token
+	const scope = "https://management.azure.com/.default"
 	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
-		Scopes: []string{"https://management.azure.com/.default"},
+		Scopes: []string{scope},
 	})
 	if err != nil {
-		logger.Error(err, "failed to get token")
-		return "", fmt.Errorf("failed to get token: %w", err)
+		logger.Error(err, "❌ Failed to get Azure access token")
+		return "", err
 	}
 
 	logger.Info("✅ Successfully acquired Azure token", "expires", token.ExpiresOn.Format(time.RFC3339))
