@@ -127,9 +127,9 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		SubscriptionID: "0b797d7c-b5dc-4466-9230-5bf9f1529a47",
 		ResourceGroup:  "rg-apim-dev",
 		ServiceName:    "apim-apim-dev-hedinit",
-		APIID:          ingress.Name,
-		RoutePrefix:    "/" + ingress.Name,
-		BearerToken:    token, //os.Getenv("AZURE_MANAGEMENT_TOKEN"),
+		APIID:          "fjupp",
+		RoutePrefix:    "/my-api", //ingress.Name,
+		BearerToken:    token,     //os.Getenv("AZURE_MANAGEMENT_TOKEN"),
 	}, swaggerYAML)
 	if err != nil {
 		logger.Error(err, "Failed to import API into APIM")

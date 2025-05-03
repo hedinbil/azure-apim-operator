@@ -28,7 +28,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.oai.openapi") // or +json if needed
+	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json") // or +json if needed
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
 
 	q := req.URL.Query()
@@ -73,11 +73,45 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	return nil
 }
 
+func patchServiceURL(ctx context.Context, config APIMConfig) error {
+	patchURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.APIID,
+	)
+
+	body := fmt.Sprintf(`{"properties":{"serviceUrl":"%s"}}`, config.ServiceURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("building PATCH request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("patch request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("serviceUrl patch failed: %s\n%s", resp.Status, string(respBody))
+	}
+
+	return nil
+}
+
 type APIMConfig struct {
 	SubscriptionID string
 	ResourceGroup  string
 	ServiceName    string
 	APIID          string // unique identifier for the API in APIM
 	RoutePrefix    string // base route in APIM (e.g. /bidme)
+	ServiceURL     string // Backend URL (e.g. https://myapp.example.com)
 	BearerToken    string // AAD token for the APIM management scope
 }
