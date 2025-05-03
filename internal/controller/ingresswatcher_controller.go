@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // IngressWatcherReconciler reconciles a IngressWatcher object
@@ -38,6 +37,8 @@ type IngressWatcherReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
+
+var logger = ctrl.Log.WithName("controller")
 
 // +kubebuilder:rbac:groups=net.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=net.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
@@ -54,8 +55,6 @@ type IngressWatcherReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
 func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := logf.FromContext(ctx)
-
 	var ingress networkingv1.Ingress
 	if err := r.Get(ctx, req.NamespacedName, &ingress); err != nil {
 		logger.Error(err, "❌ Unable to fetch Ingress")
