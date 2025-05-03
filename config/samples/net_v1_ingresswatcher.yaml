@@ -2,7 +2,7 @@ apiVersion: net.hedinit.io/v1
 kind: IngressWatcher
 metadata:
   labels:
-    app.kubernetes.io/name: aks-openapi-operator
+    app.kubernetes.io/name: aks-apim-operator
     app.kubernetes.io/managed-by: kustomize
   name: ingresswatcher-sample
 spec:

@@ -5,8 +5,8 @@
 domain: hedinit.io
 layout:
 - go.kubebuilder.io/v4
-projectName: aks-openapi-operator
-repo: github.com/hedinit/aks-openapi-operator
+projectName: aks-apim-operator
+repo: github.com/hedinit/aks-apim-operator
 resources:
 - api:
     crdVersion: v1
@@ -15,6 +15,6 @@ resources:
   domain: hedinit.io
   group: net
   kind: IngressWatcher
-  path: github.com/hedinit/aks-openapi-operator/api/v1
+  path: github.com/hedinit/aks-apim-operator/api/v1
   version: v1
 version: "3"

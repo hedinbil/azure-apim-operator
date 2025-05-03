@@ -1,9 +1,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "aks-openapi-operator.fullname" . }}
+  name: {{ include "aks-apim-operator.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "aks-openapi-operator.name" . }}
+    app.kubernetes.io/name: {{ include "aks-apim-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 rules:
   - apiGroups: ["networking.k8s.io"]
@@ -13,15 +13,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "aks-openapi-operator.fullname" . }}
+  name: {{ include "aks-apim-operator.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "aks-openapi-operator.name" . }}
+    app.kubernetes.io/name: {{ include "aks-apim-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "aks-openapi-operator.fullname" . }}
+  name: {{ include "aks-apim-operator.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "aks-openapi-operator.serviceAccountName" . }}
+    name: {{ include "aks-apim-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}

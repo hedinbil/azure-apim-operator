@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	netv1 "github.com/hedinit/aks-openapi-operator/api/v1"
+	netv1 "github.com/hedinit/aks-apim-operator/api/v1"
 )
 
 var _ = Describe("IngressWatcher Controller", func() {

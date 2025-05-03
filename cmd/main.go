@@ -37,8 +37,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	netv1 "github.com/hedinit/aks-openapi-operator/api/v1"
-	"github.com/hedinit/aks-openapi-operator/internal/controller"
+	netv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	"github.com/hedinit/aks-apim-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

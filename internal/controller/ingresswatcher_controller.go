@@ -24,8 +24,8 @@ import (
 	"os"
 	"time"
 
-	apim "github.com/hedinit/aks-openapi-operator/internal/apim"
-	identity "github.com/hedinit/aks-openapi-operator/internal/identity"
+	apim "github.com/hedinit/aks-apim-operator/internal/apim"
+	identity "github.com/hedinit/aks-apim-operator/internal/identity"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"

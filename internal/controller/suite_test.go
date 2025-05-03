@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	netv1 "github.com/hedinit/aks-openapi-operator/api/v1"
+	netv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 

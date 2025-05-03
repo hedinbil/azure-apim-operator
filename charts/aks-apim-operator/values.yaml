@@ -1,4 +1,4 @@
-# Default values for aks-openapi-operator.
+# Default values for aks-apim-operator.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
@@ -7,7 +7,7 @@ replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  repository: hedinit.azurecr.io/aks-openapi-operator
+  repository: hedinit.azurecr.io/aks-apim-operator
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
@@ -124,7 +124,7 @@ affinity: {}
 
 serviceAccount:
   create: true
-  name: aks-openapi-operator
+  name: aks-apim-operator
   automount: true
   workloadIdentity:
     enabled: true

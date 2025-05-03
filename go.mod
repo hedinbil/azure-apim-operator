@@ -1,4 +1,4 @@
-module github.com/hedinit/aks-openapi-operator
+module github.com/hedinit/aks-apim-operator
 
 go 1.23.0
 
