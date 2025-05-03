@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- net_v1_ingresswatcher.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
