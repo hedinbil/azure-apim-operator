@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	apim "github.com/hedinit/aks-openapi-operator/internal/apim"
+	identity "github.com/hedinit/aks-openapi-operator/internal/identity"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -117,13 +117,19 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
+	token, err := identity.GetManagementToken(ctx)
+	if err != nil {
+		logger.Error(err, "Failed to get Azure management token")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	err = apim.ImportSwaggerToAPIM(ctx, apim.APIMConfig{
 		SubscriptionID: "0b797d7c-b5dc-4466-9230-5bf9f1529a47",
 		ResourceGroup:  "rg-apim-dev",
 		ServiceName:    "apim-apim-dev-hedinit",
 		APIID:          ingress.Name,
 		RoutePrefix:    "/" + ingress.Name,
-		BearerToken:    os.Getenv("AZURE_MANAGEMENT_TOKEN"),
+		BearerToken:    token, //os.Getenv("AZURE_MANAGEMENT_TOKEN"),
 	}, swaggerYAML)
 	if err != nil {
 		logger.Error(err, "Failed to import API into APIM")
