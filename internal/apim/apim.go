@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+var logger = ctrl.Log.WithName("apim")
+
 func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML []byte) error {
-	importURL := fmt.Sprintf("https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
+	importURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		apimParams.SubscriptionID,
 		apimParams.ResourceGroup,
 		apimParams.ServiceName,
@@ -18,20 +24,35 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(swaggerYAML))
 	if err != nil {
+		logger.Error(err, "❌ Failed to build APIM request")
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.oai.openapi")
+	req.Header.Set("Content-Type", "application/vnd.oai.openapi") // or +json if needed
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
 
-	// Optional query params to control import behavior
 	q := req.URL.Query()
 	q.Set("import", "true")
-	q.Set("path", apimParams.RoutePrefix) // e.g. "/my-api"
+	q.Set("path", apimParams.RoutePrefix)
 	req.URL.RawQuery = q.Encode()
+
+	logger.Info("📤 Sending request to APIM",
+		"method", req.Method,
+		"url", req.URL.String(),
+		"apiID", apimParams.APIID,
+		"routePrefix", apimParams.RoutePrefix,
+	)
+
+	// Log beginning of the Swagger content for debug purposes
+	snippet := string(swaggerYAML)
+	if len(snippet) > 200 {
+		snippet = snippet[:200] + "..."
+	}
+	logger.Info("📄 Swagger snippet", "preview", strings.TrimSpace(snippet))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Error(err, "❌ Failed to send request to APIM")
 		return fmt.Errorf("failed to call APIM API: %w", err)
 	}
 	defer resp.Body.Close()
@@ -39,10 +60,16 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 300 {
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ APIM API returned error", "status", resp.Status, "body", string(body))
 		return fmt.Errorf("APIM API failed: %s\n%s", resp.Status, string(body))
 	}
 
-	fmt.Printf("API imported successfully into APIM: %s\n", apimParams.APIID)
+	logger.Info("✅ Successfully imported API into APIM",
+		"api", apimParams.APIID,
+		"status", resp.Status,
+		"statusCode", resp.StatusCode,
+	)
+
 	return nil
 }
 
