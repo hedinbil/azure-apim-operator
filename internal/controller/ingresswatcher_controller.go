@@ -117,7 +117,7 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	token, err := identity.GetManagementToken(ctx)
+	token, err := identity.GetManagementToken(ctx, r.Client)
 	if err != nil {
 		logger.Error(err, "Failed to get Azure management token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
