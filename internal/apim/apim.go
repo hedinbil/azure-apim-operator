@@ -34,6 +34,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	q := req.URL.Query()
 	q.Set("import", "true")
 	q.Set("path", apimParams.RoutePrefix)
+	req.Header.Set("If-Match", "*") // <-- Required to overwrite existing APIs
 	req.URL.RawQuery = q.Encode()
 
 	logger.Info("📤 Sending request to APIM",
@@ -73,7 +74,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	return nil
 }
 
-func patchServiceURL(ctx context.Context, config APIMConfig) error {
+func PatchServiceURL(ctx context.Context, config APIMConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		config.SubscriptionID,

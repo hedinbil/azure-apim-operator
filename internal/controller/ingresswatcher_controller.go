@@ -154,6 +154,25 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"serviceUrl", fmt.Sprintf("https://%s", host),
 	)
 
+	err = apim.PatchServiceURL(ctx, apim.APIMConfig{
+		SubscriptionID: subscriptionID,
+		ResourceGroup:  resourceGroup,
+		ServiceName:    serviceName,
+		APIID:          ingress.Name,
+		RoutePrefix:    routePrefix,
+		ServiceURL:     fmt.Sprintf("https://%s", host),
+		BearerToken:    token,
+	})
+	if err != nil {
+		logger.Error(err, "🚫 Failed to patch API in APIM")
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
+	logger.Info("✅ Successfully patched API in APIM",
+		"apiID", ingress.Name,
+		"serviceUrl", fmt.Sprintf("https://%s", host),
+	)
+
 	return ctrl.Result{}, nil
 }
 
