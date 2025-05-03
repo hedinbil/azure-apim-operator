@@ -22,6 +22,7 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        azure.workload.identity/use: "true"
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

@@ -21,7 +21,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.oai.openapi.components+yaml") // for OpenAPI v3 YAML
+	req.Header.Set("Content-Type", "application/vnd.oai.openapi")
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
 
 	// Optional query params to control import behavior

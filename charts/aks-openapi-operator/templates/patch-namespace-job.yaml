@@ -1,0 +1,21 @@
+# apiVersion: batch/v1
+# kind: Job
+# metadata:
+#   name: "{{ .Release.Name }}-patch-namespace"
+#   namespace: {{ .Release.Namespace }}
+#   annotations:
+#     "helm.sh/hook": pre-install
+#     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+# spec:
+#   template:
+#     spec:
+#       serviceAccountName: {{ .Values.serviceAccount.name }}
+#       restartPolicy: Never
+#       containers:
+#         - name: patch
+#           image: bitnami/kubectl:latest
+#           command:
+#             - /bin/sh
+#             - -c
+#             - >
+#               kubectl label namespace {{ .Release.Namespace }} azure.workload.identity/use=true --overwrite
