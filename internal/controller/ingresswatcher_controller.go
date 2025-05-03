@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	apim "github.com/hedinit/aks-openapi-operator/internal/apim"
@@ -129,7 +130,10 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"routePrefix", routePrefix,
 	)
 
-	token, err := identity.GetManagementToken(ctx, "d7e57310-e862-41e6-9a55-7c492327a69b", "578e8159-3cd3-4036-9b16-eca64560a31c")
+	clientID := os.Getenv("AZURE_CLIENT_ID")
+	tenantID := os.Getenv("AZURE_TENANT_ID")
+
+	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure management token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
