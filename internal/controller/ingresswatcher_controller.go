@@ -19,9 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
+	apim "github.com/hedinit/aks-openapi-operator/internal/apim"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -60,19 +63,36 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	logger.Info("Ingress found", "name", ingress.Name, "namespace", ingress.Namespace)
 
-	val, ok := ingress.Annotations["hedinit.io/openapi-export"]
-	if !ok || val != "true" {
+	annotations := ingress.Annotations
+	if annotations["hedinit.io/openapi-export"] != "true" {
 		logger.Info("Annotation not present or not set to 'true', skipping")
 		return ctrl.Result{}, nil
 	}
 
-	if len(ingress.Status.LoadBalancer.Ingress) == 0 {
-		logger.Info("Ingress has no LoadBalancer status yet, will retry")
+	var host string
+	if len(ingress.Spec.Rules) > 0 && ingress.Spec.Rules[0].Host != "" {
+		host = ingress.Spec.Rules[0].Host
+	} else if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		lb := ingress.Status.LoadBalancer.Ingress[0]
+		if lb.Hostname != "" {
+			host = lb.Hostname
+		} else if lb.IP != "" {
+			host = lb.IP
+		}
+	}
+
+	if host == "" {
+		logger.Info("Could not determine Ingress host, will retry")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	host := ingress.Status.LoadBalancer.Ingress[0].Hostname
-	swaggerURL := fmt.Sprintf("https://%s/swagger.yaml", host)
+	// Get custom swagger path if present
+	swaggerPath := annotations["hedinit.io/swagger-path"]
+	if swaggerPath == "" {
+		swaggerPath = "/swagger.yaml"
+	}
+
+	swaggerURL := fmt.Sprintf("https://%s%s", host, swaggerPath)
 
 	logger.Info("Fetching Swagger YAML", "url", swaggerURL)
 
@@ -83,7 +103,34 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	defer resp.Body.Close()
 
+	swaggerYAML, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error(err, "Failed to read Swagger body")
+		return ctrl.Result{}, err
+	}
+
 	logger.Info("Successfully fetched Swagger", "status", resp.StatusCode)
+
+	// Optional: only import if explicitly requested
+	if annotations["hedinit.io/import-to-apim"] != "true" {
+		logger.Info("Skipping APIM import - annotation not set")
+		return ctrl.Result{}, nil
+	}
+
+	err = apim.ImportSwaggerToAPIM(ctx, apim.APIMConfig{
+		SubscriptionID: "0b797d7c-b5dc-4466-9230-5bf9f1529a47",
+		ResourceGroup:  "rg-apim-dev",
+		ServiceName:    "apim-apim-dev-hedinit",
+		APIID:          ingress.Name,
+		RoutePrefix:    "/" + ingress.Name,
+		BearerToken:    os.Getenv("AZURE_MANAGEMENT_TOKEN"),
+	}, swaggerYAML)
+	if err != nil {
+		logger.Error(err, "Failed to import API into APIM")
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
+	logger.Info("Successfully imported API into APIM", "api", ingress.Name)
 
 	return ctrl.Result{}, nil
 }

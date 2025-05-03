@@ -11,5 +11,5 @@ roleRef:
   name: {{ include "aks-openapi-operator.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.serviceAccount.name | default "default" }}
+    name: {{ include "aks-openapi-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
