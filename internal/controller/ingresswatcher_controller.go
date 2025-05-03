@@ -57,17 +57,16 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	var ingress networkingv1.Ingress
 	if err := r.Get(ctx, req.NamespacedName, &ingress); err != nil {
-		logger.Error(err, "unable to fetch Ingress")
+		logger.Error(err, "❌ Unable to fetch Ingress")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	logger.Info("Ingress found", "name", ingress.Name, "namespace", ingress.Namespace)
-
 	annotations := ingress.Annotations
-	if annotations["hedinit.io/openapi-export"] != "true" {
-		logger.Info("Annotation not present or not set to 'true', skipping")
-		return ctrl.Result{}, nil
-	}
+	logger.Info("🔍 Ingress detected for reconciliation",
+		"name", ingress.Name,
+		"namespace", ingress.Namespace,
+		"annotations", annotations,
+	)
 
 	var host string
 	if len(ingress.Spec.Rules) > 0 && ingress.Spec.Rules[0].Host != "" {
@@ -82,61 +81,78 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if host == "" {
-		logger.Info("Could not determine Ingress host, will retry")
+		logger.Info("⏳ Could not determine Ingress host, will retry")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	// Get custom swagger path if present
-	swaggerPath := annotations["hedinit.io/swagger-path"]
+	if annotations["apim.hedinit.io/import"] != "true" {
+		logger.Info("⛔ Skipping APIM import – annotation not set or false")
+		return ctrl.Result{}, nil
+	}
+
+	swaggerPath := annotations["apim.hedinit.io/swagger-path"]
 	if swaggerPath == "" {
 		swaggerPath = "/swagger.yaml"
 	}
-
 	swaggerURL := fmt.Sprintf("https://%s%s", host, swaggerPath)
-
-	logger.Info("Fetching Swagger YAML", "url", swaggerURL)
+	logger.Info("📡 Fetching Swagger document", "url", swaggerURL)
 
 	resp, err := http.Get(swaggerURL)
 	if err != nil {
-		logger.Error(err, "Failed to fetch Swagger YAML")
+		logger.Error(err, "❌ Failed to fetch Swagger document")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	defer resp.Body.Close()
 
 	swaggerYAML, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logger.Error(err, "Failed to read Swagger body")
+		logger.Error(err, "❌ Failed to read Swagger body")
 		return ctrl.Result{}, err
 	}
 
-	logger.Info("Successfully fetched Swagger", "status", resp.StatusCode)
+	logger.Info("📄 Swagger fetched successfully", "status", resp.StatusCode)
 
-	// Optional: only import if explicitly requested
-	if annotations["hedinit.io/import-to-apim"] != "true" {
-		logger.Info("Skipping APIM import - annotation not set")
-		return ctrl.Result{}, nil
+	// Extract required metadata from annotations
+	subscriptionID := annotations["apim.hedinit.io/subscriptionid"]
+	resourceGroup := annotations["apim.hedinit.io/resourcegroup"]
+	serviceName := annotations["apim.hedinit.io/apim"]
+	routePrefix := annotations["apim.hedinit.io/routeprefix"]
+	if routePrefix == "" {
+		routePrefix = "/" + ingress.Name
 	}
+
+	logger.Info("🔧 APIM configuration extracted",
+		"subscriptionID", subscriptionID,
+		"resourceGroup", resourceGroup,
+		"serviceName", serviceName,
+		"apiID", ingress.Name,
+		"routePrefix", routePrefix,
+	)
 
 	token, err := identity.GetManagementToken(ctx, "d7e57310-e862-41e6-9a55-7c492327a69b", "578e8159-3cd3-4036-9b16-eca64560a31c")
 	if err != nil {
-		logger.Error(err, "Failed to get Azure management token")
+		logger.Error(err, "❌ Failed to get Azure management token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	err = apim.ImportSwaggerToAPIM(ctx, apim.APIMConfig{
-		SubscriptionID: "0b797d7c-b5dc-4466-9230-5bf9f1529a47",
-		ResourceGroup:  "rg-apim-dev",
-		ServiceName:    "apim-apim-dev-hedinit",
-		APIID:          "fjupp",
-		RoutePrefix:    "/my-api", //ingress.Name,
-		BearerToken:    token,     //os.Getenv("AZURE_MANAGEMENT_TOKEN"),
+		SubscriptionID: subscriptionID,
+		ResourceGroup:  resourceGroup,
+		ServiceName:    serviceName,
+		APIID:          ingress.Name,
+		RoutePrefix:    routePrefix,
+		ServiceURL:     fmt.Sprintf("https://%s", host),
+		BearerToken:    token,
 	}, swaggerYAML)
 	if err != nil {
-		logger.Error(err, "Failed to import API into APIM")
+		logger.Error(err, "🚫 Failed to import API into APIM")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
-	logger.Info("Successfully imported API into APIM", "api", ingress.Name)
+	logger.Info("✅ Successfully imported API into APIM",
+		"apiID", ingress.Name,
+		"serviceUrl", fmt.Sprintf("https://%s", host),
+	)
 
 	return ctrl.Result{}, nil
 }
