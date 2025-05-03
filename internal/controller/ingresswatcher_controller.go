@@ -131,7 +131,16 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	)
 
 	clientID := os.Getenv("AZURE_CLIENT_ID")
+	if clientID == "" {
+		logger.Error(fmt.Errorf("missing AZURE_CLIENT_ID"), "❌ Environment variable not set")
+		return ctrl.Result{}, fmt.Errorf("AZURE_CLIENT_ID not set")
+	}
+
 	tenantID := os.Getenv("AZURE_TENANT_ID")
+	if tenantID == "" {
+		logger.Error(fmt.Errorf("missing AZURE_TENANT_ID"), "❌ Environment variable not set")
+		return ctrl.Result{}, fmt.Errorf("AZURE_TENANT_ID not set")
+	}
 
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
