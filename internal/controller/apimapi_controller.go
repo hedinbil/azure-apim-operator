@@ -84,6 +84,15 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
+
+	api.Status.ImportedAt = time.Now().Format(time.RFC3339)
+	api.Status.SwaggerStatus = resp.Status
+
+	if err := r.Status().Update(ctx, &api); err != nil {
+		logger.Error(err, "⚠️ Failed to update APIMAPI status")
+		return ctrl.Result{}, err
+	}
+
 	logger.Info("✅ Service URL patched in APIM", "apiID", api.Name)
 
 	return ctrl.Result{}, nil

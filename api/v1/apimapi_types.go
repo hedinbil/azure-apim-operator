@@ -8,23 +8,27 @@ import (
 type APIMAPISpec struct {
 	Host          string `json:"host"`
 	RoutePrefix   string `json:"routePrefix"`
-	ImportedAt    string `json:"importedAt"`
 	SwaggerPath   string `json:"swaggerPath"`
-	SwaggerStatus string `json:"swaggerStatus"`
 	APIMService   string `json:"apimService"`
 	Subscription  string `json:"subscription"`
 	ResourceGroup string `json:"resourceGroup"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+type APIMAPIStatus struct {
+	ImportedAt    string `json:"importedAt,omitempty"`
+	SwaggerStatus string `json:"swaggerStatus,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // APIMAPI is the Schema for the apimapis API
 type APIMAPI struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec APIMAPISpec `json:"spec,omitempty"`
+	Spec   APIMAPISpec   `json:"spec,omitempty"`
+	Status APIMAPIStatus `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true

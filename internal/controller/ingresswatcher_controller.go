@@ -91,9 +91,7 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		Spec: apimv1.APIMAPISpec{
 			Host:          host,
 			RoutePrefix:   routePrefix,
-			ImportedAt:    time.Now().Format(time.RFC3339),
 			SwaggerPath:   swaggerPath,
-			SwaggerStatus: "", // Will be updated by APIMAPI controller
 			APIMService:   serviceName,
 			Subscription:  subscriptionID,
 			ResourceGroup: resourceGroup,

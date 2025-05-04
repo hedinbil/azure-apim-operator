@@ -20,12 +20,14 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapis/finalizers
   - ingresswatchers/finalizers
   verbs:
   - update
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapis/status
   - ingresswatchers/status
   verbs:
   - get

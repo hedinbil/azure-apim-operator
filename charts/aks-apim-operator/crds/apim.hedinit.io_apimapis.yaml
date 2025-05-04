@@ -43,8 +43,6 @@ spec:
                 type: string
               host:
                 type: string
-              importedAt:
-                type: string
               resourceGroup:
                 type: string
               routePrefix:
@@ -53,17 +51,20 @@ spec:
                 type: string
               swaggerPath:
                 type: string
-              swaggerStatus:
-                type: string
             required:
             - apimService
             - host
-            - importedAt
             - resourceGroup
             - routePrefix
             - subscription
             - swaggerPath
-            - swaggerStatus
+            type: object
+          status:
+            properties:
+              importedAt:
+                type: string
+              swaggerStatus:
+                type: string
             type: object
         type: object
     served: true
