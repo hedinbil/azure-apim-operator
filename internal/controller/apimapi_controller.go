@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // APIMAPIReconciler reconciles a APIMAPI object
@@ -28,7 +27,8 @@ type APIMAPIReconciler struct {
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/finalizers,verbs=update
 
 func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	//logger := log.FromContext(ctx)
+	var logger = ctrl.Log.WithName("apimapi_controller")
 
 	var api apimv1.APIMAPI
 	if err := r.Get(ctx, req.NamespacedName, &api); err != nil {
