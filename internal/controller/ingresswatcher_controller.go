@@ -30,6 +30,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -188,10 +189,34 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"serviceUrl", fmt.Sprintf("https://%s", host),
 	)
 
+	// apiObj := &apimv1.APIMAPI{
+	// 	ObjectMeta: metav1.ObjectMeta{
+	// 		Name:      ingress.Name,
+	// 		Namespace: ingress.Namespace,
+	// 	},
+	// 	Spec: apimv1.APIMAPISpec{
+	// 		Host:          host,
+	// 		RoutePrefix:   routePrefix,
+	// 		ImportedAt:    time.Now().Format(time.RFC3339),
+	// 		SwaggerPath:   swaggerPath,
+	// 		SwaggerStatus: resp.Status,
+	// 		APIMService:   serviceName,
+	// 		Subscription:  subscriptionID,
+	// 		ResourceGroup: resourceGroup,
+	// 	},
+	// }
+
 	apiObj := &apimv1.APIMAPI{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ingress.Name,
 			Namespace: ingress.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(&ingress, schema.GroupVersionKind{
+					Group:   "networking.k8s.io",
+					Version: "v1",
+					Kind:    "Ingress",
+				}),
+			},
 		},
 		Spec: apimv1.APIMAPISpec{
 			Host:          host,
