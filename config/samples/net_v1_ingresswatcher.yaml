@@ -1,4 +1,4 @@
-apiVersion: net.hedinit.io/v1
+apiVersion: apim.hedinit.io/v1
 kind: IngressWatcher
 metadata:
   labels:

@@ -40,9 +40,9 @@ type IngressWatcherReconciler struct {
 
 var logger = ctrl.Log.WithName("controller")
 
-// +kubebuilder:rbac:groups=net.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=net.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=net.hedinit.io,resources=ingresswatchers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
