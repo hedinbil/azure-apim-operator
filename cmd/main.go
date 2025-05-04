@@ -37,7 +37,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	netv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	"github.com/hedinit/aks-apim-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -50,7 +50,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(netv1.AddToScheme(scheme))
+	utilruntime.Must(apimv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

@@ -1,16 +1,4 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "aks-apim-operator.fullname" . }}
-  labels:
-    app.kubernetes.io/name: {{ include "aks-apim-operator.name" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-rules:
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: {{ include "aks-apim-operator.fullname" . }}

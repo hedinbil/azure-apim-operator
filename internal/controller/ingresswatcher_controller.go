@@ -24,9 +24,11 @@ import (
 	"os"
 	"time"
 
+	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	apim "github.com/hedinit/aks-apim-operator/internal/apim"
 	identity "github.com/hedinit/aks-apim-operator/internal/identity"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +45,7 @@ var logger = ctrl.Log.WithName("controller")
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -184,6 +187,29 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"apiID", ingress.Name,
 		"serviceUrl", fmt.Sprintf("https://%s", host),
 	)
+
+	apiObj := &apimv1.APIMAPI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ingress.Name,
+			Namespace: ingress.Namespace,
+		},
+		Spec: apimv1.APIMAPISpec{
+			Host:          host,
+			RoutePrefix:   routePrefix,
+			ImportedAt:    time.Now().Format(time.RFC3339),
+			SwaggerPath:   swaggerPath,
+			SwaggerStatus: resp.Status,
+			APIMService:   serviceName,
+			Subscription:  subscriptionID,
+			ResourceGroup: resourceGroup,
+		},
+	}
+
+	if err := r.Create(ctx, apiObj); err != nil {
+		logger.Error(err, "❌ Failed to create APIMAPI object")
+	} else {
+		logger.Info("📘 APIMAPI created", "name", apiObj.Name)
+	}
 
 	return ctrl.Result{}, nil
 }

@@ -7,7 +7,7 @@ CHART_NAME="aks-apim-operator"
 ACR_REPO="oci://hedinit.azurecr.io/helm-charts"
 
 # Optional: Pass version as argument
-VERSION="${1:-0.17.0}"
+VERSION="${1:-0.19.0}"
 CHART_PACKAGE="${CHART_NAME}-${VERSION}.tgz"
 
 log() {
