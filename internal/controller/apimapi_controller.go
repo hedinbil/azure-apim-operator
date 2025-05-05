@@ -72,6 +72,7 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		RoutePrefix:    api.Spec.RoutePrefix,
 		ServiceURL:     fmt.Sprintf("https://%s", api.Spec.Host),
 		BearerToken:    token,
+		Revision:       "1",
 	}
 
 	if err := apim.ImportSwaggerToAPIM(ctx, config, swaggerYAML); err != nil {
@@ -84,7 +85,6 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-
 	logger.Info("✅ Service URL patched in APIM", "apiID", api.Name)
 
 	api.Status.ImportedAt = time.Now().Format(time.RFC3339)

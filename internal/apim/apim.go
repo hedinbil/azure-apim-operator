@@ -14,12 +14,17 @@ import (
 var logger = ctrl.Log.WithName("apim")
 
 func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML []byte) error {
+	apiID := apimParams.APIID
+	if apimParams.Revision != "" {
+		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
+	}
+
 	importURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		apimParams.SubscriptionID,
 		apimParams.ResourceGroup,
 		apimParams.ServiceName,
-		apimParams.APIID,
+		apiID,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(swaggerYAML))
@@ -34,6 +39,9 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	q := req.URL.Query()
 	q.Set("import", "true")
 	q.Set("path", apimParams.RoutePrefix)
+	if apimParams.Revision != "" {
+		q.Set("createRevision", "true")
+	}
 	req.Header.Set("If-Match", "*") // <-- Required to overwrite existing APIs
 	req.URL.RawQuery = q.Encode()
 
@@ -115,4 +123,5 @@ type APIMConfig struct {
 	RoutePrefix    string // base route in APIM (e.g. /bidme)
 	ServiceURL     string // Backend URL (e.g. https://myapp.example.com)
 	BearerToken    string // AAD token for the APIM management scope
+	Revision       string // e.g. "2" → optional
 }
