@@ -5,10 +5,19 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - apim.hedinit.io
   resources:
   - apimapis
   - ingresswatchers
+  - podwatchers
   verbs:
   - create
   - delete
@@ -22,6 +31,7 @@ rules:
   resources:
   - apimapis/finalizers
   - ingresswatchers/finalizers
+  - podwatchers/finalizers
   verbs:
   - update
 - apiGroups:
@@ -29,6 +39,7 @@ rules:
   resources:
   - apimapis/status
   - ingresswatchers/status
+  - podwatchers/status
   verbs:
   - get
   - patch

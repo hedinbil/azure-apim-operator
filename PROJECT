@@ -26,4 +26,9 @@ resources:
   kind: APIMAPI
   path: github.com/hedinit/aks-apim-operator/api/v1
   version: v1
+- controller: true
+  domain: hedinit.io
+  group: apim
+  kind: PodWatcher
+  version: v1
 version: "3"
