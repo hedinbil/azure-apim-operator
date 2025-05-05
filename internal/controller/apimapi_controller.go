@@ -72,7 +72,7 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		RoutePrefix:    api.Spec.RoutePrefix,
 		ServiceURL:     fmt.Sprintf("https://%s", api.Spec.Host),
 		BearerToken:    token,
-		Revision:       "1",
+		Revision:       api.Spec.Revision,
 	}
 
 	if err := apim.ImportSwaggerToAPIM(ctx, config, swaggerYAML); err != nil {

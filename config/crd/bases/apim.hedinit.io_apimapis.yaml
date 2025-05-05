@@ -45,6 +45,8 @@ spec:
                 type: string
               resourceGroup:
                 type: string
+              revision:
+                type: string
               routePrefix:
                 type: string
               subscription:
