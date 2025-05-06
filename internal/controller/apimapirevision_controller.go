@@ -94,7 +94,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		SubscriptionID: apiRevision.Spec.Subscription,
 		ResourceGroup:  apiRevision.Spec.ResourceGroup,
 		ServiceName:    apiRevision.Spec.APIMService,
-		APIID:          apiRevision.Name,
+		APIID:          apiRevision.Spec.APIID,
 		RoutePrefix:    apiRevision.Spec.RoutePrefix,
 		ServiceURL:     fmt.Sprintf("https://%s", apiRevision.Spec.Host),
 		BearerToken:    token,

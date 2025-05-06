@@ -39,6 +39,8 @@ spec:
           spec:
             description: APIMAPIRevisionSpec defines the desired state of APIMAPIRevision
             properties:
+              APIID:
+                type: string
               apimService:
                 type: string
               host:
@@ -54,6 +56,7 @@ spec:
               swaggerPath:
                 type: string
             required:
+            - APIID
             - apimService
             - host
             - resourceGroup

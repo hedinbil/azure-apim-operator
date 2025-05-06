@@ -12,6 +12,7 @@ type APIMAPISpec struct {
 	APIMService   string `json:"apimService"`
 	Subscription  string `json:"subscription"`
 	ResourceGroup string `json:"resourceGroup"`
+	APIID         string `json:"APIID"`
 	Revision      string `json:"revision,omitempty"`
 }
 

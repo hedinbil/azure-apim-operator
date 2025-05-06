@@ -78,6 +78,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			APIMService:   existing.Spec.APIMService,
 			Subscription:  existing.Spec.Subscription,
 			ResourceGroup: existing.Spec.ResourceGroup,
+			APIID:         appName,
 			Revision:      revision,
 		},
 	}
