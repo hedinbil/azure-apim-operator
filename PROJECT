@@ -31,4 +31,9 @@ resources:
   group: apim
   kind: PodWatcher
   version: v1
+- controller: true
+  domain: hedinit.io
+  group: apim
+  kind: ReplicaSetWatcher
+  version: v1
 version: "3"

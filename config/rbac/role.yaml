@@ -18,6 +18,7 @@ rules:
   - apimapis
   - ingresswatchers
   - podwatchers
+  - replicasetwatchers
   verbs:
   - create
   - delete
@@ -32,6 +33,7 @@ rules:
   - apimapis/finalizers
   - ingresswatchers/finalizers
   - podwatchers/finalizers
+  - replicasetwatchers/finalizers
   verbs:
   - update
 - apiGroups:
@@ -40,6 +42,7 @@ rules:
   - apimapis/status
   - ingresswatchers/status
   - podwatchers/status
+  - replicasetwatchers/status
   verbs:
   - get
   - patch
