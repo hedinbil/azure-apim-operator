@@ -13,7 +13,7 @@ import (
 
 var logger = ctrl.Log.WithName("apim")
 
-func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML []byte) error {
+func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMRevisionConfig, swaggerYAML []byte) error {
 	apiID := apimParams.APIID
 	if apimParams.Revision != "" {
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
@@ -82,7 +82,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMConfig, swaggerYAML
 	return nil
 }
 
-func PatchServiceURL(ctx context.Context, config APIMConfig) error {
+func PatchServiceURL(ctx context.Context, config APIMRevisionConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		config.SubscriptionID,
@@ -115,7 +115,7 @@ func PatchServiceURL(ctx context.Context, config APIMConfig) error {
 	return nil
 }
 
-type APIMConfig struct {
+type APIMRevisionConfig struct {
 	SubscriptionID string
 	ResourceGroup  string
 	ServiceName    string

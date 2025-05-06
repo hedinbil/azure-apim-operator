@@ -54,7 +54,7 @@ type APIMAPIRevisionReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
 func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	//logger := log.FromContext(ctx)
-	var logger = ctrl.Log.WithName("apimapi_controller")
+	var logger = ctrl.Log.WithName("apimapirevision_controller")
 
 	var apiRevision apimv1.APIMAPIRevision
 	if err := r.Get(ctx, req.NamespacedName, &apiRevision); err != nil {
@@ -90,7 +90,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	config := apim.APIMConfig{
+	config := apim.APIMRevisionConfig{
 		SubscriptionID: apiRevision.Spec.Subscription,
 		ResourceGroup:  apiRevision.Spec.ResourceGroup,
 		ServiceName:    apiRevision.Spec.APIMService,
