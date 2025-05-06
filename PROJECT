@@ -36,4 +36,13 @@ resources:
   group: apim
   kind: ReplicaSetWatcher
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: hedinit.io
+  group: apim
+  kind: APIMAPIRevision
+  path: github.com/hedinit/aks-apim-operator/api/v1
+  version: v1
 version: "3"

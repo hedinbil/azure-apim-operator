@@ -15,6 +15,7 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapirevisions
   - apimapis
   - ingresswatchers
   - podwatchers
@@ -30,6 +31,7 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapirevisions/finalizers
   - apimapis/finalizers
   - ingresswatchers/finalizers
   - podwatchers/finalizers
@@ -39,6 +41,7 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapirevisions/status
   - apimapis/status
   - ingresswatchers/status
   - podwatchers/status
@@ -47,6 +50,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - networking.k8s.io
   resources:
