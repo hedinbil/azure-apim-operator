@@ -10,8 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	netv1 "k8s.io/api/networking/v1"
 )
 
 // ReplicaSetWatcherReconciler reconciles a ReplicaSetWatcher object
@@ -26,6 +24,7 @@ type ReplicaSetWatcherReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapirevisions,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("replicasetwatcher_controller")
@@ -48,66 +47,47 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	var ingressList netv1.IngressList
-	if err := r.List(ctx, &ingressList, client.InNamespace(rs.Namespace)); err != nil {
-		logger.Error(err, "❌ Unable to list ingresses")
-		return ctrl.Result{}, err
+	// Fetch the existing APIMAPI by app name
+	var existing apimv1.APIMAPI
+	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existing); err != nil {
+		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	for _, ing := range ingressList.Items {
-		for _, rule := range ing.Spec.Rules {
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil && path.Backend.Service.Name == appName {
-					host := rule.Host
-					swaggerPath := labels["apim.hedinit.io/swagger-path"]
-					if swaggerPath == "" {
-						swaggerPath = "/swagger/v1/swagger.json"
-					}
-
-					subscriptionID := labels["apim.hedinit.io/subscriptionid"]
-					resourceGroup := labels["apim.hedinit.io/resourcegroup"]
-					serviceName := labels["apim.hedinit.io/apim"]
-					revision := labels["apim.hedinit.io/revision"]
-					routePrefix := labels["apim.hedinit.io/routeprefix"]
-					if routePrefix == "" {
-						routePrefix = "/" + appName
-					}
-
-					apiObj := &apimv1.APIMAPIRevision{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      appName,
-							Namespace: rs.Namespace,
-							OwnerReferences: []metav1.OwnerReference{
-								*metav1.NewControllerRef(&rs, schema.GroupVersionKind{
-									Group:   "apps",
-									Version: "v1",
-									Kind:    "ReplicaSet",
-								}),
-							},
-						},
-						Spec: apimv1.APIMAPIRevisionSpec{
-							Host:          host,
-							RoutePrefix:   routePrefix,
-							SwaggerPath:   swaggerPath,
-							APIMService:   serviceName,
-							Subscription:  subscriptionID,
-							ResourceGroup: resourceGroup,
-							Revision:      revision,
-						},
-					}
-
-					if err := r.Create(ctx, apiObj); err != nil {
-						logger.Error(err, "❌ Failed to create APIMAPIRevision object")
-					} else {
-						logger.Info("📘 APIMAPI created from ReplicaSet", "name", apiObj.Name)
-					}
-					return ctrl.Result{}, nil
-				}
-			}
-		}
+	revision := labels["apim.hedinit.io/revision"]
+	if revision == "" {
+		revision = "default"
 	}
 
-	logger.Info("ℹ️ No matching ingress found for ReplicaSet")
+	revisionObj := &apimv1.APIMAPIRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      appName + "-rev-" + revision,
+			Namespace: rs.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(&existing, schema.GroupVersionKind{
+					Group:   "apim.hedinit.io",
+					Version: "v1",
+					Kind:    "APIMAPI",
+				}),
+			},
+		},
+		Spec: apimv1.APIMAPIRevisionSpec{
+			Host:          existing.Spec.Host,
+			RoutePrefix:   existing.Spec.RoutePrefix,
+			SwaggerPath:   existing.Spec.SwaggerPath,
+			APIMService:   existing.Spec.APIMService,
+			Subscription:  existing.Spec.Subscription,
+			ResourceGroup: existing.Spec.ResourceGroup,
+			Revision:      revision,
+		},
+	}
+
+	if err := r.Create(ctx, revisionObj); err != nil {
+		logger.Error(err, "❌ Failed to create APIMAPIRevision object")
+	} else {
+		logger.Info("📘 APIMAPIRevision created", "name", revisionObj.Name)
+	}
+
 	return ctrl.Result{}, nil
 }
 
