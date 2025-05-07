@@ -46,8 +46,12 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Fetch the existing APIMAPI by app name
 	var existing apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existing); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", appName)
+			return ctrl.Result{}, nil
+		}
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		return ctrl.Result{}, err
 	}
 
 	revision := labels["apim.hedinit.io/revision"]

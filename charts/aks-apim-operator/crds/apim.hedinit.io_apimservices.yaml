@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapis.apim.hedinit.io
+  name: apimservices.apim.hedinit.io
 spec:
   group: apim.hedinit.io
   names:
-    kind: APIMAPI
-    listKind: APIMAPIList
-    plural: apimapis
-    singular: apimapi
+    kind: APIMService
+    listKind: APIMServiceList
+    plural: apimservices
+    singular: apimservice
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPI is the Schema for the apimapis API
+        description: APIMService is the Schema for the apimservices API.
         properties:
           apiVersion:
             description: |-
@@ -37,38 +37,25 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPISpec defines the desired state of APIMAPI
+            description: APIMServiceSpec defines the desired state of APIMService.
             properties:
-              APIID:
-                type: string
-              apimService:
-                type: string
-              host:
+              name:
+                description: Foo is an example field of APIMService. Edit apimservice_types.go
+                  to remove/update
                 type: string
               resourceGroup:
                 type: string
-              revision:
-                type: string
-              routePrefix:
-                type: string
               subscription:
                 type: string
-              swaggerPath:
-                type: string
             required:
-            - APIID
-            - apimService
-            - host
+            - name
             - resourceGroup
-            - routePrefix
             - subscription
-            - swaggerPath
             type: object
           status:
+            description: APIMServiceStatus defines the observed state of APIMService.
             properties:
-              importedAt:
-                type: string
-              swaggerStatus:
+              host:
                 type: string
             type: object
         type: object

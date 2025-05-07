@@ -1,0 +1,9 @@
+apiVersion: apim.hedinit.io/v1
+kind: APIMService
+metadata:
+  labels:
+    app.kubernetes.io/name: aks-apim-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: apimservice-sample
+spec:
+  # TODO(user): Add fields here

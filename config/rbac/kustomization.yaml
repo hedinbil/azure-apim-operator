@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- apimservice_admin_role.yaml
+- apimservice_editor_role.yaml
+- apimservice_viewer_role.yaml
 - APIMAPIRevision_admin_role.yaml
 - APIMAPIRevision_editor_role.yaml
 - APIMAPIRevision_viewer_role.yaml

@@ -39,6 +39,8 @@ spec:
           spec:
             description: APIMAPISpec defines the desired state of APIMAPI
             properties:
+              APIID:
+                type: string
               apimService:
                 type: string
               host:
@@ -54,6 +56,7 @@ spec:
               swaggerPath:
                 type: string
             required:
+            - APIID
             - apimService
             - host
             - resourceGroup

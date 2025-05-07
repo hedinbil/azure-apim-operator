@@ -26,5 +26,11 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]   
   - apiGroups: ["apim.hedinit.io"]
     resources: ["apimapirevisions/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apim.hedinit.io"]
+    resources: ["apimservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]   
+  - apiGroups: ["apim.hedinit.io"]
+    resources: ["apimservices/status"]
     verbs: ["get", "update", "patch"]    
 

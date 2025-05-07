@@ -3,4 +3,5 @@ resources:
 - net_v1_ingresswatcher.yaml
 - apim_v1_apimapi.yaml
 - apim_v1_APIMAPIRevision.yaml
+- apim_v1_apimservice.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
