@@ -125,14 +125,6 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Name)
 
-	// apiRevision.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	// apiRevision.Status.SwaggerStatus = resp.Status
-
-	// if err := r.Status().Update(ctx, &apiRevision); err != nil {
-	// 	logger.Error(err, "⚠️ Failed to update APIMAPIRevision status")
-	// 	return ctrl.Result{}, err
-	// }
-
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.SwaggerStatus = resp.Status
 

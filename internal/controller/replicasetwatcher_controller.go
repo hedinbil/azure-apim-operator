@@ -119,7 +119,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if ownerPod == nil {
 		logger.Info("⏳ No ready pod found for ReplicaSet yet, requeuing...", "replicaSet", rs.Name)
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
 	revisionObj := &apimv1.APIMAPIRevision{
