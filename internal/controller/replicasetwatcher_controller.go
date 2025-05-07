@@ -132,15 +132,15 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					Version: "v1",
 					Kind:    "APIMAPI",
 				}),
-				// {
-				// 	APIVersion: corev1.SchemeGroupVersion.String(),
-				// 	Kind:       "Pod",
-				// 	Name:       ownerPod.Name,
-				// 	UID:        ownerPod.UID,
-				// 	// Controller and BlockOwnerDeletion must only be true for *one* owner
-				// 	Controller:         pointer(false),
-				// 	BlockOwnerDeletion: pointer(true),
-				// },
+				{
+					APIVersion: corev1.SchemeGroupVersion.String(),
+					Kind:       "Pod",
+					Name:       ownerPod.Name,
+					UID:        ownerPod.UID,
+					// Controller and BlockOwnerDeletion must only be true for *one* owner
+					Controller:         pointer(false),
+					BlockOwnerDeletion: pointer(true),
+				},
 			},
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
