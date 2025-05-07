@@ -115,7 +115,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if ownerPod == nil {
-		logger.Info("⏳ No pod found for ReplicaSet yet, requeuing...")
+		logger.Info("⏳ No pod found for ReplicaSet", "name", rs.Name, "yet, requeuing...")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
