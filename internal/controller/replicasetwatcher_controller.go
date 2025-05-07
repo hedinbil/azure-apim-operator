@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -39,14 +41,12 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	labels := rs.GetLabels()
-
 	appName := labels["app.kubernetes.io/name"]
 	if appName == "" {
 		logger.Info("ℹ️ No 'app.kubernetes.io/name' label found, skipping")
 		return ctrl.Result{}, nil
 	}
 
-	// Fetch the existing APIMAPI by app name
 	var apimApi apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -57,15 +57,13 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// Read operator namespace from file (mounted by Kubernetes)
 	operatorNamespaceBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil {
 		logger.Error(err, "❌ Unable to determine operator namespace")
 		return ctrl.Result{}, fmt.Errorf("failed to read operator namespace: %w", err)
 	}
-	operatorNamespace := string(operatorNamespaceBytes)
+	operatorNamespace := strings.TrimSpace(string(operatorNamespaceBytes))
 
-	// Fetch referenced APIMService (located in the operator's own namespace)
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
 		logger.Error(err, "❌ Failed to fetch referenced APIMService", "name", apimApi.Spec.APIMService)
@@ -73,46 +71,53 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
-	// Build ownerReferences step-by-step
-	var ownerRefs []metav1.OwnerReference
-
-	// Add APIMAPI as controller
-	apiRef := metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
-		Group:   "apim.hedinit.io",
-		Version: "v1",
-		Kind:    "APIMAPI",
-	})
-	ownerRefs = append(ownerRefs, *apiRef)
-
-	// Optionally add a pod as a secondary non-controller owner
+	// Find pod owned by this ReplicaSet
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err == nil {
-		for _, pod := range podList.Items {
-			for _, ref := range pod.OwnerReferences {
-				if ref.Kind == "ReplicaSet" && ref.Name == rs.Name {
-					podRef := metav1.OwnerReference{
-						APIVersion:         "v1",
-						Kind:               "Pod",
-						Name:               pod.Name,
-						UID:                pod.UID,
-						Controller:         ptrToBool(false),
-						BlockOwnerDeletion: ptrToBool(false),
-					}
-					ownerRefs = append(ownerRefs, podRef)
-					logger.Info("🔗 Added Pod as secondary owner", "pod", pod.Name)
-					break
-				}
+	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err != nil {
+		logger.Error(err, "❌ Failed to list pods in namespace")
+		return ctrl.Result{}, err
+	}
+
+	var ownerPod *corev1.Pod
+	for _, pod := range podList.Items {
+		for _, ref := range pod.OwnerReferences {
+			if ref.Kind == "ReplicaSet" && ref.Name == rs.Name {
+				ownerPod = &pod
+				break
 			}
+		}
+		if ownerPod != nil {
+			break
 		}
 	}
 
-	revision := ""
+	if ownerPod == nil {
+		logger.Info("⏳ No pod found for ReplicaSet yet, requeuing...")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	revisionName := appName + "-deployment"
 
 	revisionObj := &apimv1.APIMAPIRevision{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            appName + "-deployment",
-			Namespace:       rs.Namespace,
-			OwnerReferences: ownerRefs,
+			Name:      revisionName,
+			Namespace: rs.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
+					Group:   "apim.hedinit.io",
+					Version: "v1",
+					Kind:    "APIMAPI",
+				}),
+				{
+					APIVersion: corev1.SchemeGroupVersion.String(),
+					Kind:       "Pod",
+					Name:       ownerPod.Name,
+					UID:        ownerPod.UID,
+					// Controller and BlockOwnerDeletion must only be true for *one* owner
+					Controller:         pointer(false),
+					BlockOwnerDeletion: pointer(true),
+				},
+			},
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
 			Host:          apimApi.Spec.Host,
@@ -122,7 +127,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			Subscription:  apimService.Spec.Subscription,
 			ResourceGroup: apimService.Spec.ResourceGroup,
 			APIID:         appName,
-			Revision:      revision,
+			Revision:      "",
 		},
 	}
 
@@ -142,6 +147,6 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func ptrToBool(b bool) *bool {
-	return &b
+func pointer[T any](v T) *T {
+	return &v
 }
