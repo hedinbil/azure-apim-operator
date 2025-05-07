@@ -3,6 +3,7 @@ package apim
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -113,6 +114,72 @@ func PatchServiceURL(ctx context.Context, config APIMRevisionConfig) error {
 	}
 
 	return nil
+}
+
+func GetAPIRevisions(ctx context.Context, config APIMRevisionConfig) ([]APIRevision, error) {
+	url := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/revisions?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.APIID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		logger.Error(err, "❌ Failed to build request for API revisions")
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+	logger.Info("🔎 Requesting API revisions from APIM",
+		"apiID", config.APIID,
+		"url", url,
+	)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Error(err, "❌ Failed to request API revisions")
+		return nil, fmt.Errorf("failed to call APIM API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 300 {
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to get API revisions",
+			"status", resp.Status,
+			"body", string(body),
+		)
+		return nil, fmt.Errorf("failed to get API revisions: %s\n%s", resp.Status, string(body))
+	}
+
+	var result APIRevisionListResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		logger.Error(err, "❌ Failed to parse API revisions response")
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	logger.Info("✅ Successfully retrieved API revisions",
+		"apiID", config.APIID,
+		"revisionCount", len(result.Value),
+	)
+
+	return result.Value, nil
+}
+
+type APIRevision struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Properties struct {
+		ApiRevision string `json:"apiRevision"`
+		IsCurrent   bool   `json:"isCurrent"`
+	} `json:"properties"`
+}
+
+type APIRevisionListResponse struct {
+	Value []APIRevision `json:"value"`
 }
 
 type APIMRevisionConfig struct {

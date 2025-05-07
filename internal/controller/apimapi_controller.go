@@ -18,8 +18,12 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	"github.com/hedinit/aks-apim-operator/internal/apim"
+	"github.com/hedinit/aks-apim-operator/internal/identity"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,64 +49,42 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// swaggerURL := fmt.Sprintf("https://%s%s", api.Spec.Host, api.Spec.SwaggerPath)
-	// logger.Info("📡 Fetching Swagger", "url", swaggerURL)
+	logger.Info("🔍 Fetched APIMAPI", "name", api.Name)
 
-	// resp, err := http.Get(swaggerURL)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to fetch Swagger")
-	// 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	// }
-	// defer resp.Body.Close()
+	// Get bearer token (this assumes you already have a helper function)
+	clientID := os.Getenv("AZURE_CLIENT_ID")
+	tenantID := os.Getenv("AZURE_TENANT_ID")
+	if clientID == "" || tenantID == "" {
+		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
+	}
 
-	// swaggerYAML, err := io.ReadAll(resp.Body)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to read Swagger body")
-	// 	return ctrl.Result{}, err
-	// }
+	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
+	if err != nil {
+		logger.Error(err, "❌ Failed to get Azure token")
+		return ctrl.Result{}, err
+	}
 
-	// clientID := os.Getenv("AZURE_CLIENT_ID")
-	// tenantID := os.Getenv("AZURE_TENANT_ID")
-	// if clientID == "" || tenantID == "" {
-	// 	return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
-	// }
+	config := apim.APIMRevisionConfig{
+		SubscriptionID: api.Spec.Subscription,
+		ResourceGroup:  api.Spec.ResourceGroup,
+		ServiceName:    api.Spec.APIMService,
+		APIID:          api.Name,
+		BearerToken:    token,
+	}
 
-	// token, err := identity.GetManagementToken(ctx, clientID, tenantID)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to get Azure token")
-	// 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	// }
+	revisions, err := apim.GetAPIRevisions(ctx, config)
+	if err != nil {
+		logger.Error(err, "❌ Failed to fetch API revisions from APIM")
+		return ctrl.Result{}, err
+	}
 
-	// config := apim.APIMConfig{
-	// 	SubscriptionID: api.Spec.Subscription,
-	// 	ResourceGroup:  api.Spec.ResourceGroup,
-	// 	ServiceName:    api.Spec.APIMService,
-	// 	APIID:          api.Name,
-	// 	RoutePrefix:    api.Spec.RoutePrefix,
-	// 	ServiceURL:     fmt.Sprintf("https://%s", api.Spec.Host),
-	// 	BearerToken:    token,
-	// 	Revision:       api.Spec.Revision,
-	// }
-
-	// if err := apim.ImportSwaggerToAPIM(ctx, config, swaggerYAML); err != nil {
-	// 	logger.Error(err, "🚫 Failed to import API")
-	// 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	// }
-	// logger.Info("✅ API imported to APIM", "apiID", api.Name)
-
-	// if err := apim.PatchServiceURL(ctx, config); err != nil {
-	// 	logger.Error(err, "🚫 Failed to patch service URL")
-	// 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	// }
-	// logger.Info("✅ Service URL patched in APIM", "apiID", api.Name)
-
-	// api.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	// api.Status.SwaggerStatus = resp.Status
-
-	// if err := r.Status().Update(ctx, &api); err != nil {
-	// 	logger.Error(err, "⚠️ Failed to update APIMAPI status")
-	// 	return ctrl.Result{}, err
-	// }
+	for _, rev := range revisions {
+		logger.Info("📎 Found API revision",
+			"revision", rev.Properties.ApiRevision,
+			"isCurrent", rev.Properties.IsCurrent,
+			"name", rev.Name,
+		)
+	}
 
 	return ctrl.Result{}, nil
 }
