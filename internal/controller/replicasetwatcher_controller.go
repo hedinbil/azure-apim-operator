@@ -40,6 +40,11 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if !rs.DeletionTimestamp.IsZero() {
+		logger.Info("🧹 ReplicaSet is being deleted, skipping", "name", rs.Name)
+		return ctrl.Result{}, nil
+	}
+
 	labels := rs.GetLabels()
 	appName := labels["app.kubernetes.io/name"]
 	if appName == "" {
@@ -70,6 +75,8 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
+
+	logger.Info("🔍 Processing ReplicaSet", "name", rs.Name)
 
 	// Find pod owned by this ReplicaSet
 	var podList corev1.PodList

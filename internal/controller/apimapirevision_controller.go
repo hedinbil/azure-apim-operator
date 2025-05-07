@@ -62,6 +62,11 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if !apiRevision.DeletionTimestamp.IsZero() {
+		logger.Info("🧹 APIMAPIRevision is being deleted, skipping", "name", apiRevision.Name)
+		return ctrl.Result{}, nil
+	}
+
 	var apimApi apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Spec.APIID, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
