@@ -58,7 +58,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	var apiRevision apimv1.APIMAPIRevision
 	if err := r.Get(ctx, req.NamespacedName, &apiRevision); err != nil {
-		logger.Error(err, "❌ Unable to fetch APIMAPIRevision")
+		logger.Info("ℹ️ Unable to fetch APIMAPIRevision")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 

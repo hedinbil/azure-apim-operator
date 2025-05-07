@@ -7,6 +7,7 @@ import (
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -72,23 +73,46 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
+	// Build ownerReferences step-by-step
+	var ownerRefs []metav1.OwnerReference
+
+	// Add APIMAPI as controller
+	apiRef := metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
+		Group:   "apim.hedinit.io",
+		Version: "v1",
+		Kind:    "APIMAPI",
+	})
+	ownerRefs = append(ownerRefs, *apiRef)
+
+	// Optionally add a pod as a secondary non-controller owner
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err == nil {
+		for _, pod := range podList.Items {
+			for _, ref := range pod.OwnerReferences {
+				if ref.Kind == "ReplicaSet" && ref.Name == rs.Name {
+					podRef := metav1.OwnerReference{
+						APIVersion:         "v1",
+						Kind:               "Pod",
+						Name:               pod.Name,
+						UID:                pod.UID,
+						Controller:         ptrToBool(false),
+						BlockOwnerDeletion: ptrToBool(false),
+					}
+					ownerRefs = append(ownerRefs, podRef)
+					logger.Info("🔗 Added Pod as secondary owner", "pod", pod.Name)
+					break
+				}
+			}
+		}
+	}
+
 	revision := ""
-	// revision := labels["apim.hedinit.io/revision"]
-	// if revision == "" {
-	// 	revision = "default"
-	// }
 
 	revisionObj := &apimv1.APIMAPIRevision{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName + "-deployment",
-			Namespace: rs.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
-					Group:   "apim.hedinit.io",
-					Version: "v1",
-					Kind:    "APIMAPI",
-				}),
-			},
+			Name:            appName + "-deployment",
+			Namespace:       rs.Namespace,
+			OwnerReferences: ownerRefs,
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
 			Host:          apimApi.Spec.Host,
@@ -116,4 +140,8 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&appsv1.ReplicaSet{}).
 		Named("replicasetwatcher").
 		Complete(r)
+}
+
+func ptrToBool(b bool) *bool {
+	return &b
 }
