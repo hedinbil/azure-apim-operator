@@ -101,12 +101,15 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	// Find a pod owned by this ReplicaSet that is Running and Ready
 	var ownerPod *corev1.Pod
 	for _, pod := range podList.Items {
 		for _, ref := range pod.OwnerReferences {
 			if ref.Kind == "ReplicaSet" && ref.Name == rs.Name {
-				ownerPod = &pod
-				break
+				if pod.Status.Phase == corev1.PodRunning && isPodReady(&pod) {
+					ownerPod = &pod
+					break
+				}
 			}
 		}
 		if ownerPod != nil {
@@ -115,7 +118,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if ownerPod == nil {
-		logger.Info("⏳ No pod found for ReplicaSet", "name", rs.Name, "yet, requeuing...")
+		logger.Info("⏳ No ready pod found for ReplicaSet yet, requeuing...", "replicaSet", rs.Name)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -185,4 +188,13 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func pointer[T any](v T) *T {
 	return &v
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
