@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	"github.com/hedinit/aks-apim-operator/internal/apim"
@@ -62,10 +64,10 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !apiRevision.DeletionTimestamp.IsZero() {
-		logger.Info("🧹 APIMAPIRevision is being deleted, skipping", "name", apiRevision.Name)
-		return ctrl.Result{}, nil
-	}
+	// if !apiRevision.DeletionTimestamp.IsZero() {
+	// 	logger.Info("🧹 APIMAPIRevision is being deleted, skipping", "name", apiRevision.Name)
+	// 	return ctrl.Result{}, nil
+	// }
 
 	var apimApi apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Spec.APIID, Namespace: req.Namespace}, &apimApi); err != nil {
@@ -158,6 +160,20 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *APIMAPIRevisionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMAPIRevision{}).
+		WithEventFilter(predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return false
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return false
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		}).
 		Named("apimapirevision").
 		Complete(r)
 }

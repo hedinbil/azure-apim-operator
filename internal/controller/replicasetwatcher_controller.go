@@ -10,11 +10,14 @@ import (
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // ReplicaSetWatcherReconciler reconciles a ReplicaSetWatcher object
@@ -40,10 +43,10 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !rs.DeletionTimestamp.IsZero() {
-		logger.Info("🧹 ReplicaSet is being deleted, skipping", "name", rs.Name)
-		return ctrl.Result{}, nil
-	}
+	// if !rs.DeletionTimestamp.IsZero() {
+	// 	logger.Info("🧹 ReplicaSet is being deleted, skipping", "name", rs.Name)
+	// 	return ctrl.Result{}, nil
+	// }
 
 	labels := rs.GetLabels()
 	appName := labels["app.kubernetes.io/name"]
@@ -78,6 +81,19 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🔍 Processing ReplicaSet", "name", rs.Name)
 
+	revisionName := appName + "-deployment"
+
+	var existingRevision apimv1.APIMAPIRevision
+	err = r.Get(ctx, client.ObjectKey{Name: revisionName, Namespace: rs.Namespace}, &existingRevision)
+	if err == nil {
+		logger.Info("ℹ️ APIMAPIRevision already exists, skipping creation", "name", revisionName)
+		return ctrl.Result{}, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		logger.Error(err, "❌ Failed to check existence of APIMAPIRevision")
+		return ctrl.Result{}, err
+	}
+
 	// Find pod owned by this ReplicaSet
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err != nil {
@@ -103,8 +119,6 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	revisionName := appName + "-deployment"
-
 	revisionObj := &apimv1.APIMAPIRevision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      revisionName,
@@ -115,15 +129,15 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					Version: "v1",
 					Kind:    "APIMAPI",
 				}),
-				{
-					APIVersion: corev1.SchemeGroupVersion.String(),
-					Kind:       "Pod",
-					Name:       ownerPod.Name,
-					UID:        ownerPod.UID,
-					// Controller and BlockOwnerDeletion must only be true for *one* owner
-					Controller:         pointer(false),
-					BlockOwnerDeletion: pointer(true),
-				},
+				// {
+				// 	APIVersion: corev1.SchemeGroupVersion.String(),
+				// 	Kind:       "Pod",
+				// 	Name:       ownerPod.Name,
+				// 	UID:        ownerPod.UID,
+				// 	// Controller and BlockOwnerDeletion must only be true for *one* owner
+				// 	Controller:         pointer(false),
+				// 	BlockOwnerDeletion: pointer(true),
+				// },
 			},
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
@@ -150,6 +164,21 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.ReplicaSet{}).
+		WithEventFilter(predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return false
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return false
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		}).
+		//Owns(&corev1.Pod{}). // ← this adds a watch on child Pods
 		Named("replicasetwatcher").
 		Complete(r)
 }
