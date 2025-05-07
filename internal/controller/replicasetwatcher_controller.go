@@ -36,10 +36,6 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	labels := rs.GetLabels()
-	if labels["apim.hedinit.io/import"] != "true" {
-		logger.Info("ℹ️ ReplicaSet does not have 'apim.hedinit.io/import=true', skipping")
-		return ctrl.Result{}, nil
-	}
 
 	appName := labels["app.kubernetes.io/name"]
 	if appName == "" {
