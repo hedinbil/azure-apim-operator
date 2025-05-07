@@ -4,73 +4,68 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
-  - apiGroups:
-    - ""
-    resources:
-    - pods
-    verbs:
-    - get
-    - list
-    - watch
-
-  - apiGroups:
-    - apim.hedinit.io
-    resources:
-    - apimapirevisions
-    - apimapis
-    - apimservices
-    - ingresswatchers
-    - podwatchers
-    - replicasetwatchers
-    verbs:
-    - create
-    - delete
-    - get
-    - list
-    - patch
-    - update
-    - watch
-
-  - apiGroups:
-    - apim.hedinit.io
-    resources:
-    - apimapirevisions/finalizers
-    - apimapis/finalizers
-    - apimservices/finalizers
-    - ingresswatchers/finalizers
-    - podwatchers/finalizers
-    - replicasetwatchers/finalizers
-    verbs:
-    - update
-
-  - apiGroups:
-    - apim.hedinit.io
-    resources:
-    - apimapirevisions/status
-    - apimapis/status
-    - apimservices/status
-    - ingresswatchers/status
-    - podwatchers/status
-    - replicasetwatchers/status
-    verbs:
-    - get
-    - patch
-    - update
-
-  - apiGroups:
-    - apps
-    resources:
-    - replicasets
-    verbs:
-    - get
-    - list
-    - watch
-
-  - apiGroups:
-    - networking.k8s.io
-    resources:
-    - ingresses
-    verbs:
-    - get
-    - list
-    - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apim.hedinit.io
+  resources:
+  - apimapirevisions
+  - apimapis
+  - apimservices
+  - ingresswatchers
+  - podwatchers
+  - replicasetwatchers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apim.hedinit.io
+  resources:
+  - apimapirevisions/finalizers
+  - apimapis/finalizers
+  - apimservices/finalizers
+  - ingresswatchers/finalizers
+  - podwatchers/finalizers
+  - replicasetwatchers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - apim.hedinit.io
+  resources:
+  - apimapirevisions/status
+  - apimapis/status
+  - apimservices/status
+  - ingresswatchers/status
+  - podwatchers/status
+  - replicasetwatchers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch

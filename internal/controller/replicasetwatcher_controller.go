@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -44,8 +46,8 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Fetch the existing APIMAPI by app name
-	var existing apimv1.APIMAPI
-	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existing); err != nil {
+	var apimApi apimv1.APIMAPI
+	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", appName)
 			return ctrl.Result{}, nil
@@ -54,17 +56,34 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	revision := labels["apim.hedinit.io/revision"]
-	if revision == "" {
-		revision = "default"
+	// Read operator namespace from file (mounted by Kubernetes)
+	operatorNamespaceBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		logger.Error(err, "❌ Unable to determine operator namespace")
+		return ctrl.Result{}, fmt.Errorf("failed to read operator namespace: %w", err)
 	}
+	operatorNamespace := string(operatorNamespaceBytes)
+
+	// Fetch referenced APIMService (located in the operator's own namespace)
+	var apimService apimv1.APIMService
+	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
+		logger.Error(err, "❌ Failed to fetch referenced APIMService", "name", apimApi.Spec.APIMService)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	logger.Info("🔗 Found APIMService", "name", apimService.Name)
+
+	revision := ""
+	// revision := labels["apim.hedinit.io/revision"]
+	// if revision == "" {
+	// 	revision = "default"
+	// }
 
 	revisionObj := &apimv1.APIMAPIRevision{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName + "-rev-" + revision,
+			Name:      appName + "-deployment",
 			Namespace: rs.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&existing, schema.GroupVersionKind{
+				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
 					Group:   "apim.hedinit.io",
 					Version: "v1",
 					Kind:    "APIMAPI",
@@ -72,12 +91,12 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			},
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
-			Host:          existing.Spec.Host,
-			RoutePrefix:   existing.Spec.RoutePrefix,
-			SwaggerPath:   existing.Spec.SwaggerPath,
-			APIMService:   existing.Spec.APIMService,
-			Subscription:  existing.Spec.Subscription,
-			ResourceGroup: existing.Spec.ResourceGroup,
+			Host:          apimApi.Spec.Host,
+			RoutePrefix:   apimApi.Spec.RoutePrefix,
+			SwaggerPath:   apimApi.Spec.SwaggerPath,
+			APIMService:   apimApi.Spec.APIMService,
+			Subscription:  apimService.Spec.Subscription,
+			ResourceGroup: apimService.Spec.ResourceGroup,
 			APIID:         appName,
 			Revision:      revision,
 		},

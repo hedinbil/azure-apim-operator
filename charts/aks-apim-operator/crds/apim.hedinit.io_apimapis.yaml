@@ -45,13 +45,7 @@ spec:
                 type: string
               host:
                 type: string
-              resourceGroup:
-                type: string
-              revision:
-                type: string
               routePrefix:
-                type: string
-              subscription:
                 type: string
               swaggerPath:
                 type: string
@@ -59,9 +53,7 @@ spec:
             - APIID
             - apimService
             - host
-            - resourceGroup
             - routePrefix
-            - subscription
             - swaggerPath
             type: object
           status:

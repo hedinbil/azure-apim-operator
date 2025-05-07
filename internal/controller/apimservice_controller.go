@@ -48,7 +48,15 @@ type APIMServiceReconciler struct {
 func (r *APIMServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// var logger = ctrl.Log.WithName("apimservice_controller")
 
-	// TODO(user): your logic here
+	// logger.Info("🔍 Reconciling APIMService", "name", req.Name, "namespace", req.Namespace)
+
+	// var svc apimv1.APIMService
+	// if err := r.Get(ctx, req.NamespacedName, &svc); err != nil {
+	// 	logger.Info("ℹ️ Failed to fetch APIMService", "name", req.NamespacedName)
+	// 	return ctrl.Result{}, client.IgnoreNotFound(err)
+	// }
+
+	// logger.Info("✅ APIMService resource reconciled", "name", svc.Name, "namespace", svc.Namespace)
 
 	return ctrl.Result{}, nil
 }

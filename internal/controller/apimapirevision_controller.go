@@ -62,6 +62,16 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	var apimApi apimv1.APIMAPI
+	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Spec.APIID, Namespace: req.Namespace}, &apimApi); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", apiRevision.Spec.APIID)
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "❌ Failed to get APIMAPI", "name", apiRevision.Spec.APIID)
+		return ctrl.Result{}, err
+	}
+
 	swaggerURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.SwaggerPath)
 	logger.Info("📡 Fetching Swagger", "url", swaggerURL)
 
@@ -113,13 +123,28 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Name)
 
-	apiRevision.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	apiRevision.Status.SwaggerStatus = resp.Status
+	// apiRevision.Status.ImportedAt = time.Now().Format(time.RFC3339)
+	// apiRevision.Status.SwaggerStatus = resp.Status
 
-	if err := r.Status().Update(ctx, &apiRevision); err != nil {
-		logger.Error(err, "⚠️ Failed to update APIMAPIRevision status")
+	// if err := r.Status().Update(ctx, &apiRevision); err != nil {
+	// 	logger.Error(err, "⚠️ Failed to update APIMAPIRevision status")
+	// 	return ctrl.Result{}, err
+	// }
+
+	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
+	apimApi.Status.SwaggerStatus = resp.Status
+
+	if err := r.Status().Update(ctx, &apimApi); err != nil {
+		logger.Error(err, "⚠️ Failed to update APIMAPI status")
 		return ctrl.Result{}, err
 	}
+
+	// 🎯 Delete the APIMAPIRevision CR once processed
+	if err := r.Delete(ctx, &apiRevision); err != nil {
+		logger.Error(err, "⚠️ Failed to delete APIMAPIRevision object")
+		return ctrl.Result{}, err
+	}
+	logger.Info("🧹 APIMAPIRevision deleted after successful import", "name", apiRevision.Name)
 
 	return ctrl.Result{}, nil
 }
