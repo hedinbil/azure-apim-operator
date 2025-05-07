@@ -1,0 +1,14 @@
+{{- range .Values.apimServices }}
+apiVersion: apim.hedinit.io/v1
+kind: APIMService
+metadata:
+  name: {{ .name | quote }}
+  labels:
+    app.kubernetes.io/name: apimservice
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+spec:
+  name: {{ .name | quote }}
+  resourceGroup: {{ .resourceGroup | quote }}
+  subscription: {{ .subscription | quote }}
+---
+{{- end }}

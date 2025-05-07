@@ -11,7 +11,7 @@ image:
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "v0.35.0"
+  tag: "v0.37.0"
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
@@ -131,7 +131,11 @@ serviceAccount:
     clientID: "<replace-with-default-or-empty>"
     tenantID: "<replace-with-default-or-empty>"
 
+apimServices: []
+  # - name: apim-apim-dev-hedinit
+  #   resourceGroup: rg-apim-dev
+  #   subscription: 0b797d7c-b5dc-4466-9230-5bf9f1529a47    
+
 swagger:
   annotationKey: "hedinit.io/openapi-export"
   defaultPath: "/swagger.yaml"
-
