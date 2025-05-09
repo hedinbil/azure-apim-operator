@@ -149,14 +149,14 @@ swagger:
   annotationKey: "hedinit.io/openapi-export"
   defaultPath: "/swagger.yaml"
 
-env:
-  - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "opentelemetry-collector.opentelemetry-collector.svc.cluster.local:4317"
-  - name: OTEL_TRACES_EXPORTER
-    value: "otlp"
-  - name: OTEL_EXPORTER_OTLP_PROTOCOL
-    value: "grpc"
-  - name: DD_ENV
-    value: "prod"
-  - name: DD_VERSION
-    value: "1.0.0"  
+# env:
+#   - name: OTEL_EXPORTER_OTLP_ENDPOINT
+#     value: "opentelemetry-collector.opentelemetry-collector.svc.cluster.local:4317"
+#   - name: OTEL_TRACES_EXPORTER
+#     value: "otlp"
+#   - name: OTEL_EXPORTER_OTLP_PROTOCOL
+#     value: "grpc"
+#   - name: DD_ENV
+#     value: "prod"
+#   - name: DD_VERSION
+#     value: "1.0.0"  
