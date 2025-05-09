@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // APIMAPIReconciler reconciles a APIMAPI object
@@ -37,50 +39,31 @@ type APIMAPIReconciler struct {
 
 func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	//logger := log.FromContext(ctx)
-	// var logger = ctrl.Log.WithName("apimapi_controller")
+	var logger = ctrl.Log.WithName("apimapi_controller")
 
-	// var api apimv1.APIMAPI
-	// if err := r.Get(ctx, req.NamespacedName, &api); err != nil {
-	// 	logger.Error(err, "❌ Unable to fetch APIMAPI")
-	// 	return ctrl.Result{}, client.IgnoreNotFound(err)
-	// }
+	logger.Info("🔁 Reconciling APIMAPI", "name", req.Name, "namespace", req.Namespace)
 
-	// logger.Info("🔍 Fetched APIMAPI", "name", api.Name)
+	var apimApi apimv1.APIMAPI
+	if err := r.Get(ctx, req.NamespacedName, &apimApi); err != nil {
+		logger.Info("ℹ️ Unable to fetch APIMAPI")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	// // Get bearer token (this assumes you already have a helper function)
-	// clientID := os.Getenv("AZURE_CLIENT_ID")
-	// tenantID := os.Getenv("AZURE_TENANT_ID")
-	// if clientID == "" || tenantID == "" {
-	// 	return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
-	// }
+	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name)
 
-	// token, err := identity.GetManagementToken(ctx, clientID, tenantID)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to get Azure token")
-	// 	return ctrl.Result{}, err
-	// }
+	if apimApi.Annotations == nil {
+		apimApi.Annotations = map[string]string{}
+		logger.Info("ℹ️ Annotations were nil, initializing map")
+	}
 
-	// config := apim.APIMRevisionConfig{
-	// 	SubscriptionID: api.Spec.Subscription,
-	// 	ResourceGroup:  api.Spec.ResourceGroup,
-	// 	ServiceName:    api.Spec.APIMService,
-	// 	APIID:          api.Name,
-	// 	BearerToken:    token,
-	// }
+	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
 
-	// revisions, err := apim.GetAPIRevisions(ctx, config)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to fetch API revisions from APIM")
-	// 	return ctrl.Result{}, err
-	// }
+	if err := r.Update(ctx, &apimApi); err != nil {
+		logger.Error(err, "❌ Failed to update APIMAPI with external link annotations")
+		return ctrl.Result{}, err
+	}
 
-	// for _, rev := range revisions {
-	// 	logger.Info("📎 Found API revision",
-	// 		"revision", rev.Properties.ApiRevision,
-	// 		"isCurrent", rev.Properties.IsCurrent,
-	// 		"name", rev.Name,
-	// 	)
-	// }
+	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name)
 
 	return ctrl.Result{}, nil
 }
@@ -88,6 +71,20 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *APIMAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMAPI{}).
+		WithEventFilter(predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return false
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				return true
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return false
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		}).
 		Named("apimapi").
 		Complete(r)
 }
