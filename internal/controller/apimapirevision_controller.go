@@ -125,8 +125,17 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Name)
 
+	// Get APIM details (hostnames)
+	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
+	if err != nil {
+		logger.Error(err, "⚠️ Failed to fetch APIM details")
+		return ctrl.Result{}, err
+	}
+
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.SwaggerStatus = resp.Status
+	apimApi.Status.ApiHost = apiHost
+	apimApi.Status.DeveloperPortalHost = developerPortalHost
 
 	if err := r.Status().Update(ctx, &apimApi); err != nil {
 		logger.Error(err, "⚠️ Failed to update APIMAPI status")

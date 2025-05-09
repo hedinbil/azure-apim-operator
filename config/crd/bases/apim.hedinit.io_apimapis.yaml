@@ -58,10 +58,17 @@ spec:
             type: object
           status:
             properties:
+              apiHost:
+                type: string
+              developerPortalHost:
+                type: string
               importedAt:
                 type: string
               swaggerStatus:
                 type: string
+            required:
+            - apiHost
+            - developerPortalHost
             type: object
         type: object
     served: true

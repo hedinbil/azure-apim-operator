@@ -169,6 +169,56 @@ func GetAPIRevisions(ctx context.Context, config APIMRevisionConfig) ([]APIRevis
 	return result.Value, nil
 }
 
+func GetAPIMServiceDetails(ctx context.Context, config APIMRevisionConfig) (apiHost, developerPortalHost string, err error) {
+	url := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("building request for APIM service details: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("request to get APIM service details failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("failed to get APIM service details: %s\n%s", resp.Status, string(body))
+	}
+
+	var serviceInfo struct {
+		Properties struct {
+			HostnameConfigurations []struct {
+				Type     string `json:"type"`
+				HostName string `json:"hostName"`
+			} `json:"hostnameConfigurations"`
+		} `json:"properties"`
+	}
+
+	if err := json.Unmarshal(body, &serviceInfo); err != nil {
+		return "", "", fmt.Errorf("failed to parse service response: %w", err)
+	}
+
+	for _, cfg := range serviceInfo.Properties.HostnameConfigurations {
+		switch cfg.Type {
+		case "Proxy":
+			apiHost = cfg.HostName
+		case "DeveloperPortal":
+			developerPortalHost = cfg.HostName
+		}
+	}
+
+	return apiHost, developerPortalHost, nil
+}
+
 type APIRevision struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`

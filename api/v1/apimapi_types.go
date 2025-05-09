@@ -14,8 +14,10 @@ type APIMAPISpec struct {
 }
 
 type APIMAPIStatus struct {
-	ImportedAt    string `json:"importedAt,omitempty"`
-	SwaggerStatus string `json:"swaggerStatus,omitempty"`
+	ImportedAt          string `json:"importedAt,omitempty"`
+	SwaggerStatus       string `json:"swaggerStatus,omitempty"`
+	ApiHost             string `json:"apiHost"`
+	DeveloperPortalHost string `json:"developerPortalHost"`
 }
 
 // +kubebuilder:object:root=true
