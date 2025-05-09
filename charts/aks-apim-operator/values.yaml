@@ -124,13 +124,31 @@ tolerations: []
 affinity: {}
 
 serviceAccount:
+  # Specifies whether a Kubernetes ServiceAccount should be created.
+  # Set to true to let the chart create a dedicated ServiceAccount.
   create: true
-  name: aks-apim-operator
+
+  # Automatically mount the ServiceAccount's token into the container.
   automount: true
+
+  # The name of the ServiceAccount to use.
+  # If not set and `create` is true, the chart will generate one based on the release name.
+  name: aks-apim-operator
+
   workloadIdentity:
+    # Enables Azure Workload Identity integration for this ServiceAccount.
+    # This allows pods to authenticate with Azure using federated identity
+    # without secrets or node-managed identity binding.
     enabled: true
+
+    # The Client ID of the Azure user-assigned managed identity (UAMI).
+    # Must match the identity federated with this ServiceAccount.
     clientID: <replace-with-default-or-empty>
+
+    # The Tenant ID of the Azure Active Directory (AAD) tenant containing the UAMI.
+    # Required for workload identity federation to Azure.
     tenantID: <replace-with-default-or-empty>
+
 
 apimServices: []
   # List of Azure API Management service configurations the operator will target.
