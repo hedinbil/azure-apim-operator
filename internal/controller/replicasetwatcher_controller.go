@@ -48,7 +48,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	appName := rs.Labels["app.kubernetes.io/name"]
 	if appName == "" {
-		logger.Info("ℹ️ No app.kubernetes.io/name label found, skipping")
+		// logger.Info("ℹ️ No app.kubernetes.io/name label found, skipping")
 		return ctrl.Result{}, nil
 	}
 	// logger.Info("📦 Handling app", "appName", appName)
@@ -75,6 +75,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
 	revisionName := appName + "-deployment"
@@ -85,13 +86,13 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		logger.Error(err, "❌ Failed checking APIMAPIRevision")
+		logger.Error(err, "❌ Failed checking APIMAPIRevision", "replicaSet", rs.Name)
 		return ctrl.Result{}, err
 	}
 
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err != nil {
-		logger.Error(err, "❌ Failed listing Pods")
+		logger.Error(err, "❌ Failed listing Pods", "replicaSet", rs.Name)
 		return ctrl.Result{}, err
 	}
 

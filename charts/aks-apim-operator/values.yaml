@@ -129,13 +129,21 @@ serviceAccount:
   automount: true
   workloadIdentity:
     enabled: true
-    clientID: "<replace-with-default-or-empty>"
-    tenantID: "<replace-with-default-or-empty>"
+    clientID: <replace-with-default-or-empty>
+    tenantID: <replace-with-default-or-empty>
 
 apimServices: []
-  # - name: apim-apim-dev-hedinit
-  #   resourceGroup: rg-apim-dev
-  #   subscription: 0b797d7c-b5dc-4466-9230-5bf9f1529a47    
+  # List of Azure API Management service configurations the operator will target.
+  # Each item should define:
+  # - `name`: The name of the APIM instance (must match the resource name in Azure).
+  # - `resourceGroup`: The resource group where the APIM instance is located.
+  # - `subscription`: The Azure subscription ID containing the APIM instance.
+  #
+  # Example:
+  # - name: <replace-with-default-or-empty>
+  #   resourceGroup: <replace-with-default-or-empty>
+  #   subscription: <replace-with-default-or-empty>
+  
 
 swagger:
   annotationKey: "hedinit.io/openapi-export"
