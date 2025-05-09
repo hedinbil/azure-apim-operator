@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -39,6 +40,7 @@ import (
 
 	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
 	"github.com/hedinit/aks-apim-operator/internal/controller"
+	"github.com/hedinit/aks-apim-operator/internal/logger"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -86,6 +88,14 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	ctx := context.Background()
+	shutdown := logger.InitTracer(ctx)
+	defer func() {
+		if err := shutdown(ctx); err != nil {
+			setupLog.Error(err, "❌ Failed to shutdown tracer provider")
+		}
+	}()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
