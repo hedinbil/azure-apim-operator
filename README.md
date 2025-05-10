@@ -1,135 +1,171 @@
-# Creating a Kubernetes Controller for a Custom Resource Definition (CRD)
+# Azure APIM Operator for Kubernetes
 
-This document outlines the end-to-end process for creating a controller for a Custom Resource Definition (CRD) using Kubebuilder, including integrating it into a Helm chart and deploying via Docker and Helm scripts.
+This repository provides a Kubernetes operator built using **Kubebuilder** and **Go**, designed to seamlessly deploy APIs into Azure API Management (APIM). It leverages Kubernetes Custom Resource Definitions (CRDs) to automate API registration and updates, ensuring your APIs are always synchronized with your Kubernetes deployments.
 
 ---
 
-## 🧰 Prerequisites
+## 📌 Features
 
-* Go installed
-* Kubebuilder installed (`go install sigs.k8s.io/kubebuilder/...`)
-* Docker and Azure CLI installed
-* Helm installed and configured
+* Automatic registration and updating of APIs in Azure APIM.
+* Integrated with Kubernetes via CRDs and controllers.
+* Uses Helm charts for easy deployment and lifecycle management.
+* Fully automated workflows for image building, Helm chart packaging, and deployment to Azure Container Registry (ACR).
+
+---
+
+## 📚 Prerequisites
+
+Ensure you have the following tools installed:
+
+* **Go** (version 1.21+)
+* **Kubebuilder** (`go install sigs.k8s.io/kubebuilder/...`)
+* **Docker**
+* **Helm**
+* **Azure CLI**
 * Access to Azure Container Registry (ACR)
 
 ---
 
-## 🛠️ Step 1: Create API and Controller
+## 🚀 Quick Start
 
-Use `kubebuilder` to scaffold a new API and controller:
+### Step 1: Clone Repository
 
 ```bash
-kubebuilder create api \
-  --group apim \
-  --version v1 \
-  --kind <KindName>
+git clone https://github.com/hedinit/azure-apim-operator.git
+cd azure-apim-operator
 ```
 
-Replace `<KindName>` with the name of your new resource, e.g., `ReplicaSetWatcher` or `APIMAPIRevision`.
+### Step 2: Deploy Operator using Helm
 
-This will generate:
+Ensure your Kubernetes context is set correctly, then install using Helm:
 
-* API type in `api/v1/<kind>_types.go`
-* Controller logic in `internal/controller/<kind>_controller.go`
+```bash
+helm upgrade --install azure-apim-operator ./charts/azure-apim-operator --namespace apim-operator --create-namespace
+```
+
+### Step 3: Verify Installation
+
+Check that your CRDs are successfully installed:
+
+```bash
+kubectl get crds | grep apim.hedinit.io
+```
+
+Check the operator deployment status:
+
+```bash
+kubectl get pods -n apim-operator
+```
 
 ---
 
-## ✏️ Step 2: Implement Controller Logic
+## ⚙️ Creating Custom Resources
 
-Edit the controller file (e.g., `replicasetwatcher_controller.go`) and implement your logic inside the `Reconcile` function. You can reference existing controllers like `PodWatcher` or `APIMAPIReconciler` for structure and logging style.
-
-Make sure you correctly set up `OwnerReferences` when creating related objects and extract necessary labels from your resource or associated objects.
-
----
-
-## 🔒 Step 3: Update RBAC Permissions
-
-Manually update `config/rbac/role.yaml` with permissions for your new CRD and any resources your controller interacts with.
-
-Example:
+To register a new API in Azure APIM, define an `APIMAPI` custom resource:
 
 ```yaml
-- apiGroups:
-  - apim.hedinit.io
-  resources:
-  - apimapirevisions
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
+apiVersion: apim.hedinit.io/v1
+kind: APIMAPI
+metadata:
+  name: example-api
+  namespace: your-app-namespace
+spec:
+  APIID: example-api
+  host: example.yourdomain.com
+  routePrefix: /v1
+  swaggerPath: /swagger/v1/swagger.json
+  apimService: your-apim-instance
 ```
 
-Also update `role.yaml` for any built-in resources (e.g., `pods`, `replicasets`).
-
----
-
-## ⚙️ Step 4: Generate CRDs and Manifests
-
-Run the following to regenerate CRDs and manifests:
+Apply the configuration:
 
 ```bash
-make manifests
-```
-
-This updates `config/crd/bases/` and other relevant manifests.
-
----
-
-## 📦 Step 5: Copy CRDs to Helm Chart
-
-Ensure your Helm chart contains the necessary CRDs:
-
-Copy:
-
-```bash
-cp config/crd/bases/*.yaml charts/azure-apim-operator/crds/
-```
-
-Also copy the updated `role.yaml` contents into:
-
-```bash
-charts/azure-apim-operator/templates/clusterrole.yaml
+kubectl apply -f your-api.yaml
 ```
 
 ---
 
-## 🐳 Step 6: Build and Push Docker Image
+## 🔄 How It Works
 
-Use the provided script:
+1. **ReplicaSet Watcher Controller**
+
+   * Watches for ReplicaSets.
+   * Matches ReplicaSets to `APIMAPI` resources based on labels.
+   * Creates an intermediate `APIMAPIRevision` CR once the corresponding Pod and Ingress are ready.
+
+2. **APIM API Revision Controller**
+
+   * Watches for `APIMAPIRevision` CRs.
+   * Fetches the Swagger/OpenAPI spec from the deployed application's endpoint.
+   * Registers or updates the API in Azure APIM.
+   * Cleans up the intermediate CR after successful deployment.
+
+---
+
+## 📦 Building & Deployment
+
+### Build Docker Image
+
+Use the provided script to build and push the Docker image:
 
 ```bash
 ./scripts/docker.sh vX.Y.Z
 ```
 
-This builds the image and pushes to Azure Container Registry (`hedinit.azurecr.io`).
+Replace `vX.Y.Z` with your desired version.
 
----
+### Deploy Helm Chart
 
-## 🚀 Step 7: Package and Push Helm Chart
-
-Use the Helm script:
+Package and push the Helm chart:
 
 ```bash
 ./scripts/helm.sh X.Y.Z
 ```
 
-This packages the chart and pushes it to the ACR Helm repository.
+---
+
+## 🛡️ RBAC Permissions
+
+Adjust RBAC permissions by updating:
+
+* `config/rbac/role.yaml` for CRDs and Kubernetes built-in resources.
+* Helm templates located in `charts/azure-apim-operator/templates/clusterrole.yaml`.
+
+After changes, regenerate manifests:
+
+```bash
+make manifests
+```
 
 ---
 
-## ✅ Done
+## 📝 Logging & Troubleshooting
 
-Your new controller is now deployed and will begin watching for the custom resource in the cluster.
+Check the operator logs with:
+
+```bash
+kubectl logs -l app.kubernetes.io/name=azure-apim-operator -n apim-operator
+```
+
+For troubleshooting:
+
+* Validate CRDs are registered (`kubectl get crds`).
+* Ensure Pods, ReplicaSets, and Ingress resources match correctly.
 
 ---
 
-## 📘 Tips
+## 🌟 Best Practices
 
-* Use `kubectl logs -l app.kubernetes.io/name=azure-apim-operator` to check controller logs.
-* Validate CRDs are installed using `kubectl get crds`.
-* Keep controller logic small and focused on a single responsibility.
-* Name your controller with `.Named("yourcontroller")` in `SetupWithManager()` to distinguish in logs.
+* Clearly label your Kubernetes deployments and ReplicaSets (`app.kubernetes.io/name`).
+* Define concise and clear `APIMAPI` resource specifications.
+* Monitor operator logs regularly for proactive troubleshooting.
+
+---
+
+## 📌 Contributions
+
+Contributions are welcome! Please open issues or PRs to improve the operator.
+
+---
+
+© 2025 Hedin IT - All rights reserved.
