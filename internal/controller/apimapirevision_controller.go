@@ -135,7 +135,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.SwaggerStatus = resp.Status
-	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s%s", apiHost, apiRevision.Spec.RoutePrefix, apiRevision.Spec.SwaggerPath)
+	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, apiRevision.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
 	if err := r.Status().Update(ctx, &apimApi); err != nil {
