@@ -83,7 +83,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMRevisionC
 	return nil
 }
 
-func PatchServiceURL(ctx context.Context, config APIMRevisionConfig) error {
+func AssignServiceURL(ctx context.Context, config APIMRevisionConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		config.SubscriptionID,
@@ -112,6 +112,53 @@ func PatchServiceURL(ctx context.Context, config APIMRevisionConfig) error {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("serviceUrl patch failed: %s\n%s", resp.Status, string(respBody))
 	}
+
+	return nil
+}
+
+func AssignProductToAPI(ctx context.Context, config APIMRevisionConfig) error {
+	if config.ProductID == "" {
+		logger.Info("ℹ️ No product configured for assignment; skipping")
+		return nil
+	}
+
+	productAssignURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s/apis/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.ProductID,
+		config.APIID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, productAssignURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build product assign request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+	logger.Info("📦 Assigning API to product",
+		"apiID", config.APIID,
+		"productID", config.ProductID,
+		"url", productAssignURL,
+	)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("product assign request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("assigning API to product failed: %s\n%s", resp.Status, string(body))
+	}
+
+	logger.Info("✅ API successfully assigned to product",
+		"apiID", config.APIID,
+		"productID", config.ProductID,
+	)
 
 	return nil
 }
@@ -241,4 +288,5 @@ type APIMRevisionConfig struct {
 	ServiceURL     string // Backend URL (e.g. https://myapp.example.com)
 	BearerToken    string // AAD token for the APIM management scope
 	Revision       string // e.g. "2" → optional
+	ProductID      string // e.g. "my-product" → optional
 }

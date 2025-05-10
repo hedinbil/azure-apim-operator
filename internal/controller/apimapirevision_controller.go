@@ -120,7 +120,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	logger.Info("✅ API imported to APIM", "apiID", apiRevision.Spec.APIID)
 
-	if err := apim.PatchServiceURL(ctx, config); err != nil {
+	if err := apim.AssignServiceURL(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
