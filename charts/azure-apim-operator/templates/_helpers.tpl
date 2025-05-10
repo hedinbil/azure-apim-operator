@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "aks-apim-operator.name" -}}
+{{- define "azure-apim-operator.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "aks-apim-operator.fullname" -}}
+{{- define "azure-apim-operator.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "aks-apim-operator.chart" -}}
+{{- define "azure-apim-operator.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "aks-apim-operator.labels" -}}
-helm.sh/chart: {{ include "aks-apim-operator.chart" . }}
-{{ include "aks-apim-operator.selectorLabels" . }}
+{{- define "azure-apim-operator.labels" -}}
+helm.sh/chart: {{ include "azure-apim-operator.chart" . }}
+{{ include "azure-apim-operator.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -45,17 +45,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "aks-apim-operator.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "aks-apim-operator.name" . }}
+{{- define "azure-apim-operator.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "azure-apim-operator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "aks-apim-operator.serviceAccountName" -}}
+{{- define "azure-apim-operator.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "aks-apim-operator.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "azure-apim-operator.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}

@@ -1,4 +1,4 @@
-module github.com/hedinit/aks-apim-operator
+module github.com/hedinit/azure-apim-operator
 
 go 1.23.0
 

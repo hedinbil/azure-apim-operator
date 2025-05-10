@@ -86,13 +86,13 @@ Ensure your Helm chart contains the necessary CRDs:
 Copy:
 
 ```bash
-cp config/crd/bases/*.yaml charts/aks-apim-operator/crds/
+cp config/crd/bases/*.yaml charts/azure-apim-operator/crds/
 ```
 
 Also copy the updated `role.yaml` contents into:
 
 ```bash
-charts/aks-apim-operator/templates/clusterrole.yaml
+charts/azure-apim-operator/templates/clusterrole.yaml
 ```
 
 ---
@@ -129,7 +129,7 @@ Your new controller is now deployed and will begin watching for the custom resou
 
 ## 📘 Tips
 
-* Use `kubectl logs -l app.kubernetes.io/name=aks-apim-operator` to check controller logs.
+* Use `kubectl logs -l app.kubernetes.io/name=azure-apim-operator` to check controller logs.
 * Validate CRDs are installed using `kubectl get crds`.
 * Keep controller logic small and focused on a single responsibility.
 * Name your controller with `.Named("yourcontroller")` in `SetupWithManager()` to distinguish in logs.

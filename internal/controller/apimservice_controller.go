@@ -23,7 +23,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 )
 
 // APIMServiceReconciler reconciles a APIMService object

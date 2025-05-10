@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"

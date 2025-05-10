@@ -19,7 +19,7 @@ package controller
 import (
 	"context"
 
-	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"

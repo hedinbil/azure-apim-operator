@@ -3,11 +3,11 @@
 set -euo pipefail
 
 CHART_DIR="../charts"
-CHART_NAME="aks-apim-operator"
+CHART_NAME="azure-apim-operator"
 ACR_REPO="oci://hedinit.azurecr.io/helm-charts"
 
 # Optional: Pass version as argument
-VERSION="${1:-0.42.0}"
+VERSION="${1:-0.1.0}"
 CHART_PACKAGE="${CHART_NAME}-${VERSION}.tgz"
 
 log() {
@@ -52,7 +52,7 @@ log "✅ Helm chart pushed successfully."
 # set -euo pipefail
 
 # CHART_DIR="../charts"
-# CHART_NAME="aks-apim-operator"
+# CHART_NAME="azure-apim-operator"
 # ACR_REPO="oci://hedinit.azurecr.io/helm-charts"
 # CONFIG_DIR="../config"
 # CRDS_DIR="${CHART_DIR}/${CHART_NAME}/crds"

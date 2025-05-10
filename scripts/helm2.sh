@@ -3,7 +3,7 @@
 set -euo pipefail
 
 CHART_DIR="../charts"
-CHART_NAME="aks-apim-operator"
+CHART_NAME="azure-apim-operator"
 ACR_REPO="oci://hedinit.azurecr.io/helm-charts"
 CONFIG_DIR="../config"
 CRDS_DIR="${CHART_DIR}/${CHART_NAME}/crds"

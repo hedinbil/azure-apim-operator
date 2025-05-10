@@ -30,9 +30,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
-	"github.com/hedinit/aks-apim-operator/internal/apim"
-	"github.com/hedinit/aks-apim-operator/internal/identity"
+	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
+	"github.com/hedinit/azure-apim-operator/internal/apim"
+	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
 // APIMAPIRevisionReconciler reconciles a APIMAPIRevision object

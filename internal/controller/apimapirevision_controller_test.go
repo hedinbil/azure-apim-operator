@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	apimv1 "github.com/hedinit/aks-apim-operator/api/v1"
+	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 )
 
 var _ = Describe("APIMAPIRevision Controller", func() {

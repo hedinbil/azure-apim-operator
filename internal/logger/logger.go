@@ -39,7 +39,7 @@ func InitTracer(ctx context.Context) func(context.Context) error {
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			semconv.ServiceNameKey.String("aks-apim-operator"),
+			semconv.ServiceNameKey.String("azure-apim-operator"),
 			semconv.DeploymentEnvironmentKey.String(os.Getenv("DD_ENV")),
 			semconv.ServiceVersionKey.String(os.Getenv("DD_VERSION")),
 		),
@@ -56,7 +56,7 @@ func InitTracer(ctx context.Context) func(context.Context) error {
 	otel.SetTracerProvider(tp)
 
 	log.Println("✅ Tracer configured for Datadog via OTLP gRPC")
-	log.Printf("ℹ️  Traces will be sent to %s with service: 'aks-apim-operator', env: '%s', version: '%s'\n",
+	log.Printf("ℹ️  Traces will be sent to %s with service: 'azure-apim-operator', env: '%s', version: '%s'\n",
 		endpoint, os.Getenv("DD_ENV"), os.Getenv("DD_VERSION"))
 
 	return tp.Shutdown

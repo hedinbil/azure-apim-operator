@@ -5,8 +5,8 @@
 domain: hedinit.io
 layout:
 - go.kubebuilder.io/v4
-projectName: aks-apim-operator
-repo: github.com/hedinit/aks-apim-operator
+projectName: azure-apim-operator
+repo: github.com/hedinit/azure-apim-operator
 resources:
 - api:
     crdVersion: v1
@@ -15,7 +15,7 @@ resources:
   domain: hedinit.io
   group: apim
   kind: IngressWatcher
-  path: github.com/hedinit/aks-apim-operator/api/v1
+  path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - api:
     crdVersion: v1
@@ -24,7 +24,7 @@ resources:
   domain: hedinit.io
   group: apim
   kind: APIMAPI
-  path: github.com/hedinit/aks-apim-operator/api/v1
+  path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - controller: true
   domain: hedinit.io
@@ -43,7 +43,7 @@ resources:
   domain: hedinit.io
   group: apim
   kind: APIMAPIRevision
-  path: github.com/hedinit/aks-apim-operator/api/v1
+  path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - api:
     crdVersion: v1
@@ -52,6 +52,6 @@ resources:
   domain: hedinit.io
   group: apim
   kind: APIMService
-  path: github.com/hedinit/aks-apim-operator/api/v1
+  path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 version: "3"
