@@ -65,7 +65,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	var apimApi apimv1.APIMAPI
-	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Spec.APIID, Namespace: req.Namespace}, &apimApi); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Name, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", apiRevision.Spec.APIID)
 			return ctrl.Result{}, nil

@@ -78,7 +78,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
-	revisionName := appName + "-deployment"
+	revisionName := appName
 	var existingRevision apimv1.APIMAPIRevision
 	err = r.Get(ctx, client.ObjectKey{Name: revisionName, Namespace: rs.Namespace}, &existingRevision)
 	if err == nil {
