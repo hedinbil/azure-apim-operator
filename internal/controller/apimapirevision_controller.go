@@ -74,19 +74,20 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	swaggerURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.SwaggerPath)
-	logger.Info("📡 Fetching Swagger", "url", swaggerURL)
+	// openApiURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.SwaggerPath)
+	openApiURL := apiRevision.Spec.SwaggerPath
+	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", apiRevision.Spec.APIID)
 
-	resp, err := http.Get(swaggerURL)
+	resp, err := http.Get(openApiURL)
 	if err != nil {
-		logger.Error(err, "❌ Failed to fetch Swagger")
+		logger.Error(err, "❌ Failed to fetch OpenAPI definition")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	defer resp.Body.Close()
 
-	swaggerYAML, err := io.ReadAll(resp.Body)
+	openApiContent, err := io.ReadAll(resp.Body)
 	if err != nil {
-		logger.Error(err, "❌ Failed to read Swagger body")
+		logger.Error(err, "❌ Failed to read OpenAPI definition body")
 		return ctrl.Result{}, err
 	}
 
@@ -113,17 +114,17 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		Revision:       apiRevision.Spec.Revision,
 	}
 
-	if err := apim.ImportSwaggerToAPIM(ctx, config, swaggerYAML); err != nil {
+	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
 		logger.Error(err, "🚫 Failed to import API")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-	logger.Info("✅ API imported to APIM", "apiID", apiRevision.Name)
+	logger.Info("✅ API imported to APIM", "apiID", apiRevision.Spec.APIID)
 
 	if err := apim.PatchServiceURL(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Name)
+	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Spec.APIID)
 
 	// Get APIM details (hostnames)
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)

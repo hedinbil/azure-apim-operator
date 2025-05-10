@@ -14,7 +14,7 @@ import (
 
 var logger = ctrl.Log.WithName("apim")
 
-func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMRevisionConfig, swaggerYAML []byte) error {
+func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMRevisionConfig, openApiContent []byte) error {
 	apiID := apimParams.APIID
 	if apimParams.Revision != "" {
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
@@ -28,7 +28,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMRevisionConfig, swa
 		apiID,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(swaggerYAML))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(openApiContent))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request")
 		return fmt.Errorf("failed to build request: %w", err)
@@ -54,7 +54,7 @@ func ImportSwaggerToAPIM(ctx context.Context, apimParams APIMRevisionConfig, swa
 	)
 
 	// Log beginning of the Swagger content for debug purposes
-	snippet := string(swaggerYAML)
+	snippet := string(openApiContent)
 	if len(snippet) > 200 {
 		snippet = snippet[:200] + "..."
 	}
