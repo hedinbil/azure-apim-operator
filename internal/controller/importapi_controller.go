@@ -28,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
@@ -125,6 +127,13 @@ func (r *ImportAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	logger.Info("✅ API imported to APIM", "apiID", importApi.Spec.APIID)
 
+	// 🎯 Delete the ImportAPI CR once processed
+	if err := r.Delete(ctx, &importApi); err != nil {
+		logger.Error(err, "⚠️ Failed to delete ImportAPI object")
+		return ctrl.Result{}, err
+	}
+	logger.Info("🧹 ImportAPI deleted after successful import", "name", importApi.Name)
+
 	return ctrl.Result{}, nil
 }
 
@@ -132,6 +141,12 @@ func (r *ImportAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *ImportAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.ImportAPI{}).
+		WithEventFilter(predicate.Funcs{
+			CreateFunc:  func(e event.CreateEvent) bool { return true },
+			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
+			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
+			GenericFunc: func(e event.GenericEvent) bool { return false },
+		}).
 		Named("importapi").
 		Complete(r)
 }

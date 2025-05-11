@@ -18,11 +18,15 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 )
@@ -47,9 +51,59 @@ type DeployAPIReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
 func (r *DeployAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := ctrl.Log.WithName("deployapi_controller")
 
-	// TODO(user): your logic here
+	var deployApi apimv1.DeployAPI
+	if err := r.Get(ctx, req.NamespacedName, &deployApi); err != nil {
+		logger.Error(err, "❌ Failed to get DeployAPI")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	var apimApi apimv1.APIMAPI
+	if err := r.Get(ctx, client.ObjectKey{Name: deployApi.Name, Namespace: req.Namespace}, &apimApi); err != nil {
+		logger.Error(err, "❌ Failed to get APIMAPI", "name", deployApi.Name)
+		return ctrl.Result{}, err
+	}
+
+	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		logger.Error(err, "❌ Failed to read operator namespace")
+		return ctrl.Result{}, fmt.Errorf("read operator namespace: %w", err)
+	}
+	operatorNamespace := strings.TrimSpace(string(nsBytes))
+
+	var apimService apimv1.APIMService
+	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
+		logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService)
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	logger.Info("🔗 Found APIMService", "name", apimService.Name)
+
+	deployment := &apimv1.ImportAPI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deployApi.Name,
+			Namespace: deployApi.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(&deployApi, schema.GroupVersionKind{
+					Group:   "apim.hedinit.io",
+					Version: "v1",
+					Kind:    "DeployAPI",
+				}),
+			},
+		},
+		Spec: apimv1.ImportAPISpec{
+			RoutePrefix:          apimApi.Spec.RoutePrefix,
+			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
+			APIID:                apimApi.Spec.APIID,
+		},
+	}
+
+	if err := r.Create(ctx, deployment); err != nil {
+		logger.Error(err, "❌ Failed to create ImportAPI")
+	} else {
+		logger.Info("📘 Created ImportAPI", "name", deployment.Name)
+	}
 
 	return ctrl.Result{}, nil
 }
