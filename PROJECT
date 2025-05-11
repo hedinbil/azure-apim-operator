@@ -37,7 +37,7 @@ resources:
   controller: true
   domain: hedinit.io
   group: apim
-  kind: APIMAPIRevision
+  kind: APIMAPIDeployment
   path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - api:

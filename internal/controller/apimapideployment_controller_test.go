@@ -30,7 +30,7 @@ import (
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 )
 
-var _ = Describe("APIMAPIRevision Controller", func() {
+var _ = Describe("APIMAPIDeployment Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("APIMAPIRevision Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		APIMAPIRevision := &apimv1.APIMAPIRevision{}
+		APIMAPIDeployment := &apimv1.APIMAPIDeployment{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind APIMAPIRevision")
-			err := k8sClient.Get(ctx, typeNamespacedName, APIMAPIRevision)
+			By("creating the custom resource for the Kind APIMAPIDeployment")
+			err := k8sClient.Get(ctx, typeNamespacedName, APIMAPIDeployment)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &apimv1.APIMAPIRevision{
+				resource := &apimv1.APIMAPIDeployment{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("APIMAPIRevision Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &apimv1.APIMAPIRevision{}
+			resource := &apimv1.APIMAPIDeployment{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance APIMAPIRevision")
+			By("Cleanup the specific resource instance APIMAPIDeployment")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &APIMAPIRevisionReconciler{
+			controllerReconciler := &APIMAPIDeploymentReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

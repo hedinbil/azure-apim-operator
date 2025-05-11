@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapirevisions.apim.hedinit.io
+  name: apimapideployments.apim.hedinit.io
 spec:
   group: apim.hedinit.io
   names:
-    kind: APIMAPIRevision
-    listKind: APIMAPIRevisionList
-    plural: apimapirevisions
-    singular: apimapirevision
+    kind: APIMAPIDeployment
+    listKind: APIMAPIDeploymentList
+    plural: apimapideployments
+    singular: apimapideployment
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPIRevision is the Schema for the APIMAPIRevisions API
+        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
         properties:
           apiVersion:
             description: |-
@@ -37,9 +37,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIRevisionSpec defines the desired state of APIMAPIRevision
+            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
             properties:
               APIID:
+                type: string
+              OpenAPIDefinitionURL:
                 type: string
               apimService:
                 type: string
@@ -53,16 +55,14 @@ spec:
                 type: string
               subscription:
                 type: string
-              openAPIDefinitionURL:
-                type: string
             required:
             - APIID
+            - OpenAPIDefinitionURL
             - apimService
             - host
             - resourceGroup
             - routePrefix
             - subscription
-            - openAPIDefinitionURL
             type: object
           status:
             properties:

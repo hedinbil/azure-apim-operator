@@ -1,9 +1,9 @@
 apiVersion: apim.hedinit.io/v1
-kind: APIMAPIRevision
+kind: APIMAPIDeployment
 metadata:
   labels:
     app.kubernetes.io/name: azure-apim-operator
     app.kubernetes.io/managed-by: kustomize
-  name: APIMAPIRevision-sample
+  name: apimapideployment-sample
 spec:
   # TODO(user): Add fields here

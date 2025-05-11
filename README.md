@@ -91,11 +91,11 @@ kubectl apply -f your-api.yaml
 
    * Watches for ReplicaSets.
    * Matches ReplicaSets to `APIMAPI` resources based on labels.
-   * Creates an intermediate `APIMAPIRevision` CR once the corresponding Pod and Ingress are ready.
+   * Creates an intermediate `APIMAPIDeployment` CR once the corresponding Pod and Ingress are ready.
 
 2. **APIM API Revision Controller**
 
-   * Watches for `APIMAPIRevision` CRs.
+   * Watches for `APIMAPIDeployment` CRs.
    * Fetches the Swagger/OpenAPI spec from the deployed application's endpoint.
    * Registers or updates the API in Azure APIM.
    * Cleans up the intermediate CR after successful deployment.

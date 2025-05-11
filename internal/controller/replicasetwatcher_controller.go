@@ -33,7 +33,7 @@ type ReplicaSetWatcherReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapirevisions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("replicasetwatcher_controller")
@@ -79,14 +79,14 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
 	revisionName := appName
-	var existingRevision apimv1.APIMAPIRevision
+	var existingRevision apimv1.APIMAPIDeployment
 	err = r.Get(ctx, client.ObjectKey{Name: revisionName, Namespace: rs.Namespace}, &existingRevision)
 	if err == nil {
-		logger.Info("✅ APIMAPIRevision already exists", "name", revisionName)
+		logger.Info("✅ APIMAPIDeployment already exists", "name", revisionName)
 		return ctrl.Result{}, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		logger.Error(err, "❌ Failed checking APIMAPIRevision", "replicaSet", rs.Name)
+		logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name)
 		return ctrl.Result{}, err
 	}
 
@@ -139,7 +139,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
 
-	revisionObj := &apimv1.APIMAPIRevision{
+	deployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      revisionName,
 			Namespace: rs.Namespace,
@@ -151,7 +151,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				}),
 			},
 		},
-		Spec: apimv1.APIMAPIRevisionSpec{
+		Spec: apimv1.APIMAPIDeploymentSpec{
 			Host:                 apimApi.Spec.Host,
 			RoutePrefix:          apimApi.Spec.RoutePrefix,
 			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
@@ -159,14 +159,13 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			Subscription:         apimService.Spec.Subscription,
 			ResourceGroup:        apimService.Spec.ResourceGroup,
 			APIID:                apimApi.Spec.APIID,
-			Revision:             "",
 		},
 	}
 
-	if err := r.Create(ctx, revisionObj); err != nil {
-		logger.Error(err, "❌ Failed to create APIMAPIRevision")
+	if err := r.Create(ctx, deployment); err != nil {
+		logger.Error(err, "❌ Failed to create APIMAPIDeployment")
 	} else {
-		logger.Info("📘 Created APIMAPIRevision", "name", revisionObj.Name)
+		logger.Info("📘 Created APIMAPIDeployment", "name", deployment.Name)
 	}
 
 	return ctrl.Result{}, nil

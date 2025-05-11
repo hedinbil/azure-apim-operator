@@ -4,9 +4,10 @@
 resources:
 - bases/apim.hedinit.io_ingresswatchers.yaml
 - bases/apim.hedinit.io_apimapis.yaml
-- bases/apim.hedinit.io_APIMAPIRevisions.yaml
+- bases/apim.hedinit.io_apimapideployments.yaml
 - bases/apim.hedinit.io_apimservices.yaml
 - bases/apim.hedinit.io_apimapipatches.yaml
+- bases/apim.hedinit.io_imports.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

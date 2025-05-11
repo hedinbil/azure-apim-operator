@@ -35,32 +35,32 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
-// APIMAPIRevisionReconciler reconciles a APIMAPIRevision object
-type APIMAPIRevisionReconciler struct {
+// APIMAPIDeploymentReconciler reconciles a APIMAPIDeployment object
+type APIMAPIDeploymentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapirevisions,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapirevisions/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapirevisions/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the APIMAPIRevision object against the actual cluster state, and then
+// the APIMAPIDeployment object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
-func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	//logger := log.FromContext(ctx)
-	var logger = ctrl.Log.WithName("apimapirevision_controller")
+	var logger = ctrl.Log.WithName("apimapideployment_controller")
 
-	var apiRevision apimv1.APIMAPIRevision
+	var apiRevision apimv1.APIMAPIDeployment
 	if err := r.Get(ctx, req.NamespacedName, &apiRevision); err != nil {
-		logger.Info("ℹ️ Unable to fetch APIMAPIRevision")
+		logger.Info("ℹ️ Unable to fetch APIMAPIDeployment")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -143,20 +143,20 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// 🎯 Delete the APIMAPIRevision CR once processed
+	// 🎯 Delete the APIMAPIDeployment CR once processed
 	if err := r.Delete(ctx, &apiRevision); err != nil {
-		logger.Error(err, "⚠️ Failed to delete APIMAPIRevision object")
+		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
 		return ctrl.Result{}, err
 	}
-	logger.Info("🧹 APIMAPIRevision deleted after successful import", "name", apiRevision.Name)
+	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", apiRevision.Name)
 
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *APIMAPIRevisionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&apimv1.APIMAPIRevision{}).
+		For(&apimv1.APIMAPIDeployment{}).
 		WithEventFilter(predicate.Funcs{
 			CreateFunc: func(e event.CreateEvent) bool {
 				return true
@@ -171,6 +171,6 @@ func (r *APIMAPIRevisionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return false
 			},
 		}).
-		Named("apimapirevision").
+		Named("apimapideployment").
 		Complete(r)
 }

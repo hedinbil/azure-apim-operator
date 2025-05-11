@@ -7,8 +7,8 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapideployments
   - apimapipatches
-  - apimapirevisions
   - apimapis
   - apimservices
   - ingresswatchers
@@ -24,8 +24,8 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapideployments/finalizers
   - apimapipatches/finalizers
-  - apimapirevisions/finalizers
   - apimapis/finalizers
   - apimservices/finalizers
   - ingresswatchers/finalizers
@@ -35,8 +35,8 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapideployments/status
   - apimapipatches/status
-  - apimapirevisions/status
   - apimapis/status
   - apimservices/status
   - ingresswatchers/status
