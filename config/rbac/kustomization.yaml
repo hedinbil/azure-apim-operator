@@ -22,6 +22,15 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- deployapi_admin_role.yaml
+- deployapi_editor_role.yaml
+- deployapi_viewer_role.yaml
+- importapi_admin_role.yaml
+- importapi_editor_role.yaml
+- importapi_viewer_role.yaml
+- patchapi_admin_role.yaml
+- patchapi_editor_role.yaml
+- patchapi_viewer_role.yaml
 - import_admin_role.yaml
 - import_editor_role.yaml
 - import_viewer_role.yaml

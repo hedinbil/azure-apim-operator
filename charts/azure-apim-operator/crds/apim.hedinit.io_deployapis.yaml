@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapideployments.apim.hedinit.io
+  name: deployapis.apim.hedinit.io
 spec:
   group: apim.hedinit.io
   names:
-    kind: APIMAPIDeployment
-    listKind: APIMAPIDeploymentList
-    plural: apimapideployments
-    singular: apimapideployment
+    kind: DeployAPI
+    listKind: DeployAPIList
+    plural: deployapis
+    singular: deployapi
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
+        description: DeployAPI is the Schema for the deployapis API.
         properties:
           apiVersion:
             description: |-
@@ -37,13 +37,15 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
+            description: DeployAPISpec defines the desired state of DeployAPI.
             properties:
               APIID:
                 type: string
               apimService:
                 type: string
               host:
+                description: Foo is an example field of DeployAPI. Edit deployapi_types.go
+                  to remove/update
                 type: string
               openAPIDefinitionURL:
                 type: string
@@ -65,11 +67,7 @@ spec:
             - subscription
             type: object
           status:
-            properties:
-              importedAt:
-                type: string
-              status:
-                type: string
+            description: DeployAPIStatus defines the observed state of DeployAPI.
             type: object
         type: object
     served: true

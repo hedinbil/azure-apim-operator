@@ -139,7 +139,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
 
-	deployment := &apimv1.APIMAPIDeployment{
+	apiDeployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      revisionName,
 			Namespace: rs.Namespace,
@@ -162,10 +162,39 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		},
 	}
 
-	if err := r.Create(ctx, deployment); err != nil {
+	if err := r.Create(ctx, apiDeployment); err != nil {
 		logger.Error(err, "❌ Failed to create APIMAPIDeployment")
 	} else {
-		logger.Info("📘 Created APIMAPIDeployment", "name", deployment.Name)
+		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name)
+	}
+
+	deployment := &apimv1.DeployAPI{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      revisionName,
+			Namespace: rs.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
+					Group:   "apim.hedinit.io",
+					Version: "v1",
+					Kind:    "APIMAPI",
+				}),
+			},
+		},
+		Spec: apimv1.DeployAPISpec{
+			Host:                 apimApi.Spec.Host,
+			RoutePrefix:          apimApi.Spec.RoutePrefix,
+			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
+			APIMService:          apimApi.Spec.APIMService,
+			Subscription:         apimService.Spec.Subscription,
+			ResourceGroup:        apimService.Spec.ResourceGroup,
+			APIID:                apimApi.Spec.APIID,
+		},
+	}
+
+	if err := r.Create(ctx, deployment); err != nil {
+		logger.Error(err, "❌ Failed to create DeployAPI")
+	} else {
+		logger.Info("📘 Created DeployAPI", "name", deployment.Name)
 	}
 
 	return ctrl.Result{}, nil

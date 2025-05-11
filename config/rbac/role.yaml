@@ -11,7 +11,10 @@ rules:
   - apimapipatches
   - apimapis
   - apimservices
+  - deployapis
+  - importapis
   - ingresswatchers
+  - patchapis
   - replicasetwatchers
   verbs:
   - create
@@ -28,7 +31,10 @@ rules:
   - apimapipatches/finalizers
   - apimapis/finalizers
   - apimservices/finalizers
+  - deployapis/finalizers
+  - importapis/finalizers
   - ingresswatchers/finalizers
+  - patchapis/finalizers
   - replicasetwatchers/finalizers
   verbs:
   - update
@@ -39,7 +45,10 @@ rules:
   - apimapipatches/status
   - apimapis/status
   - apimservices/status
+  - deployapis/status
+  - importapis/status
   - ingresswatchers/status
+  - patchapis/status
   - replicasetwatchers/status
   verbs:
   - get

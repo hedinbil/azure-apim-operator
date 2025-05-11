@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapideployments.apim.hedinit.io
+  name: importapis.apim.hedinit.io
 spec:
   group: apim.hedinit.io
   names:
-    kind: APIMAPIDeployment
-    listKind: APIMAPIDeploymentList
-    plural: apimapideployments
-    singular: apimapideployment
+    kind: ImportAPI
+    listKind: ImportAPIList
+    plural: importapis
+    singular: importapi
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
+        description: ImportAPI is the Schema for the importapis API.
         properties:
           apiVersion:
             description: |-
@@ -37,39 +37,23 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
+            description: ImportAPISpec defines the desired state of ImportAPI.
             properties:
               APIID:
-                type: string
-              apimService:
-                type: string
-              host:
+                description: Foo is an example field of ImportAPI. Edit importapi_types.go
+                  to remove/update
                 type: string
               openAPIDefinitionURL:
                 type: string
-              resourceGroup:
-                type: string
-              revision:
-                type: string
               routePrefix:
-                type: string
-              subscription:
                 type: string
             required:
             - APIID
-            - apimService
-            - host
             - openAPIDefinitionURL
-            - resourceGroup
             - routePrefix
-            - subscription
             type: object
           status:
-            properties:
-              importedAt:
-                type: string
-              status:
-                type: string
+            description: ImportAPIStatus defines the observed state of ImportAPI.
             type: object
         type: object
     served: true

@@ -252,6 +252,27 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPIPatch")
 		os.Exit(1)
 	}
+	if err = (&controller.PatchAPIReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PatchAPI")
+		os.Exit(1)
+	}
+	if err = (&controller.ImportAPIReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ImportAPI")
+		os.Exit(1)
+	}
+	if err = (&controller.DeployAPIReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DeployAPI")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

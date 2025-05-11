@@ -58,4 +58,31 @@ resources:
   kind: APIMAPIPatch
   path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: hedinit.io
+  group: apim
+  kind: PatchAPI
+  path: github.com/hedinit/azure-apim-operator/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: hedinit.io
+  group: apim
+  kind: ImportAPI
+  path: github.com/hedinit/azure-apim-operator/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: hedinit.io
+  group: apim
+  kind: DeployAPI
+  path: github.com/hedinit/azure-apim-operator/api/v1
+  version: v1
 version: "3"

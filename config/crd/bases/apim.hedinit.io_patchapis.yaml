@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapideployments.apim.hedinit.io
+  name: patchapis.apim.hedinit.io
 spec:
   group: apim.hedinit.io
   names:
-    kind: APIMAPIDeployment
-    listKind: APIMAPIDeploymentList
-    plural: apimapideployments
-    singular: apimapideployment
+    kind: PatchAPI
+    listKind: PatchAPIList
+    plural: patchapis
+    singular: patchapi
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
+        description: PatchAPI is the Schema for the patchapis API.
         properties:
           apiVersion:
             description: |-
@@ -37,39 +37,20 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
+            description: PatchAPISpec defines the desired state of PatchAPI.
             properties:
               APIID:
+                description: Foo is an example field of PatchAPI. Edit patchapi_types.go
+                  to remove/update
                 type: string
-              apimService:
-                type: string
-              host:
-                type: string
-              openAPIDefinitionURL:
-                type: string
-              resourceGroup:
-                type: string
-              revision:
-                type: string
-              routePrefix:
-                type: string
-              subscription:
+              serviceURL:
                 type: string
             required:
             - APIID
-            - apimService
-            - host
-            - openAPIDefinitionURL
-            - resourceGroup
-            - routePrefix
-            - subscription
+            - serviceURL
             type: object
           status:
-            properties:
-              importedAt:
-                type: string
-              status:
-                type: string
+            description: PatchAPIStatus defines the observed state of PatchAPI.
             type: object
         type: object
     served: true

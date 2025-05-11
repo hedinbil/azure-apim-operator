@@ -6,4 +6,7 @@ resources:
 - apim_v1_apimservice.yaml
 - apim_v1_apimapipatch.yaml
 - apim_v1_import.yaml
+- apim_v1_patchapi.yaml
+- apim_v1_importapi.yaml
+- apim_v1_deployapi.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
