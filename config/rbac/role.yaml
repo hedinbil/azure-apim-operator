@@ -19,7 +19,6 @@ rules:
   - apimapis
   - apimservices
   - ingresswatchers
-  - podwatchers
   - replicasetwatchers
   verbs:
   - create
@@ -36,7 +35,6 @@ rules:
   - apimapis/finalizers
   - apimservices/finalizers
   - ingresswatchers/finalizers
-  - podwatchers/finalizers
   - replicasetwatchers/finalizers
   verbs:
   - update
@@ -47,7 +45,6 @@ rules:
   - apimapis/status
   - apimservices/status
   - ingresswatchers/status
-  - podwatchers/status
   - replicasetwatchers/status
   verbs:
   - get

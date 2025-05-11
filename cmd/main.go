@@ -224,13 +224,6 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPI")
 		os.Exit(1)
 	}
-	if err = (&controller.PodWatcherReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PodWatcher")
-		os.Exit(1)
-	}
 	if err = (&controller.ReplicaSetWatcherReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
