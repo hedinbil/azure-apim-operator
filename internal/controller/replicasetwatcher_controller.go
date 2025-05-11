@@ -152,14 +152,14 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			},
 		},
 		Spec: apimv1.APIMAPIRevisionSpec{
-			Host:          apimApi.Spec.Host,
-			RoutePrefix:   apimApi.Spec.RoutePrefix,
-			SwaggerPath:   apimApi.Spec.SwaggerPath,
-			APIMService:   apimApi.Spec.APIMService,
-			Subscription:  apimService.Spec.Subscription,
-			ResourceGroup: apimService.Spec.ResourceGroup,
-			APIID:         apimApi.Spec.APIID,
-			Revision:      "",
+			Host:                 apimApi.Spec.Host,
+			RoutePrefix:          apimApi.Spec.RoutePrefix,
+			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
+			APIMService:          apimApi.Spec.APIMService,
+			Subscription:         apimService.Spec.Subscription,
+			ResourceGroup:        apimService.Spec.ResourceGroup,
+			APIID:                apimApi.Spec.APIID,
+			Revision:             "",
 		},
 	}
 

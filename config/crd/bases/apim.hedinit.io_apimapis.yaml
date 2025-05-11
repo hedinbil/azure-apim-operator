@@ -47,14 +47,14 @@ spec:
                 type: string
               routePrefix:
                 type: string
-              swaggerPath:
+              openAPIDefinitionURL:
                 type: string
             required:
             - APIID
             - apimService
             - host
             - routePrefix
-            - swaggerPath
+            - openAPIDefinitionURL
             type: object
           status:
             properties:
@@ -64,7 +64,7 @@ spec:
                 type: string
               importedAt:
                 type: string
-              swaggerStatus:
+              status:
                 type: string
             required:
             - apiHost

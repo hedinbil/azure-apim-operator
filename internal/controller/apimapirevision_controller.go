@@ -74,8 +74,8 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// openApiURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.SwaggerPath)
-	openApiURL := apiRevision.Spec.SwaggerPath
+	// openApiURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.OpenAPIDefinitionURL)
+	openApiURL := apiRevision.Spec.OpenAPIDefinitionURL
 	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", apiRevision.Spec.APIID)
 
 	resp, err := http.Get(openApiURL)
@@ -134,7 +134,7 @@ func (r *APIMAPIRevisionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	apimApi.Status.SwaggerStatus = resp.Status
+	apimApi.Status.Status = resp.Status
 	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, apiRevision.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 

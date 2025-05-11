@@ -53,7 +53,7 @@ spec:
                 type: string
               subscription:
                 type: string
-              swaggerPath:
+              openAPIDefinitionURL:
                 type: string
             required:
             - APIID
@@ -62,13 +62,13 @@ spec:
             - resourceGroup
             - routePrefix
             - subscription
-            - swaggerPath
+            - openAPIDefinitionURL
             type: object
           status:
             properties:
               importedAt:
                 type: string
-              swaggerStatus:
+              status:
                 type: string
             type: object
         type: object

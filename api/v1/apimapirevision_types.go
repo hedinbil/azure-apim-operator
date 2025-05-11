@@ -6,19 +6,19 @@ import (
 
 // APIMAPIRevisionSpec defines the desired state of APIMAPIRevision
 type APIMAPIRevisionSpec struct {
-	Host          string `json:"host"`
-	RoutePrefix   string `json:"routePrefix"`
-	SwaggerPath   string `json:"swaggerPath"`
-	APIMService   string `json:"apimService"`
-	Subscription  string `json:"subscription"`
-	ResourceGroup string `json:"resourceGroup"`
-	APIID         string `json:"APIID"`
-	Revision      string `json:"revision,omitempty"`
+	Host                 string `json:"host"`
+	RoutePrefix          string `json:"routePrefix"`
+	OpenAPIDefinitionURL string `json:"OpenAPIDefinitionURL"`
+	APIMService          string `json:"apimService"`
+	Subscription         string `json:"subscription"`
+	ResourceGroup        string `json:"resourceGroup"`
+	APIID                string `json:"APIID"`
+	Revision             string `json:"revision,omitempty"`
 }
 
 type APIMAPIRevisionStatus struct {
-	ImportedAt    string `json:"importedAt,omitempty"`
-	SwaggerStatus string `json:"swaggerStatus,omitempty"`
+	ImportedAt string `json:"importedAt,omitempty"`
+	Status     string `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true

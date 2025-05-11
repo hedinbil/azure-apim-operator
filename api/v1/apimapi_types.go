@@ -6,16 +6,16 @@ import (
 
 // APIMAPISpec defines the desired state of APIMAPI
 type APIMAPISpec struct {
-	Host        string `json:"host"`
-	RoutePrefix string `json:"routePrefix"`
-	SwaggerPath string `json:"swaggerPath"`
-	APIMService string `json:"apimService"`
-	APIID       string `json:"APIID"`
+	Host                 string `json:"host"`
+	RoutePrefix          string `json:"routePrefix"`
+	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
+	APIMService          string `json:"apimService"`
+	APIID                string `json:"APIID"`
 }
 
 type APIMAPIStatus struct {
 	ImportedAt          string `json:"importedAt,omitempty"`
-	SwaggerStatus       string `json:"swaggerStatus,omitempty"`
+	Status              string `json:"status,omitempty"`
 	ApiHost             string `json:"apiHost"`
 	DeveloperPortalHost string `json:"developerPortalHost"`
 }
