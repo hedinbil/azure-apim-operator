@@ -6,6 +6,7 @@ resources:
 - bases/apim.hedinit.io_apimapis.yaml
 - bases/apim.hedinit.io_APIMAPIRevisions.yaml
 - bases/apim.hedinit.io_apimservices.yaml
+- bases/apim.hedinit.io_apimapipatches.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

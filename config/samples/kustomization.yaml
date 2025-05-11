@@ -4,4 +4,5 @@ resources:
 - apim_v1_apimapi.yaml
 - apim_v1_APIMAPIRevision.yaml
 - apim_v1_apimservice.yaml
+- apim_v1_apimapipatch.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

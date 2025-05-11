@@ -5,16 +5,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapipatches
   - apimapirevisions
   - apimapis
   - apimservices
@@ -31,6 +24,7 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapipatches/finalizers
   - apimapirevisions/finalizers
   - apimapis/finalizers
   - apimservices/finalizers
@@ -41,6 +35,7 @@ rules:
 - apiGroups:
   - apim.hedinit.io
   resources:
+  - apimapipatches/status
   - apimapirevisions/status
   - apimapis/status
   - apimservices/status

@@ -83,7 +83,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMRevisionC
 	return nil
 }
 
-func AssignServiceURL(ctx context.Context, config APIMRevisionConfig) error {
+func PatchService(ctx context.Context, config APIMRevisionConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		config.SubscriptionID,
