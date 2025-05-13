@@ -94,6 +94,14 @@ func PatchService(ctx context.Context, config APIMRevisionConfig) error {
 
 	body := fmt.Sprintf(`{"properties":{"serviceUrl":"%s"}}`, config.ServiceURL)
 
+	// Log what we’re about to do
+	logger.Info("🔧 Patching APIM service URL",
+		"method", http.MethodPatch,
+		"url", patchURL,
+		"apiID", config.APIID,
+		"serviceURL", config.ServiceURL,
+	)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building PATCH request: %w", err)
@@ -108,10 +116,22 @@ func PatchService(ctx context.Context, config APIMRevisionConfig) error {
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		errMsg := fmt.Errorf("status code: %d", resp.StatusCode)
+		logger.Error(errMsg, "❌ PATCH returned error",
+			"apiID", config.APIID,
+			"status", resp.Status,
+			"body", string(respBody),
+		)
 		return fmt.Errorf("serviceUrl patch failed: %s\n%s", resp.Status, string(respBody))
 	}
+
+	logger.Info("✅ Successfully patched serviceUrl",
+		"apiID", config.APIID,
+		"status", resp.Status,
+		"serviceURL", config.ServiceURL,
+	)
 
 	return nil
 }

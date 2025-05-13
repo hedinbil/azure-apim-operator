@@ -6,7 +6,7 @@ import (
 
 // APIMAPISpec defines the desired state of APIMAPI
 type APIMAPISpec struct {
-	Host                 string `json:"host"`
+	ServiceURL           string `json:"serviceURL"`
 	RoutePrefix          string `json:"routePrefix"`
 	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
 	APIMService          string `json:"apimService"`

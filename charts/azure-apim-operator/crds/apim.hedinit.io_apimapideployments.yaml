@@ -43,7 +43,7 @@ spec:
                 type: string
               apimService:
                 type: string
-              host:
+              openAPIDefinitionURL:
                 type: string
               resourceGroup:
                 type: string
@@ -51,18 +51,18 @@ spec:
                 type: string
               routePrefix:
                 type: string
-              subscription:
+              serviceURL:
                 type: string
-              openAPIDefinitionURL:
+              subscription:
                 type: string
             required:
             - APIID
             - apimService
-            - host
+            - openAPIDefinitionURL
             - resourceGroup
             - routePrefix
+            - serviceURL
             - subscription
-            - openAPIDefinitionURL
             type: object
           status:
             properties:

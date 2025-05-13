@@ -58,25 +58,24 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	//logger := log.FromContext(ctx)
 	var logger = ctrl.Log.WithName("apimapideployment_controller")
 
-	var apiRevision apimv1.APIMAPIDeployment
-	if err := r.Get(ctx, req.NamespacedName, &apiRevision); err != nil {
+	var deployment apimv1.APIMAPIDeployment
+	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
 		logger.Info("ℹ️ Unable to fetch APIMAPIDeployment")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	var apimApi apimv1.APIMAPI
-	if err := r.Get(ctx, client.ObjectKey{Name: apiRevision.Name, Namespace: req.Namespace}, &apimApi); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", apiRevision.Spec.APIID)
+			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", deployment.Spec.APIID)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "❌ Failed to get APIMAPI", "name", apiRevision.Spec.APIID)
+		logger.Error(err, "❌ Failed to get APIMAPI", "name", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 
-	// openApiURL := fmt.Sprintf("https://%s%s", apiRevision.Spec.Host, apiRevision.Spec.OpenAPIDefinitionURL)
-	openApiURL := apiRevision.Spec.OpenAPIDefinitionURL
-	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", apiRevision.Spec.APIID)
+	openApiURL := deployment.Spec.OpenAPIDefinitionURL
+	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", deployment.Spec.APIID)
 
 	resp, err := http.Get(openApiURL)
 	if err != nil {
@@ -104,27 +103,27 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	config := apim.APIMRevisionConfig{
-		SubscriptionID: apiRevision.Spec.Subscription,
-		ResourceGroup:  apiRevision.Spec.ResourceGroup,
-		ServiceName:    apiRevision.Spec.APIMService,
-		APIID:          apiRevision.Spec.APIID,
-		RoutePrefix:    apiRevision.Spec.RoutePrefix,
-		ServiceURL:     fmt.Sprintf("https://%s", apiRevision.Spec.Host),
+		SubscriptionID: deployment.Spec.Subscription,
+		ResourceGroup:  deployment.Spec.ResourceGroup,
+		ServiceName:    deployment.Spec.APIMService,
+		APIID:          deployment.Spec.APIID,
+		RoutePrefix:    deployment.Spec.RoutePrefix,
+		ServiceURL:     deployment.Spec.ServiceURL,
 		BearerToken:    token,
-		Revision:       apiRevision.Spec.Revision,
+		Revision:       deployment.Spec.Revision,
 	}
 
 	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
 		logger.Error(err, "🚫 Failed to import API")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-	logger.Info("✅ API imported to APIM", "apiID", apiRevision.Spec.APIID)
+	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
 
 	if err := apim.PatchService(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-	logger.Info("✅ Service URL patched in APIM", "apiID", apiRevision.Spec.APIID)
+	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
 	// Get APIM details (hostnames)
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
@@ -135,7 +134,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.Status = resp.Status
-	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, apiRevision.Spec.RoutePrefix)
+	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
 	if err := r.Status().Update(ctx, &apimApi); err != nil {
@@ -144,11 +143,11 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// 🎯 Delete the APIMAPIDeployment CR once processed
-	if err := r.Delete(ctx, &apiRevision); err != nil {
+	if err := r.Delete(ctx, &deployment); err != nil {
 		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
 		return ctrl.Result{}, err
 	}
-	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", apiRevision.Name)
+	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", deployment.Name)
 
 	return ctrl.Result{}, nil
 }

@@ -10,7 +10,6 @@ import (
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -114,30 +113,30 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
-	var ingressList networkingv1.IngressList
-	if err := r.List(ctx, &ingressList, client.InNamespace(rs.Namespace)); err != nil {
-		logger.Error(err, "❌ Failed to list Ingresses")
-		return ctrl.Result{}, err
-	}
+	// var ingressList networkingv1.IngressList
+	// if err := r.List(ctx, &ingressList, client.InNamespace(rs.Namespace)); err != nil {
+	// 	logger.Error(err, "❌ Failed to list Ingresses")
+	// 	return ctrl.Result{}, err
+	// }
 
-	var matchingIngress *networkingv1.Ingress
-	for _, ing := range ingressList.Items {
-		for _, rule := range ing.Spec.Rules {
-			if rule.Host == apimApi.Spec.Host {
-				matchingIngress = &ing
-				break
-			}
-		}
-		if matchingIngress != nil {
-			break
-		}
-	}
-	if matchingIngress == nil {
-		logger.Info("⏳ No matching Ingress yet", "host", apimApi.Spec.Host)
-		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
-	}
+	// var matchingIngress *networkingv1.Ingress
+	// for _, ing := range ingressList.Items {
+	// 	for _, rule := range ing.Spec.Rules {
+	// 		if rule.Host == apimApi.Spec.Host {
+	// 			matchingIngress = &ing
+	// 			break
+	// 		}
+	// 	}
+	// 	if matchingIngress != nil {
+	// 		break
+	// 	}
+	// }
+	// if matchingIngress == nil {
+	// 	logger.Info("⏳ No matching Ingress yet", "host", apimApi.Spec.Host)
+	// 	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+	// }
 
-	logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
+	// logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
 
 	apiDeployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -152,7 +151,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			},
 		},
 		Spec: apimv1.APIMAPIDeploymentSpec{
-			Host:                 apimApi.Spec.Host,
+			ServiceURL:           apimApi.Spec.ServiceURL,
 			RoutePrefix:          apimApi.Spec.RoutePrefix,
 			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
 			APIMService:          apimApi.Spec.APIMService,
@@ -166,35 +165,6 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to create APIMAPIDeployment")
 	} else {
 		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name)
-	}
-
-	deployment := &apimv1.DeployAPI{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      revisionName,
-			Namespace: rs.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
-					Group:   "apim.hedinit.io",
-					Version: "v1",
-					Kind:    "APIMAPI",
-				}),
-			},
-		},
-		Spec: apimv1.DeployAPISpec{
-			Host:                 apimApi.Spec.Host,
-			RoutePrefix:          apimApi.Spec.RoutePrefix,
-			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
-			APIMService:          apimApi.Spec.APIMService,
-			Subscription:         apimService.Spec.Subscription,
-			ResourceGroup:        apimService.Spec.ResourceGroup,
-			APIID:                apimApi.Spec.APIID,
-		},
-	}
-
-	if err := r.Create(ctx, deployment); err != nil {
-		logger.Error(err, "❌ Failed to create DeployAPI")
-	} else {
-		logger.Info("📘 Created DeployAPI", "name", deployment.Name)
 	}
 
 	return ctrl.Result{}, nil

@@ -43,18 +43,18 @@ spec:
                 type: string
               apimService:
                 type: string
-              host:
-                type: string
               openAPIDefinitionURL:
                 type: string
               routePrefix:
                 type: string
+              serviceURL:
+                type: string
             required:
             - APIID
             - apimService
-            - host
             - openAPIDefinitionURL
             - routePrefix
+            - serviceURL
             type: object
           status:
             properties:
