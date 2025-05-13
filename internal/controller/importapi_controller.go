@@ -112,7 +112,7 @@ func (r *ImportAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	config := apim.APIMRevisionConfig{
+	config := apim.APIMDeploymentConfig{
 		SubscriptionID: apimService.Spec.Subscription,
 		ResourceGroup:  apimService.Spec.ResourceGroup,
 		ServiceName:    apimService.Spec.Name,

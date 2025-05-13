@@ -91,7 +91,7 @@ func (r *APIMAPIPatchReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	config := apim.APIMRevisionConfig{
+	config := apim.APIMDeploymentConfig{
 		SubscriptionID: apimService.Spec.Subscription,
 		ResourceGroup:  apimService.Spec.ResourceGroup,
 		ServiceName:    apimService.Name,
@@ -100,7 +100,7 @@ func (r *APIMAPIPatchReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		BearerToken:    token,
 	}
 
-	if err := apim.PatchService(ctx, config); err != nil {
+	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}

@@ -14,7 +14,7 @@ import (
 
 var logger = ctrl.Log.WithName("apim")
 
-func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMRevisionConfig, openApiContent []byte) error {
+func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
 	apiID := apimParams.APIID
 	if apimParams.Revision != "" {
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
@@ -83,7 +83,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMRevisionC
 	return nil
 }
 
-func PatchService(ctx context.Context, config APIMRevisionConfig) error {
+func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		config.SubscriptionID,
@@ -136,7 +136,7 @@ func PatchService(ctx context.Context, config APIMRevisionConfig) error {
 	return nil
 }
 
-func AssignProductToAPI(ctx context.Context, config APIMRevisionConfig) error {
+func AssignProductToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 	if config.ProductID == "" {
 		logger.Info("ℹ️ No product configured for assignment; skipping")
 		return nil
@@ -183,7 +183,7 @@ func AssignProductToAPI(ctx context.Context, config APIMRevisionConfig) error {
 	return nil
 }
 
-func GetAPIRevisions(ctx context.Context, config APIMRevisionConfig) ([]APIRevision, error) {
+func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRevision, error) {
 	url := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/revisions?api-version=2021-08-01",
 		config.SubscriptionID,
@@ -236,7 +236,7 @@ func GetAPIRevisions(ctx context.Context, config APIMRevisionConfig) ([]APIRevis
 	return result.Value, nil
 }
 
-func GetAPIMServiceDetails(ctx context.Context, config APIMRevisionConfig) (apiHost, developerPortalHost string, err error) {
+func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (apiHost, developerPortalHost string, err error) {
 	url := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s?api-version=2021-08-01",
 		config.SubscriptionID,
@@ -299,12 +299,13 @@ type APIRevisionListResponse struct {
 	Value []APIRevision `json:"value"`
 }
 
-type APIMRevisionConfig struct {
+type APIMDeploymentConfig struct {
 	SubscriptionID string
 	ResourceGroup  string
 	ServiceName    string
 	APIID          string // unique identifier for the API in APIM
 	RoutePrefix    string // base route in APIM (e.g. /bidme)
+	Product        string // e.g. "my-product" → optional
 	ServiceURL     string // Backend URL (e.g. https://myapp.example.com)
 	BearerToken    string // AAD token for the APIM management scope
 	Revision       string // e.g. "2" → optional

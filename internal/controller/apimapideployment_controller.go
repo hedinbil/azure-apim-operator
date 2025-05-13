@@ -55,8 +55,7 @@ type APIMAPIDeploymentReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
 func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	//logger := log.FromContext(ctx)
-	var logger = ctrl.Log.WithName("apimapideployment_controller")
+	logger := ctrl.Log.WithName("apimapideployment_controller")
 
 	var deployment apimv1.APIMAPIDeployment
 	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
@@ -74,9 +73,9 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	// 1) Fetch the OpenAPI definition
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
 	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", deployment.Spec.APIID)
-
 	resp, err := http.Get(openApiURL)
 	if err != nil {
 		logger.Error(err, "❌ Failed to fetch OpenAPI definition")
@@ -90,42 +89,53 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	// 2) Acquire an Azure management token
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
 		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
 	}
-
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	config := apim.APIMRevisionConfig{
+	// 3) Build our APIMDeploymentConfig, including ProductID
+	config := apim.APIMDeploymentConfig{
 		SubscriptionID: deployment.Spec.Subscription,
 		ResourceGroup:  deployment.Spec.ResourceGroup,
 		ServiceName:    deployment.Spec.APIMService,
 		APIID:          deployment.Spec.APIID,
 		RoutePrefix:    deployment.Spec.RoutePrefix,
 		ServiceURL:     deployment.Spec.ServiceURL,
-		BearerToken:    token,
 		Revision:       deployment.Spec.Revision,
+		BearerToken:    token,
+		ProductID:      deployment.Spec.Product,
 	}
 
+	// 4) Import the API
 	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
 		logger.Error(err, "🚫 Failed to import API")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
 
-	if err := apim.PatchService(ctx, config); err != nil {
+	// 5) Patch the backend service URL
+	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
-	// Get APIM details (hostnames)
+	// 6) Assign the API to the Product if set
+	// if err := apim.AssignProductToAPI(ctx, config); err != nil {
+	// 	logger.Error(err, "🚫 Failed to assign API to product", "productID", config.ProductID)
+	// 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	// }
+	// logger.Info("✅ API assigned to product", "apiID", config.APIID, "productID", config.ProductID)
+
+	// 7) Fetch APIM host details and update status
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
 		logger.Error(err, "⚠️ Failed to fetch APIM details")
@@ -142,7 +152,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// 🎯 Delete the APIMAPIDeployment CR once processed
+	// 8) Clean up the deployment CR
 	if err := r.Delete(ctx, &deployment); err != nil {
 		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
 		return ctrl.Result{}, err
