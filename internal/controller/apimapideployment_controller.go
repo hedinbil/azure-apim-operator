@@ -111,7 +111,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ServiceURL:     deployment.Spec.ServiceURL,
 		Revision:       deployment.Spec.Revision,
 		BearerToken:    token,
-		ProductID:      deployment.Spec.Product,
+		ProductID:      deployment.Spec.ProductID,
 	}
 
 	// 4) Import the API

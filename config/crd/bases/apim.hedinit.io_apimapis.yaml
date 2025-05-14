@@ -45,6 +45,8 @@ spec:
                 type: string
               openAPIDefinitionURL:
                 type: string
+              productID:
+                type: string
               routePrefix:
                 type: string
               serviceURL:
@@ -53,6 +55,7 @@ spec:
             - APIID
             - apimService
             - openAPIDefinitionURL
+            - productID
             - routePrefix
             - serviceURL
             type: object

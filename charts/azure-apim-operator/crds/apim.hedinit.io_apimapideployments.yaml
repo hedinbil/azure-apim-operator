@@ -45,7 +45,7 @@ spec:
                 type: string
               openAPIDefinitionURL:
                 type: string
-              product:
+              productID:
                 type: string
               resourceGroup:
                 type: string
@@ -61,7 +61,7 @@ spec:
             - APIID
             - apimService
             - openAPIDefinitionURL
-            - product
+            - productID
             - resourceGroup
             - routePrefix
             - serviceURL
