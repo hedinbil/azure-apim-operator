@@ -10,6 +10,7 @@ rules:
   - apimapideployments
   - apimapipatches
   - apimapis
+  - apimproducts
   - apimservices
   - deployapis
   - importapis
@@ -30,6 +31,7 @@ rules:
   - apimapideployments/finalizers
   - apimapipatches/finalizers
   - apimapis/finalizers
+  - apimproducts/finalizers
   - apimservices/finalizers
   - deployapis/finalizers
   - importapis/finalizers
@@ -44,6 +46,7 @@ rules:
   - apimapideployments/status
   - apimapipatches/status
   - apimapis/status
+  - apimproducts/status
   - apimservices/status
   - deployapis/status
   - importapis/status

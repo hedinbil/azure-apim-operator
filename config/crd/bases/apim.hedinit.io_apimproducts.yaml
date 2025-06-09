@@ -1,0 +1,71 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: apimproducts.apim.hedinit.io
+spec:
+  group: apim.hedinit.io
+  names:
+    kind: APIMProduct
+    listKind: APIMProductList
+    plural: apimproducts
+    singular: apimproduct
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: APIMProduct is the Schema for the apimproducts API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: APIMProductSpec defines the desired state
+            properties:
+              apiID:
+                type: string
+              description:
+                type: string
+              displayName:
+                type: string
+              productID:
+                type: string
+              published:
+                type: boolean
+              apimService:
+                type: string
+            required:
+            - displayName
+            - productID
+            - apimService
+            type: object
+          status:
+            description: APIMProductStatus defines the observed state
+            properties:
+              message:
+                type: string
+              phase:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -286,6 +286,78 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 	return apiHost, developerPortalHost, nil
 }
 
+func CreateProductIfNotExists(ctx context.Context, config APIMProductConfig) error {
+	if config.ProductID == "" {
+		logger.Info("ℹ️ No product ID specified; skipping product creation")
+		return nil
+	}
+
+	productURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.ProductID,
+	)
+
+	state := "notPublished"
+	if config.Published {
+		state = "published"
+	}
+
+	productBody := map[string]interface{}{
+		"properties": map[string]interface{}{
+			"displayName":          config.DisplayName,
+			"description":          config.Description,
+			"subscriptionRequired": true,
+			"approvalRequired":     false,
+			"subscriptionsLimit":   1000,
+			"state":                state,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(productBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal product body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, productURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to build product creation request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", "*")
+
+	logger.Info("📦 Creating or updating product",
+		"productID", config.ProductID,
+		"url", productURL,
+	)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("product creation request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to create product",
+			"status", resp.Status,
+			"body", string(body),
+		)
+		return fmt.Errorf("failed to create product: %s\n%s", resp.Status, string(body))
+	}
+
+	logger.Info("✅ Product created or already exists",
+		"productID", config.ProductID,
+		"status", resp.Status,
+	)
+
+	return nil
+}
+
 type APIRevision struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -310,4 +382,15 @@ type APIMDeploymentConfig struct {
 	BearerToken    string // AAD token for the APIM management scope
 	Revision       string // e.g. "2" → optional
 	ProductID      string // e.g. "my-product" → optional
+}
+
+type APIMProductConfig struct {
+	SubscriptionID string // Azure subscription
+	ResourceGroup  string // Resource group where APIM lives
+	ServiceName    string // APIM instance name
+	ProductID      string // Unique product ID in APIM
+	DisplayName    string // UI display name
+	Description    string // Optional product description
+	BearerToken    string // Authorization token
+	Published      bool   // Whether product should be published
 }
