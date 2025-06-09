@@ -77,14 +77,17 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
-	revisionName := appName
 	var existingRevision apimv1.APIMAPIDeployment
-	err = r.Get(ctx, client.ObjectKey{Name: revisionName, Namespace: rs.Namespace}, &existingRevision)
+	err = r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existingRevision)
 	if err == nil {
-		logger.Info("✅ APIMAPIDeployment already exists", "name", revisionName)
-		return ctrl.Result{}, nil
-	}
-	if !apierrors.IsNotFound(err) {
+		logger.Info("♻️ APIMAPIDeployment already exists, recreating", "name", appName)
+		if err := r.Delete(ctx, &existingRevision); err != nil {
+			logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", appName)
+			return ctrl.Result{}, err
+		}
+		// Wait briefly to avoid race condition with deletion
+		time.Sleep(2 * time.Second)
+	} else if !apierrors.IsNotFound(err) {
 		logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name)
 		return ctrl.Result{}, err
 	}
@@ -140,7 +143,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	apiDeployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      revisionName,
+			Name:      appName,
 			Namespace: rs.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
