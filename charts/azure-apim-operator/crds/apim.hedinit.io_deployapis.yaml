@@ -47,7 +47,7 @@ spec:
                 description: Foo is an example field of DeployAPI. Edit deployapi_types.go
                   to remove/update
                 type: string
-              openAPIDefinitionURL:
+              openApiDefinitionUrl:
                 type: string
               resourceGroup:
                 type: string
@@ -61,7 +61,7 @@ spec:
             - APIID
             - apimService
             - host
-            - openAPIDefinitionURL
+            - openApiDefinitionUrl
             - resourceGroup
             - routePrefix
             - subscription

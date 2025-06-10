@@ -75,9 +75,9 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	// }
 
-	// openAPIDefinitionURL := annotations["apim.hedinit.io/swagger-path"]
-	// if openAPIDefinitionURL == "" {
-	// 	openAPIDefinitionURL = "/swagger.yaml"
+	// openApiDefinitionUrl := annotations["apim.hedinit.io/swagger-path"]
+	// if openApiDefinitionUrl == "" {
+	// 	openApiDefinitionUrl = "/swagger.yaml"
 	// }
 
 	// subscriptionID := annotations["apim.hedinit.io/subscriptionid"]
@@ -103,7 +103,7 @@ func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// 	Spec: apimv1.APIMAPISpec{
 	// 		Host:          host,
 	// 		RoutePrefix:   routePrefix,
-	// 		OpenAPIDefinitionURL:   openAPIDefinitionURL,
+	// 		OpenAPIDefinitionURL:   openApiDefinitionUrl,
 	// 		APIMService:   serviceName,
 	// 		Subscription:  subscriptionID,
 	// 		ResourceGroup: resourceGroup,

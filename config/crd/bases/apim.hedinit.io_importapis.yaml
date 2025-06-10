@@ -43,13 +43,13 @@ spec:
                 description: Foo is an example field of ImportAPI. Edit importapi_types.go
                   to remove/update
                 type: string
-              openAPIDefinitionURL:
+              openApiDefinitionUrl:
                 type: string
               routePrefix:
                 type: string
             required:
             - APIID
-            - openAPIDefinitionURL
+            - openApiDefinitionUrl
             - routePrefix
             type: object
           status:

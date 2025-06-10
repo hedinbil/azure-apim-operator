@@ -31,7 +31,7 @@ type ImportAPISpec struct {
 	// Foo is an example field of ImportAPI. Edit importapi_types.go to remove/update
 	APIID                string `json:"APIID"`
 	RoutePrefix          string `json:"routePrefix"`
-	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
+	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
 }
 
 // ImportAPIStatus defines the observed state of ImportAPI.

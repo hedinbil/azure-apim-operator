@@ -31,7 +31,7 @@ type DeployAPISpec struct {
 	// Foo is an example field of DeployAPI. Edit deployapi_types.go to remove/update
 	Host                 string `json:"host"`
 	RoutePrefix          string `json:"routePrefix"`
-	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
+	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
 	APIMService          string `json:"apimService"`
 	Subscription         string `json:"subscription"`
 	ResourceGroup        string `json:"resourceGroup"`

@@ -73,7 +73,7 @@ spec:
   APIID: example-api
   host: example.yourdomain.com
   routePrefix: /v1
-  openAPIDefinitionURL: /swagger/v1/swagger.json
+  openApiDefinitionUrl: /swagger/v1/swagger.json
   apimService: your-apim-instance
 ```
 
