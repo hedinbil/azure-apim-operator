@@ -17,7 +17,7 @@ env:
   ARM_SUBSCRIPTION_ID: ${{ vars.OPERATIONS_AKS_DEV_AZURE_SUBSCRIPTION_ID }}
   ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
   GIT_USER_EMAIL: github-actions@hedinit.com
-  GIT_USER_NAME: GitHub Actions - operations-aks
+  GIT_USER_NAME: GitHub Actions - aks-apim-operator
 
 jobs:
   build-and-push:
