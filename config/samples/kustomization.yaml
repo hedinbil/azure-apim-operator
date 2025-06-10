@@ -10,4 +10,5 @@ resources:
 - apim_v1_importapi.yaml
 - apim_v1_deployapi.yaml
 - apim_v1_apimproduct.yaml
+- apim_v1_apimtag.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

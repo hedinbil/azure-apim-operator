@@ -36,35 +36,35 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
-// APIMProductReconciler reconciles a APIMProduct object
-type APIMProductReconciler struct {
+// APIMTagReconciler reconciles a APIMTag object
+type APIMTagReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the APIMProduct object against the actual cluster state, and then
+// the APIMTag object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
-func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	var product apimv1.APIMProduct
-	if err := r.Get(ctx, req.NamespacedName, &product); err != nil {
+	var tag apimv1.APIMTag
+	if err := r.Get(ctx, req.NamespacedName, &tag); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("🧹 APIMProduct deleted, skipping", "name", req.NamespacedName)
+			logger.Info("🧹 APIMTag deleted, skipping", "name", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "❌ Failed to get APIMProduct")
+		logger.Error(err, "❌ Failed to get APIMTag")
 		return ctrl.Result{}, err
 	}
 
@@ -76,14 +76,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	operatorNamespace := strings.TrimSpace(string(nsBytes))
 
 	var apimService apimv1.APIMService
-	if err := r.Get(ctx, client.ObjectKey{Name: product.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", product.Spec.APIMService)
+	if err := r.Get(ctx, client.ObjectKey{Name: tag.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
+		logger.Error(err, "❌ Failed to get APIMService", "name", tag.Spec.APIMService)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	logger.Info("🔗 Found APIMService", "name", apimService.Name)
-
-	// 🔐 Fetch token from environment and identity helper
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
@@ -93,36 +90,33 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
-		product.Status.Phase = "Error"
-		product.Status.Message = "Failed to get Azure token"
-		_ = r.Status().Update(ctx, &product)
+		tag.Status.Phase = "Error"
+		tag.Status.Message = "Failed to get Azure token"
+		_ = r.Status().Update(ctx, &tag)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// 📦 Construct product config
-	cfg := apim.APIMProductConfig{
+	cfg := apim.APIMTagConfig{
 		SubscriptionID: apimService.Spec.Subscription,
 		ResourceGroup:  apimService.Spec.ResourceGroup,
-		ServiceName:    product.Spec.APIMService,
-		ProductID:      product.Spec.ProductID,
-		DisplayName:    product.Spec.DisplayName,
-		Description:    product.Spec.Description,
-		Published:      product.Spec.Published,
+		ServiceName:    tag.Spec.APIMService,
+		TagID:          tag.Spec.TagID,
+		DisplayName:    tag.Spec.DisplayName,
 		BearerToken:    token,
 	}
 
-	if err := apim.UpsertProduct(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
-		product.Status.Phase = "Error"
-		product.Status.Message = err.Error()
+	if err := apim.UpsertTag(ctx, cfg); err != nil {
+		logger.Error(err, "❌ Failed to upsert tag", "tagID", cfg.TagID)
+		tag.Status.Phase = "Error"
+		tag.Status.Message = err.Error()
 	} else {
-		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
-		product.Status.Phase = "Created"
-		product.Status.Message = "Product created successfully"
+		logger.Info("✅ Successfully upserted APIM tag", "tagID", cfg.TagID)
+		tag.Status.Phase = "Created"
+		tag.Status.Message = "Tag created or updated"
 	}
 
-	if err := r.Status().Update(ctx, &product); err != nil {
-		logger.Error(err, "❌ Failed to update APIMProduct status")
+	if err := r.Status().Update(ctx, &tag); err != nil {
+		logger.Error(err, "❌ Failed to update APIMTag status")
 		return ctrl.Result{}, err
 	}
 
@@ -130,15 +124,15 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *APIMProductReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *APIMTagReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&apimv1.APIMProduct{}).
+		For(&apimv1.APIMTag{}).
 		WithEventFilter(predicate.Funcs{
 			CreateFunc:  func(e event.CreateEvent) bool { return true },
 			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
 		}).
-		Named("apimproduct").
+		Named("apimtag").
 		Complete(r)
 }

@@ -288,7 +288,7 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 	return apiHost, developerPortalHost, nil
 }
 
-func CreateProductIfNotExists(ctx context.Context, config APIMProductConfig) error {
+func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 	if config.ProductID == "" {
 		logger.Info("ℹ️ No product ID specified; skipping product creation")
 		return nil
@@ -360,6 +360,63 @@ func CreateProductIfNotExists(ctx context.Context, config APIMProductConfig) err
 	return nil
 }
 
+func UpsertTag(ctx context.Context, config APIMTagConfig) error {
+	tagURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/tags/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.TagID,
+	)
+
+	tagBody := map[string]interface{}{
+		"properties": map[string]interface{}{
+			"displayName": config.DisplayName,
+		},
+	}
+
+	bodyBytes, err := json.Marshal(tagBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tag body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, tagURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to build tag request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", "*")
+
+	logger.Info("🏷️ Upserting tag",
+		"tagID", config.TagID,
+		"url", tagURL,
+	)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("tag request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to upsert tag",
+			"status", resp.Status,
+			"body", string(respBody),
+		)
+		return fmt.Errorf("failed to upsert tag: %s\n%s", resp.Status, string(respBody))
+	}
+
+	logger.Info("✅ Tag upserted",
+		"tagID", config.TagID,
+		"status", resp.Status,
+	)
+
+	return nil
+}
+
 type APIRevision struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -395,4 +452,13 @@ type APIMProductConfig struct {
 	Description    string // Optional product description
 	BearerToken    string // Authorization token
 	Published      bool   // Whether product should be published
+}
+
+type APIMTagConfig struct {
+	SubscriptionID string
+	ResourceGroup  string
+	ServiceName    string
+	BearerToken    string
+	TagID          string
+	DisplayName    string
 }

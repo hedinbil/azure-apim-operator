@@ -12,6 +12,7 @@ resources:
 - bases/apim.hedinit.io_importapis.yaml
 - bases/apim.hedinit.io_deployapis.yaml
 - bases/apim.hedinit.io_apimproducts.yaml
+- bases/apim.hedinit.io_apimtags.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

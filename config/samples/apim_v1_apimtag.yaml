@@ -1,0 +1,9 @@
+apiVersion: apim.hedinit.io/v1
+kind: APIMTag
+metadata:
+  labels:
+    app.kubernetes.io/name: azure-apim-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: apimtag-sample
+spec:
+  # TODO(user): Add fields here

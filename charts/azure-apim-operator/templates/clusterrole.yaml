@@ -66,5 +66,14 @@ rules:
   - apiGroups: ["apim.hedinit.io"]
     resources: ["apimproducts/finalizers"]
     verbs: ["update"]
+  - apiGroups: ["apim.hedinit.io"]
+    resources: ["apimtags"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apim.hedinit.io"]
+    resources: ["apimtags/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apim.hedinit.io"]
+    resources: ["apimtags/finalizers"]
+    verbs: ["update"]    
 
 

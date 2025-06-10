@@ -12,6 +12,7 @@ rules:
   - apimapis
   - apimproducts
   - apimservices
+  - apimtags
   - deployapis
   - importapis
   - ingresswatchers
@@ -33,6 +34,7 @@ rules:
   - apimapis/finalizers
   - apimproducts/finalizers
   - apimservices/finalizers
+  - apimtags/finalizers
   - deployapis/finalizers
   - importapis/finalizers
   - ingresswatchers/finalizers
@@ -48,6 +50,7 @@ rules:
   - apimapis/status
   - apimproducts/status
   - apimservices/status
+  - apimtags/status
   - deployapis/status
   - importapis/status
   - ingresswatchers/status
