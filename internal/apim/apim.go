@@ -136,7 +136,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	return nil
 }
 
-func AssignProductToAPI(ctx context.Context, config APIMDeploymentConfig) error {
+func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 	if len(config.ProductIDs) == 0 {
 		logger.Info("ℹ️ No products configured for assignment; skipping")
 		return nil
@@ -417,6 +417,59 @@ func UpsertTag(ctx context.Context, config APIMTagConfig) error {
 	return nil
 }
 
+func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
+	if len(config.TagIDs) == 0 {
+		logger.Info("ℹ️ No tags configured for assignment; skipping")
+		return nil
+	}
+
+	for _, tagID := range config.TagIDs {
+		tagAssignURL := fmt.Sprintf(
+			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/tags/%s?api-version=2021-08-01",
+			config.SubscriptionID,
+			config.ResourceGroup,
+			config.ServiceName,
+			config.APIID,
+			tagID,
+		)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, tagAssignURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build tag assign request for %s: %w", tagID, err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+		logger.Info("🔖 Assigning tag to API",
+			"apiID", config.APIID,
+			"tagID", tagID,
+			"url", tagAssignURL,
+		)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("tag assign request failed for %s: %w", tagID, err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 300 {
+			logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to assign tag to API",
+				"status", resp.Status,
+				"body", string(body),
+			)
+			return fmt.Errorf("assigning tag to API %s failed: %s\n%s", tagID, resp.Status, string(body))
+		}
+
+		logger.Info("✅ Tag successfully assigned to API",
+			"apiID", config.APIID,
+			"tagID", tagID,
+		)
+	}
+
+	return nil
+}
+
 type APIRevision struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -441,6 +494,7 @@ type APIMDeploymentConfig struct {
 	BearerToken    string   // AAD token for the APIM management scope
 	Revision       string   // e.g. "2" → optional
 	ProductIDs     []string // e.g. "my-product" → optional
+	TagIDs         []string // e.g. "my-tag" → optional
 }
 
 type APIMProductConfig struct {

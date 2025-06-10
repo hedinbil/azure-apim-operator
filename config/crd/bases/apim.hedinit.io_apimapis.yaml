@@ -53,6 +53,10 @@ spec:
                 type: string
               serviceUrl:
                 type: string
+              tagIds:
+                items:
+                  type: string
+                type: array
             required:
             - APIID
             - apimService

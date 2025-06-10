@@ -59,6 +59,10 @@ spec:
                 type: string
               subscription:
                 type: string
+              tagIds:
+                items:
+                  type: string
+                type: array
             required:
             - APIID
             - apimService

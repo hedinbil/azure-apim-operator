@@ -162,6 +162,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			ResourceGroup:        apimService.Spec.ResourceGroup,
 			APIID:                apimApi.Spec.APIID,
 			ProductIDs:           apimApi.Spec.ProductIDs,
+			TagIDs:               apimApi.Spec.TagIDs,
 		},
 	}
 

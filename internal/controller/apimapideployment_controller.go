@@ -112,6 +112,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Revision:       deployment.Spec.Revision,
 		BearerToken:    token,
 		ProductIDs:     deployment.Spec.ProductIDs,
+		TagIDs:         deployment.Spec.TagIDs,
 	}
 
 	// 4) Import the API
@@ -130,7 +131,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// 6) Assign the API to all configured Products (if any)
 	if len(config.ProductIDs) > 0 {
-		if err := apim.AssignProductToAPI(ctx, config); err != nil {
+		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to products", "productIDs", config.ProductIDs)
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
@@ -139,7 +140,18 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ No product IDs configured; skipping product assignment")
 	}
 
-	// 7) Fetch APIM host details and update status
+	// 7) Assign the API to all configured Tags (if any)
+	if len(config.TagIDs) > 0 {
+		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
+			logger.Error(err, "🚫 Failed to assign API to tags", "tagIDs", config.TagIDs)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
+		logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
+	} else {
+		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment")
+	}
+
+	// 8) Fetch APIM host details and update status
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
 		logger.Error(err, "⚠️ Failed to fetch APIM details")
@@ -156,7 +168,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// 8) Clean up the deployment CR
+	// 9) Clean up the deployment CR
 	if err := r.Delete(ctx, &deployment); err != nil {
 		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
 		return ctrl.Result{}, err
