@@ -9,7 +9,7 @@ type APIMAPISpec struct {
 	ServiceURL           string `json:"serviceUrl"`
 	RoutePrefix          string `json:"routePrefix"`
 	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
-	ProductID            string `json:"productID"`
+	ProductID            string `json:"productId"`
 	APIMService          string `json:"apimService"`
 	APIID                string `json:"APIID"`
 }

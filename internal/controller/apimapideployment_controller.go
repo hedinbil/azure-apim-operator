@@ -130,10 +130,10 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// 6) Assign the API to the Product if set
 	// if err := apim.AssignProductToAPI(ctx, config); err != nil {
-	// 	logger.Error(err, "🚫 Failed to assign API to product", "productID", config.ProductID)
+	// 	logger.Error(err, "🚫 Failed to assign API to product", "productId", config.ProductID)
 	// 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	// }
-	// logger.Info("✅ API assigned to product", "apiID", config.APIID, "productID", config.ProductID)
+	// logger.Info("✅ API assigned to product", "apiID", config.APIID, "productId", config.ProductID)
 
 	// 7) Fetch APIM host details and update status
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)

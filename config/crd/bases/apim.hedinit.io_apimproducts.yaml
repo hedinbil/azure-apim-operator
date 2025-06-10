@@ -45,7 +45,7 @@ spec:
                 type: string
               displayName:
                 type: string
-              productID:
+              productId:
                 type: string
               published:
                 type: boolean
@@ -53,7 +53,7 @@ spec:
                 type: string
             required:
             - displayName
-            - productID
+            - productId
             - apimService
             type: object
           status:

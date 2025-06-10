@@ -160,7 +160,7 @@ func AssignProductToAPI(ctx context.Context, config APIMDeploymentConfig) error 
 
 	logger.Info("📦 Assigning API to product",
 		"apiID", config.APIID,
-		"productID", config.ProductID,
+		"productId", config.ProductID,
 		"url", productAssignURL,
 	)
 
@@ -177,7 +177,7 @@ func AssignProductToAPI(ctx context.Context, config APIMDeploymentConfig) error 
 
 	logger.Info("✅ API successfully assigned to product",
 		"apiID", config.APIID,
-		"productID", config.ProductID,
+		"productId", config.ProductID,
 	)
 
 	return nil
@@ -331,7 +331,7 @@ func CreateProductIfNotExists(ctx context.Context, config APIMProductConfig) err
 	req.Header.Set("If-Match", "*")
 
 	logger.Info("📦 Creating or updating product",
-		"productID", config.ProductID,
+		"productId", config.ProductID,
 		"url", productURL,
 	)
 
@@ -351,7 +351,7 @@ func CreateProductIfNotExists(ctx context.Context, config APIMProductConfig) err
 	}
 
 	logger.Info("✅ Product created or already exists",
-		"productID", config.ProductID,
+		"productId", config.ProductID,
 		"status", resp.Status,
 	)
 

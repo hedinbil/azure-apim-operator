@@ -112,11 +112,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err := apim.CreateProductIfNotExists(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to create product in APIM", "productID", cfg.ProductID)
+		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
 		product.Status.Phase = "Error"
 		product.Status.Message = err.Error()
 	} else {
-		logger.Info("✅ Successfully created APIM product", "productID", cfg.ProductID)
+		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
 		product.Status.Phase = "Created"
 		product.Status.Message = "Product created successfully"
 	}

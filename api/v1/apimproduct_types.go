@@ -6,7 +6,7 @@ import (
 
 // APIMProductSpec defines the desired state
 type APIMProductSpec struct {
-	ProductID   string `json:"productID"`             // Required unique product ID in APIM
+	ProductID   string `json:"productId"`             // Required unique product ID in APIM
 	DisplayName string `json:"displayName"`           // Friendly display name
 	Description string `json:"description,omitempty"` // Optional description
 	Published   bool   `json:"published,omitempty"`   // Whether the product should be published

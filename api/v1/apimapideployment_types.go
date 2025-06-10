@@ -9,7 +9,7 @@ type APIMAPIDeploymentSpec struct {
 	ServiceURL           string `json:"serviceUrl"`
 	RoutePrefix          string `json:"routePrefix"`
 	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
-	ProductID            string `json:"productID"`
+	ProductID            string `json:"productId"`
 	APIMService          string `json:"apimService"`
 	Subscription         string `json:"subscription"`
 	ResourceGroup        string `json:"resourceGroup"`
