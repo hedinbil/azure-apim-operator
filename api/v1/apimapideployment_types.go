@@ -6,7 +6,7 @@ import (
 
 // APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
 type APIMAPIDeploymentSpec struct {
-	ServiceURL           string `json:"serviceURL"`
+	ServiceURL           string `json:"serviceUrl"`
 	RoutePrefix          string `json:"routePrefix"`
 	OpenAPIDefinitionURL string `json:"openAPIDefinitionURL"`
 	ProductID            string `json:"productID"`

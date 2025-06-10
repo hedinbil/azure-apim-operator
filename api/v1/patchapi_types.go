@@ -30,7 +30,7 @@ type PatchAPISpec struct {
 
 	// Foo is an example field of PatchAPI. Edit patchapi_types.go to remove/update
 	APIID      string `json:"APIID"`
-	ServiceURL string `json:"serviceURL"`
+	ServiceURL string `json:"serviceUrl"`
 }
 
 // PatchAPIStatus defines the observed state of PatchAPI.

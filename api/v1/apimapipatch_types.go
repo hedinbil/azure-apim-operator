@@ -30,7 +30,7 @@ type APIMAPIPatchSpec struct {
 
 	// Foo is an example field of APIMAPIPatch. Edit apimapipatch_types.go to remove/update
 	APIID      string `json:"APIID"`
-	ServiceURL string `json:"serviceURL"`
+	ServiceURL string `json:"serviceUrl"`
 }
 
 // APIMAPIPatchStatus defines the observed state of APIMAPIPatch.

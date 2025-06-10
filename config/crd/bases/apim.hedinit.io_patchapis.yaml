@@ -43,11 +43,11 @@ spec:
                 description: Foo is an example field of PatchAPI. Edit patchapi_types.go
                   to remove/update
                 type: string
-              serviceURL:
+              serviceUrl:
                 type: string
             required:
             - APIID
-            - serviceURL
+            - serviceUrl
             type: object
           status:
             description: PatchAPIStatus defines the observed state of PatchAPI.

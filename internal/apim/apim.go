@@ -99,7 +99,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 		"method", http.MethodPatch,
 		"url", patchURL,
 		"apiID", config.APIID,
-		"serviceURL", config.ServiceURL,
+		"serviceUrl", config.ServiceURL,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
@@ -130,7 +130,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	logger.Info("✅ Successfully patched serviceUrl",
 		"apiID", config.APIID,
 		"status", resp.Status,
-		"serviceURL", config.ServiceURL,
+		"serviceUrl", config.ServiceURL,
 	)
 
 	return nil

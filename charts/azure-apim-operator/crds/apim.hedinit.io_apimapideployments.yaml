@@ -53,7 +53,7 @@ spec:
                 type: string
               routePrefix:
                 type: string
-              serviceURL:
+              serviceUrl:
                 type: string
               subscription:
                 type: string
@@ -64,7 +64,7 @@ spec:
             - productID
             - resourceGroup
             - routePrefix
-            - serviceURL
+            - serviceUrl
             - subscription
             type: object
           status:

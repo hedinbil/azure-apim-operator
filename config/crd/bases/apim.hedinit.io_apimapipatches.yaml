@@ -43,11 +43,11 @@ spec:
                 description: Foo is an example field of APIMAPIPatch. Edit apimapipatch_types.go
                   to remove/update
                 type: string
-              serviceURL:
+              serviceUrl:
                 type: string
             required:
             - APIID
-            - serviceURL
+            - serviceUrl
             type: object
           status:
             description: APIMAPIPatchStatus defines the observed state of APIMAPIPatch.
