@@ -6,12 +6,12 @@ import (
 
 // APIMAPISpec defines the desired state of APIMAPI
 type APIMAPISpec struct {
-	ServiceURL           string `json:"serviceUrl"`
-	RoutePrefix          string `json:"routePrefix"`
-	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
-	ProductID            string `json:"productId"`
-	APIMService          string `json:"apimService"`
-	APIID                string `json:"APIID"`
+	ServiceURL           string   `json:"serviceUrl"`
+	RoutePrefix          string   `json:"routePrefix"`
+	OpenAPIDefinitionURL string   `json:"openApiDefinitionUrl"`
+	ProductIDs           []string `json:"productIds,omitempty"`
+	APIMService          string   `json:"apimService"`
+	APIID                string   `json:"APIID"`
 }
 
 type APIMAPIStatus struct {

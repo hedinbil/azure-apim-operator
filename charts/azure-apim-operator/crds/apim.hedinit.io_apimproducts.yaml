@@ -41,6 +41,8 @@ spec:
             properties:
               apiID:
                 type: string
+              apimService:
+                type: string
               description:
                 type: string
               displayName:
@@ -49,12 +51,10 @@ spec:
                 type: string
               published:
                 type: boolean
-              apimService:
-                type: string
             required:
+            - apimService
             - displayName
             - productId
-            - apimService
             type: object
           status:
             description: APIMProductStatus defines the observed state

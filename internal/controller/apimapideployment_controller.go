@@ -111,7 +111,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ServiceURL:     deployment.Spec.ServiceURL,
 		Revision:       deployment.Spec.Revision,
 		BearerToken:    token,
-		ProductID:      deployment.Spec.ProductID,
+		ProductIDs:     deployment.Spec.ProductIDs,
 	}
 
 	// 4) Import the API
@@ -128,12 +128,16 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
-	// 6) Assign the API to the Product if set
-	// if err := apim.AssignProductToAPI(ctx, config); err != nil {
-	// 	logger.Error(err, "🚫 Failed to assign API to product", "productId", config.ProductID)
-	// 	return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	// }
-	// logger.Info("✅ API assigned to product", "apiID", config.APIID, "productId", config.ProductID)
+	// 6) Assign the API to all configured Products (if any)
+	if len(config.ProductIDs) > 0 {
+		if err := apim.AssignProductToAPI(ctx, config); err != nil {
+			logger.Error(err, "🚫 Failed to assign API to products", "productIDs", config.ProductIDs)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
+		logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
+	} else {
+		logger.Info("ℹ️ No product IDs configured; skipping product assignment")
+	}
 
 	// 7) Fetch APIM host details and update status
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)

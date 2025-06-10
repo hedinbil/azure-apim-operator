@@ -137,48 +137,50 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 }
 
 func AssignProductToAPI(ctx context.Context, config APIMDeploymentConfig) error {
-	if config.ProductID == "" {
-		logger.Info("ℹ️ No product configured for assignment; skipping")
+	if len(config.ProductIDs) == 0 {
+		logger.Info("ℹ️ No products configured for assignment; skipping")
 		return nil
 	}
 
-	productAssignURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s/apis/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.ProductID,
-		config.APIID,
-	)
+	for _, productID := range config.ProductIDs {
+		productAssignURL := fmt.Sprintf(
+			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s/apis/%s?api-version=2021-08-01",
+			config.SubscriptionID,
+			config.ResourceGroup,
+			config.ServiceName,
+			productID,
+			config.APIID,
+		)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, productAssignURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to build product assign request: %w", err)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, productAssignURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build product assign request for %s: %w", productID, err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+		logger.Info("📦 Assigning API to product",
+			"apiID", config.APIID,
+			"productID", productID,
+			"url", productAssignURL,
+		)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("product assign request failed for %s: %w", productID, err)
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 300 {
+			return fmt.Errorf("assigning API to product %s failed: %s\n%s", productID, resp.Status, string(body))
+		}
+
+		logger.Info("✅ API successfully assigned to product",
+			"apiID", config.APIID,
+			"productID", productID,
+		)
 	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-
-	logger.Info("📦 Assigning API to product",
-		"apiID", config.APIID,
-		"productId", config.ProductID,
-		"url", productAssignURL,
-	)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("product assign request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("assigning API to product failed: %s\n%s", resp.Status, string(body))
-	}
-
-	logger.Info("✅ API successfully assigned to product",
-		"apiID", config.APIID,
-		"productId", config.ProductID,
-	)
 
 	return nil
 }
@@ -375,13 +377,13 @@ type APIMDeploymentConfig struct {
 	SubscriptionID string
 	ResourceGroup  string
 	ServiceName    string
-	APIID          string // unique identifier for the API in APIM
-	RoutePrefix    string // base route in APIM (e.g. /bidme)
-	Product        string // e.g. "my-product" → optional
-	ServiceURL     string // Backend URL (e.g. https://myapp.example.com)
-	BearerToken    string // AAD token for the APIM management scope
-	Revision       string // e.g. "2" → optional
-	ProductID      string // e.g. "my-product" → optional
+	APIID          string   // unique identifier for the API in APIM
+	RoutePrefix    string   // base route in APIM (e.g. /bidme)
+	Product        string   // e.g. "my-product" → optional
+	ServiceURL     string   // Backend URL (e.g. https://myapp.example.com)
+	BearerToken    string   // AAD token for the APIM management scope
+	Revision       string   // e.g. "2" → optional
+	ProductIDs     []string // e.g. "my-product" → optional
 }
 
 type APIMProductConfig struct {

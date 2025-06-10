@@ -6,15 +6,15 @@ import (
 
 // APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
 type APIMAPIDeploymentSpec struct {
-	ServiceURL           string `json:"serviceUrl"`
-	RoutePrefix          string `json:"routePrefix"`
-	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
-	ProductID            string `json:"productId"`
-	APIMService          string `json:"apimService"`
-	Subscription         string `json:"subscription"`
-	ResourceGroup        string `json:"resourceGroup"`
-	APIID                string `json:"APIID"`
-	Revision             string `json:"revision,omitempty"`
+	ServiceURL           string   `json:"serviceUrl"`
+	RoutePrefix          string   `json:"routePrefix"`
+	OpenAPIDefinitionURL string   `json:"openApiDefinitionUrl"`
+	ProductIDs           []string `json:"productIds,omitempty"`
+	APIMService          string   `json:"apimService"`
+	Subscription         string   `json:"subscription"`
+	ResourceGroup        string   `json:"resourceGroup"`
+	APIID                string   `json:"APIID"`
+	Revision             string   `json:"revision,omitempty"`
 }
 
 type APIMAPIDeploymentStatus struct {
