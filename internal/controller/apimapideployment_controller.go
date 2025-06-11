@@ -76,17 +76,23 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 1) Fetch the OpenAPI definition
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
 	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", deployment.Spec.APIID)
-	resp, err := http.Get(openApiURL)
-	if err != nil {
-		logger.Error(err, "❌ Failed to fetch OpenAPI definition")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-	defer resp.Body.Close()
+	// resp, err := http.Get(openApiURL)
+	// if err != nil {
+	// 	logger.Error(err, "❌ Failed to fetch OpenAPI definition")
+	// 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	// }
+	// defer resp.Body.Close()
 
-	openApiContent, err := io.ReadAll(resp.Body)
+	// openApiContent, err := io.ReadAll(resp.Body)
+	// if err != nil {
+	// 	logger.Error(err, "❌ Failed to read OpenAPI definition body")
+	// 	return ctrl.Result{}, err
+	// }
+
+	openApiContent, err := fetchOpenAPIDefinitionWithRetry(openApiURL, 5)
 	if err != nil {
-		logger.Error(err, "❌ Failed to read OpenAPI definition body")
-		return ctrl.Result{}, err
+		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries")
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
 	// 2) Acquire an Azure management token
@@ -159,7 +165,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	apimApi.Status.Status = resp.Status
+	apimApi.Status.Status = "OK"
 	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
@@ -198,4 +204,28 @@ func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Named("apimapideployment").
 		Complete(r)
+}
+
+func fetchOpenAPIDefinitionWithRetry(url string, maxRetries int) ([]byte, error) {
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err := http.Get(url)
+		if err != nil {
+			lastErr = fmt.Errorf("GET error: %w", err)
+		} else {
+			defer resp.Body.Close()
+
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return io.ReadAll(resp.Body)
+			}
+
+			body, _ := io.ReadAll(resp.Body)
+			lastErr = fmt.Errorf("unexpected status: %s\nbody: %s", resp.Status, string(body))
+		}
+
+		time.Sleep(time.Duration(2<<i) * time.Second) // 2s, 4s, 8s, 16s, 32s
+	}
+
+	return nil, fmt.Errorf("openapi fetch failed after %d attempts: %w", maxRetries, lastErr)
 }
