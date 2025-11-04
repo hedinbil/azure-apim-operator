@@ -83,5 +83,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Image digest
-        run: echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
+        run: |
+          echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
 
