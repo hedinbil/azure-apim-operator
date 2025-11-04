@@ -21,6 +21,12 @@ on:
         required: true
         default: '0.16.0'
 
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+  packages: write
+
 env:
   ARM_CLIENT_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_SUBSCRIPTION_ID }}
@@ -36,9 +42,6 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - name: Checkout code

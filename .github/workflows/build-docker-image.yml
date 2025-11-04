@@ -16,6 +16,12 @@ on:
         required: true
         default: 'v0.16.0'
 
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+  packages: write
+
 env:
   ARM_CLIENT_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_SUBSCRIPTION_ID }}
@@ -24,14 +30,11 @@ env:
   ACR_REGISTRY: hedinit.azurecr.io
   IMAGE_NAME: azure-apim-operator  
   GIT_USER_EMAIL: github-actions@hedinit.com
-  GIT_USER_NAME: GitHub Actions - image
+  GIT_USER_NAME: GitHub Actions - docker-image
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - name: Checkout code
