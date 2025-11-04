@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - master
     tags:
       - 'v*'
     paths:
@@ -13,7 +12,6 @@ on:
   pull_request:
     branches:
       - main
-      - master
     paths:
       - 'charts/**'
   workflow_dispatch:
@@ -32,6 +30,8 @@ env:
   CHART_NAME: azure-apim-operator
   CHART_DIR: charts/azure-apim-operator
   OCI_REPO: oci://hedinit.azurecr.io/helm-charts
+  GIT_USER_EMAIL: github-actions@hedinit.com
+  GIT_USER_NAME: GitHub Actions - helm-chart
 
 jobs:
   build-and-push:
@@ -43,6 +43,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Git config user.email
+        run: git config --global user.email "${{ env.GIT_USER_EMAIL }}"
+      - name: Git config user.name
+        run: git config --global user.name "${{ env.GIT_USER_NAME }}"        
 
       - name: Set up Helm
         uses: azure/setup-helm@v3
