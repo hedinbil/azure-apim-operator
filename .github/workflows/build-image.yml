@@ -1,0 +1,87 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version (e.g., v0.16.0)'
+        required: true
+        default: 'v0.16.0'
+
+env:
+  ARM_CLIENT_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_TENANT_ID }}
+  ACR_NAME: hedinit
+  ACR_REGISTRY: hedinit.azurecr.io
+  IMAGE_NAME: azure-apim-operator
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login via Azure CLI
+        uses: Azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          subscription-id: 9b422127-1aca-42e3-951a-185e4385edd3
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Determine image version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            # Use git commit SHA for non-tag pushes
+            VERSION="v0.16.0-${GITHUB_SHA::8}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "🔖 Image version: ${VERSION}"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
+
