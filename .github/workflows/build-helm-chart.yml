@@ -101,6 +101,7 @@ jobs:
       - name: Push Helm chart to OCI registry
         if: github.event_name != 'pull_request'
         run: |
+          cd charts
           helm push ${{ env.CHART_NAME }}-${{ steps.version.outputs.version }}.tgz ${{ env.OCI_REPO }}
           echo "✅ Chart pushed to ${{ env.OCI_REPO }}/${{ env.CHART_NAME }}:${{ steps.version.outputs.version }}"
 
