@@ -1,0 +1,352 @@
+name: "Agent Renova 🧹 - Recurring Automation"
+
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup_type:
+        description: 'Type of cleanup to perform'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - 'workflow-runs'
+          - 'artifacts'
+          - 'branches'
+  schedule:
+    # Run every two hours
+    - cron: '0 */2 * * *'
+
+permissions:
+  contents: write
+  actions: write
+  id-token: write
+  pull-requests: read
+  issues: read
+
+jobs:
+  cleanup-workflow-runs:
+    name: "Cleanup Old Workflow Runs"
+    runs-on: ubuntu-latest
+    if: github.event.inputs.cleanup_type == 'workflow-runs' || github.event.inputs.cleanup_type == 'all' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete old workflow runs (repo-wide, includes orphaned)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const perPage = 100
+            const cutoffDays = 7   // håll detta i synk med beskrivningen
+            const cutoff = new Date(Date.now() - cutoffDays*24*60*60*1000)
+
+            let page = 1
+            let totalDeleted = 0
+            let totalSeen = 0
+
+            // Viktigt: lista runs för HELA repot, inte per workflow_id
+            while (true) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: perPage,
+                page
+              })
+
+              const runs = data.workflow_runs || []
+              if (runs.length === 0) break
+
+              for (const run of runs) {
+                totalSeen++
+                const runDate = new Date(run.created_at)
+
+                // Skippa pågående körningar
+                if (['in_progress','queued','waiting','requested'].includes(run.status)) continue
+
+                if (runDate < cutoff) {
+                  try {
+                    core.info(`Deleting run ${run.id} (${run.name}) created ${run.created_at}`)
+                    await github.rest.actions.deleteWorkflowRun({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      run_id: run.id
+                    })
+                    totalDeleted++
+                  } catch (err) {
+                    core.warning(`Failed to delete run ${run.id}: ${err.message}`)
+                  }
+                }
+              }
+
+              if (runs.length < perPage) break
+              page++
+            }
+
+            core.info(`Seen runs: ${totalSeen}, deleted: ${totalDeleted}, cutoff: ${cutoffDays} days`)
+
+  cleanup-artifacts:
+    name: "Cleanup Old Artifacts"
+    runs-on: ubuntu-latest
+    if: github.event.inputs.cleanup_type == 'artifacts' || github.event.inputs.cleanup_type == 'all' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete artifacts older than 7 days (paginated)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const perPage = 100
+            const cutoffDays = 7
+            const cutoff = new Date(Date.now() - cutoffDays*24*60*60*1000)
+
+            let page = 1
+            let totalDeleted = 0
+            let totalSeen = 0
+
+            while (true) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: perPage,
+                page
+              })
+
+              const artifacts = data.artifacts || []
+              if (artifacts.length === 0) break
+
+              for (const a of artifacts) {
+                totalSeen++
+                const created = new Date(a.created_at)
+                if (created < cutoff) {
+                  try {
+                    core.info(`Deleting artifact ${a.name} (${a.id}) created ${a.created_at}`)
+                    await github.rest.actions.deleteArtifact({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      artifact_id: a.id
+                    })
+                    totalDeleted++
+                  } catch (err) {
+                    core.warning(`Failed to delete artifact ${a.name}: ${err.message}`)
+                  }
+                }
+              }
+
+              if (artifacts.length < perPage) break
+              page++
+            }
+
+            core.info(`Seen artifacts: ${totalSeen}, deleted: ${totalDeleted}, cutoff: ${cutoffDays} days`)
+
+  cleanup-branches:
+    name: "Cleanup Stale Branches"
+    runs-on: ubuntu-latest
+    if: github.event.inputs.cleanup_type == 'branches' || github.event.inputs.cleanup_type == 'all' || github.event_name == 'schedule'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup GitHub CLI
+        run: |
+          # Install GitHub CLI if not available
+          if ! command -v gh &> /dev/null; then
+            echo "Installing GitHub CLI..."
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+          fi
+          
+          # Install jq explicitly
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+          
+          # Verify installation
+          gh --version
+          jq --version
+
+      - name: Cleanup stale branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e  # Exit on any error
+          
+          echo "=== Starting branch cleanup process ==="
+          
+          # Verify tools are available
+          echo "Verifying tools..."
+          gh --version
+          jq --version
+          
+          echo "=== Fetching all branches using proven pagination method ==="
+          
+          # Use the EXACT same approach as asd.sh script that works
+          # Build base endpoint and query params (identical to asd.sh)
+          ENDPOINT="/repos/${{ github.repository }}/branches"
+          QUERY="per_page=100"
+          
+          # Fetch with pagination using the exact same method as asd.sh
+          # This uses --paginate which follows Link headers across pages
+          echo "Fetching all branches with pagination..."
+          all_branches=$(gh api -H "Accept: application/vnd.github+json" "${ENDPOINT}?${QUERY}" --paginate | jq -s 'add' 2>/dev/null || echo "[]")
+          
+          # Verify we got valid JSON response
+          if ! echo "$all_branches" | jq -e . >/dev/null 2>&1; then
+            echo "ERROR: Failed to get valid JSON response from GitHub API"
+            echo "Response received:"
+            echo "$all_branches" | head -20
+            exit 1
+          fi
+          
+          # Get total branch count for verification
+          total_branches=$(echo "$all_branches" | jq 'length')
+          echo "Total branches fetched from API: $total_branches"
+          
+          # Debug: Check the structure of the first few branches to understand the JSON format
+          echo "=== Debug: Checking JSON structure ==="
+          echo "$all_branches" | jq -r '.[0:3] | .[] | "Branch: \(.name) | Commit SHA: \(.commit.sha) | Author Date: \(.commit.commit.author.date // "null") | Committer Date: \(.commit.commit.committer.date // "null")"'
+          echo "=== End Debug ==="
+          
+          # Extract branch names and commit SHAs, excluding main/master
+          echo "Processing branch data..."
+          # First, get branch names and their commit SHAs
+          echo "$all_branches" | jq -r '.[] | select(.name != "main" and .name != "master") | "\(.name)|\(.commit.sha)"' > /tmp/branches_to_check.txt
+          
+          # Count non-main branches
+          non_main_count=$(wc -l < /tmp/branches_to_check.txt 2>/dev/null || echo "0")
+          echo "Non-main/master branches found: $non_main_count"
+          
+          if [ "$non_main_count" -eq 0 ]; then
+            echo "No branches to check for cleanup"
+            rm -f /tmp/branches_to_check.txt
+            echo "=== Branch cleanup process completed ==="
+            exit 0
+          fi
+          
+          # Check each branch for last activity
+          echo "=== Checking branch activity ==="
+          stale_branches=0
+          deleted_branches=0
+          
+          while IFS='|' read -r branch commit_sha; do
+            # Skip empty lines
+            if [[ -z "$branch" ]]; then
+              continue
+            fi
+            
+            echo "Checking branch: $branch (SHA: $commit_sha)"
+            
+            # Fetch commit details for this specific commit SHA
+            commit_details=$(gh api repos/${{ github.repository }}/commits/$commit_sha 2>/dev/null || echo "{}")
+            
+            # Extract commit date from the detailed commit info
+            commit_date=$(echo "$commit_details" | jq -r '.commit.author.date // .commit.committer.date // "null"')
+            
+            # Check if we got a valid date
+            if [[ -n "$commit_date" && "$commit_date" != "null" ]]; then
+              echo "Last commit on $branch: $commit_date"
+              
+              # Convert to timestamp for comparison (30 days ago)
+              branch_timestamp=$(date -d "$commit_date" +%s 2>/dev/null || echo "0")
+              thirty_days_ago=$(date -d "30 days ago" +%s)
+              
+              if [ "$branch_timestamp" -gt 0 ] && [ "$branch_timestamp" -lt "$thirty_days_ago" ]; then
+                echo "Branch $branch is older than 30 days, checking for open PRs..."
+                stale_branches=$((stale_branches + 1))
+                
+                # Get owner/repo parts for GraphQL query
+                OWNER="${GITHUB_REPOSITORY%/*}"
+                REPO="${GITHUB_REPOSITORY#*/}"
+                
+                # Ask GraphQL for open PRs whose head ref name equals the branch
+                pr_graphql=$(
+                  gh api graphql -f query='
+                    query($owner:String!, $repo:String!, $branch:String!) {
+                      repository(owner:$owner, name:$repo) {
+                        pullRequests(states:OPEN, headRefName:$branch, first:50, orderBy:{field:UPDATED_AT, direction:DESC}) {
+                          totalCount
+                          nodes {
+                            number
+                            title
+                            url
+                            isDraft
+                            baseRefName
+                            updatedAt
+                          }
+                        }
+                      }
+                    }' \
+                    -F owner="$OWNER" -F repo="$REPO" -F branch="$branch" 2>/dev/null || echo '__ERROR__'
+                )
+                
+                if [ "$pr_graphql" = "__ERROR__" ]; then
+                  echo "PR lookup failed (permissions/network). Treating as 0 open PRs for safety."
+                  pr_count=0
+                else
+                  # Ensure it's valid JSON; if not, treat as 0
+                  if ! echo "$pr_graphql" | jq -e . >/dev/null 2>&1; then
+                    echo "PR lookup returned non-JSON. Treating as 0 open PRs."
+                    pr_count=0
+                  else
+                    pr_count=$(echo "$pr_graphql" | jq -r '.data.repository.pullRequests.totalCount // 0')
+                  fi
+                fi
+                
+                if [ "$pr_count" -eq 0 ]; then
+                  echo "No open PRs for $branch, safe to delete"
+                  gh api repos/${{ github.repository }}/git/refs/heads/$branch -X DELETE
+                  echo "Branch: $branch deleted"
+                  deleted_branches=$((deleted_branches + 1))
+                else
+                  echo "Branch $branch has $pr_count open PR(s), skipping deletion"
+                  echo "$pr_graphql" | jq -r '.data.repository.pullRequests.nodes[] |
+                      ["PR #"+(.number|tostring), .title, .url, "draft="+( .isDraft|tostring ), "base="+.baseRefName, "updated="+.updatedAt] | @tsv' \
+                    | column -t -s $'\t'
+                fi
+              else
+                echo "Branch $branch is recent, keeping"
+              fi
+            else
+              echo "Could not get commit info for branch $branch, skipping..."
+              # Debug: Let's see what we actually got for this commit
+              echo "Debug: Commit details for $branch (SHA: $commit_sha):"
+              echo "$commit_details" | jq -r '.commit.author.date // .commit.committer.date // "No date found"'
+            fi
+          done < /tmp/branches_to_check.txt
+          
+          # Clean up temporary file
+          rm -f /tmp/branches_to_check.txt
+          
+          echo ""
+          echo "=== Summary ==="
+          echo "Total branches in repository: $total_branches"
+          echo "Non-main/master branches checked: $non_main_count"
+          echo "Stale branches found: $stale_branches"
+          echo "Branches that would be deleted: $deleted_branches"
+          echo "=== Branch cleanup process completed ==="
+
+  cleanup-summary:
+    name: "Cleanup Summary"
+    runs-on: ubuntu-latest
+    needs: [cleanup-workflow-runs, cleanup-artifacts, cleanup-branches]
+    if: always()
+    steps:
+      - name: Generate cleanup summary
+        run: |
+          echo "🧹 Repository Cleanup Summary"
+          echo "=============================="
+          echo "Repository: ${{ github.repository }}"
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "Triggered by user: ${{ github.actor }}"
+          echo "Cleanup type: ${{ github.event.inputs.cleanup_type || 'scheduled' }}"
+          echo ""
+          echo "Cleanup jobs completed:"
+          echo "- Workflow runs cleanup: ${{ needs.cleanup-workflow-runs.result }}"
+          echo "- Artifacts cleanup: ${{ needs.cleanup-artifacts.result }}"
+          echo "- Branches cleanup: ${{ needs.cleanup-branches.result }}"
+          echo ""
+          echo "✅ Repository cleanup completed successfully!"
