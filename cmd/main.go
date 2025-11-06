@@ -227,15 +227,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register the IngressWatcher controller to watch Kubernetes Ingress resources
-	// and create APIMAPI resources when appropriate annotations are present.
-	if err = (&controller.IngressWatcherReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "IngressWatcher")
-		os.Exit(1)
-	}
 	// Register the APIMAPI controller to manage APIMAPI custom resources.
 	// This controller updates annotations with API host information for ArgoCD integration.
 	if err = (&controller.APIMAPIReconciler{
@@ -270,38 +261,6 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMService")
-		os.Exit(1)
-	}
-	// Register the APIMAPIPatch controller to handle patching of existing APIs in APIM.
-	if err = (&controller.APIMAPIPatchReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "APIMAPIPatch")
-		os.Exit(1)
-	}
-	// Register the PatchAPI controller to update service URLs for existing APIs in APIM.
-	if err = (&controller.PatchAPIReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "PatchAPI")
-		os.Exit(1)
-	}
-	// Register the ImportAPI controller to import OpenAPI definitions into APIM.
-	if err = (&controller.ImportAPIReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ImportAPI")
-		os.Exit(1)
-	}
-	// Register the DeployAPI controller to orchestrate API deployment workflows.
-	if err = (&controller.DeployAPIReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DeployAPI")
 		os.Exit(1)
 	}
 	// Register the APIMProduct controller to manage products in Azure APIM.

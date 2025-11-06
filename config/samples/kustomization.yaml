@@ -1,14 +1,8 @@
 ## Append samples of your project ##
 resources:
-- net_v1_ingresswatcher.yaml
 - apim_v1_apimapi.yaml
 - apim_v1_apimapideployment.yaml
 - apim_v1_apimservice.yaml
-- apim_v1_apimapipatch.yaml
-- apim_v1_import.yaml
-- apim_v1_patchapi.yaml
-- apim_v1_importapi.yaml
-- apim_v1_deployapi.yaml
 - apim_v1_apimproduct.yaml
 - apim_v1_apimtag.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,9 +1,0 @@
-apiVersion: apim.hedinit.io/v1
-kind: DeployAPI
-metadata:
-  labels:
-    app.kubernetes.io/name: azure-apim-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: deployapi-sample
-spec:
-  # TODO(user): Add fields here
