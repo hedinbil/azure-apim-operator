@@ -36,15 +36,18 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
-// APIMTagReconciler reconciles a APIMTag object
+// APIMTagReconciler reconciles APIMTag custom resources.
+// This controller manages tags in Azure API Management, which are used to categorize
+// and organize APIs for easier management and discovery. Tags help group related
+// APIs together without requiring subscriptions like products do.
 type APIMTagReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimtags/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

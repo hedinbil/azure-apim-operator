@@ -20,8 +20,8 @@ type APIMProductStatus struct {
 	Message string `json:"message,omitempty"` // Status message or error description
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // APIMProduct is the Schema for the apimproducts API
 type APIMProduct struct {
@@ -32,7 +32,7 @@ type APIMProduct struct {
 	Status APIMProductStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // APIMProductList contains a list of APIMProduct
 type APIMProductList struct {

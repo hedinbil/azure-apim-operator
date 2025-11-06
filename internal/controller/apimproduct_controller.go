@@ -36,20 +36,24 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
+// Phase constants for APIMProduct status tracking.
 const (
-	phaseError   = "Error"
-	phaseCreated = "Created"
+	phaseError   = "Error"   // Indicates an error occurred during product creation/update.
+	phaseCreated = "Created" // Indicates the product was successfully created or updated.
 )
 
-// APIMProductReconciler reconciles a APIMProduct object
+// APIMProductReconciler reconciles APIMProduct custom resources.
+// This controller manages products in Azure API Management, which are used to group
+// APIs and require subscriptions for access. Products can be published or unpublished
+// to control visibility in the developer portal.
 type APIMProductReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimproducts/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

@@ -24,19 +24,25 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // DeployAPISpec defines the desired state of DeployAPI.
+// This spec orchestrates the deployment of an API to Azure APIM by creating
+// an ImportAPI resource that will handle the actual import process.
 type DeployAPISpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of DeployAPI. Edit deployapi_types.go to remove/update
-	Host                 string `json:"host"`
-	RoutePrefix          string `json:"routePrefix"`
+	// Host is the hostname where the backend service is accessible.
+	Host string `json:"host"`
+	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
+	RoutePrefix string `json:"routePrefix"`
+	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
 	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
-	APIMService          string `json:"apimService"`
-	Subscription         string `json:"subscription"`
-	ResourceGroup        string `json:"resourceGroup"`
-	APIID                string `json:"APIID"`
-	Revision             string `json:"revision,omitempty"`
+	// APIMService is the name of the APIMService custom resource.
+	APIMService string `json:"apimService"`
+	// Subscription is the Azure subscription ID where the APIM service is deployed.
+	Subscription string `json:"subscription"`
+	// ResourceGroup is the Azure resource group where the APIM service is located.
+	ResourceGroup string `json:"resourceGroup"`
+	// APIID is the unique identifier for the API in Azure APIM.
+	APIID string `json:"APIID"`
+	// Revision is an optional API revision number. If specified, a new revision will be created.
+	Revision string `json:"revision,omitempty"`
 }
 
 // DeployAPIStatus defines the observed state of DeployAPI.
@@ -45,8 +51,8 @@ type DeployAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // DeployAPI is the Schema for the deployapis API.
 type DeployAPI struct {
@@ -57,7 +63,7 @@ type DeployAPI struct {
 	Status DeployAPIStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // DeployAPIList contains a list of DeployAPI.
 type DeployAPIList struct {

@@ -27,15 +27,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
-// APIMAPIReconciler reconciles a APIMAPI object
+// APIMAPIReconciler reconciles APIMAPI custom resources.
+// This controller manages the lifecycle of APIs in Azure API Management by updating
+// annotations with API host information for integration with tools like ArgoCD.
+// It only processes update events, not create or delete events.
 type APIMAPIReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/finalizers,verbs=update
 
 func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	//logger := log.FromContext(ctx)
@@ -51,11 +54,14 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name)
 
+	// Initialize annotations map if it doesn't exist.
 	if apimApi.Annotations == nil {
 		apimApi.Annotations = map[string]string{}
 		logger.Info("ℹ️ Annotations were nil, initializing map")
 	}
 
+	// Update the ArgoCD external link annotation with the API host URL.
+	// This allows ArgoCD to display a link to the API in its UI.
 	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
 
 	if err := r.Update(ctx, &apimApi); err != nil {

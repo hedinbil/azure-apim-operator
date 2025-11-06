@@ -31,11 +31,11 @@ type IngressWatcherReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=ingresswatchers/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
 func (r *IngressWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// var logger = ctrl.Log.WithName("ingresswatcher_controller")

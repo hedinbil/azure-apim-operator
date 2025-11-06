@@ -1,3 +1,6 @@
+// Package apim provides functions for interacting with Azure API Management (APIM) REST API.
+// These functions handle importing APIs, updating service URLs, assigning products and tags,
+// and retrieving API and service information from Azure APIM.
 package apim
 
 import (
@@ -12,14 +15,21 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+// logger is the logger instance for APIM operations.
 var logger = ctrl.Log.WithName("apim")
 
+// ImportOpenAPIDefinitionToAPIM imports an OpenAPI/Swagger definition into Azure API Management.
+// It creates or updates an API in APIM with the provided OpenAPI content, route prefix, and optional revision.
+// The function uses the Azure Management API to perform the import operation.
 func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
+	// Construct the API ID, including revision if specified.
+	// APIM uses the format "apiId;rev=revisionNumber" for revisions.
 	apiID := apimParams.APIID
 	if apimParams.Revision != "" {
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
 	}
 
+	// Build the Azure Management API URL for importing the API.
 	importURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
 		apimParams.SubscriptionID,
@@ -87,6 +97,8 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 	return nil
 }
 
+// AssignServiceUrlToApi updates the backend service URL for an existing API in Azure APIM.
+// This is used to point an API to a different backend service without re-importing the OpenAPI definition.
 func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) error {
 	patchURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
@@ -144,12 +156,17 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	return nil
 }
 
+// AssignProductsToAPI associates an API with one or more products in Azure APIM.
+// Products are used to group APIs and require subscriptions for access.
+// This function assigns the API to all products specified in the config.
 func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
+	// If no products are configured, skip the assignment.
 	if len(config.ProductIDs) == 0 {
 		logger.Info("ℹ️ No products configured for assignment; skipping")
 		return nil
 	}
 
+	// Assign the API to each product in the list.
 	for _, productID := range config.ProductIDs {
 		productAssignURL := fmt.Sprintf(
 			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s/apis/%s?api-version=2021-08-01",
@@ -197,6 +214,8 @@ func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error
 	return nil
 }
 
+// GetAPIRevisions retrieves all revisions for an API from Azure APIM.
+// API revisions allow you to version APIs and test changes before making them current.
 func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRevision, error) {
 	url := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/revisions?api-version=2021-08-01",
@@ -250,6 +269,9 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 	return result.Value, nil
 }
 
+// GetAPIMServiceDetails retrieves hostname information for an Azure APIM service instance.
+// It returns the API gateway hostname (Proxy) and the developer portal hostname.
+// This information is used to construct full URLs for accessing APIs through APIM.
 func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (apiHost, developerPortalHost string, err error) {
 	url := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s?api-version=2021-08-01",
@@ -288,11 +310,15 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 		return "", "", fmt.Errorf("failed to parse service response: %w", err)
 	}
 
+	// Extract hostnames from the service configuration.
+	// APIM services can have multiple hostname configurations for different purposes.
 	for _, cfg := range serviceInfo.Properties.HostnameConfigurations {
 		switch cfg.Type {
 		case "Proxy":
+			// Proxy hostname is used for API gateway access.
 			apiHost = cfg.HostName
 		case "DeveloperPortal":
+			// Developer portal hostname is used for the developer portal UI.
 			developerPortalHost = cfg.HostName
 		}
 	}
@@ -300,7 +326,11 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 	return apiHost, developerPortalHost, nil
 }
 
+// UpsertProduct creates or updates a product in Azure APIM.
+// Products are used to group APIs and require subscriptions for access.
+// If the product already exists, it will be updated with the new configuration.
 func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
+	// Skip if no product ID is provided.
 	if config.ProductID == "" {
 		logger.Info("ℹ️ No product ID specified; skipping product creation")
 		return nil
@@ -314,6 +344,8 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 		config.ProductID,
 	)
 
+	// Determine the product state based on the Published flag.
+	// Published products are visible in the developer portal and can be subscribed to.
 	state := "notPublished"
 	if config.Published {
 		state = "published"
@@ -372,6 +404,9 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 	return nil
 }
 
+// UpsertTag creates or updates a tag in Azure APIM.
+// Tags are used to categorize and organize APIs for easier management and discovery.
+// If the tag already exists, it will be updated with the new display name.
 func UpsertTag(ctx context.Context, config APIMTagConfig) error {
 	tagURL := fmt.Sprintf(
 		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/tags/%s?api-version=2021-08-01",
@@ -429,12 +464,17 @@ func UpsertTag(ctx context.Context, config APIMTagConfig) error {
 	return nil
 }
 
+// AssignTagsToAPI applies one or more tags to an API in Azure APIM.
+// Tags help organize and categorize APIs for better management and discovery.
+// This function assigns all tags specified in the config to the API.
 func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
+	// If no tags are configured, skip the assignment.
 	if len(config.TagIDs) == 0 {
 		logger.Info("ℹ️ No tags configured for assignment; skipping")
 		return nil
 	}
 
+	// Assign each tag to the API.
 	for _, tagID := range config.TagIDs {
 		tagAssignURL := fmt.Sprintf(
 			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/tags/%s?api-version=2021-08-01",
@@ -482,49 +522,87 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 	return nil
 }
 
+// APIRevision represents a single API revision in Azure APIM.
+// Revisions allow versioning of APIs and testing changes before making them current.
 type APIRevision struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Properties struct {
+		// ApiRevision is the revision number (e.g., "1", "2").
 		ApiRevision string `json:"apiRevision"`
-		IsCurrent   bool   `json:"isCurrent"`
+		// IsCurrent indicates whether this revision is the current active revision.
+		IsCurrent bool `json:"isCurrent"`
 	} `json:"properties"`
 }
 
+// APIRevisionListResponse is the response structure from the Azure Management API
+// when querying for API revisions.
 type APIRevisionListResponse struct {
+	// Value contains the list of API revisions.
 	Value []APIRevision `json:"value"`
 }
 
+// APIMDeploymentConfig contains all the configuration needed to deploy an API to Azure APIM.
+// This includes Azure subscription information, API details, and optional associations.
 type APIMDeploymentConfig struct {
+	// SubscriptionID is the Azure subscription ID where the APIM service is located.
 	SubscriptionID string
-	ResourceGroup  string
-	ServiceName    string
-	APIID          string   // unique identifier for the API in APIM
-	RoutePrefix    string   // base route in APIM (e.g. /bidme)
-	Product        string   // e.g. "my-product" → optional
-	ServiceURL     string   // Backend URL (e.g. https://myapp.example.com)
-	BearerToken    string   // AAD token for the APIM management scope
-	Revision       string   // e.g. "2" → optional
-	ProductIDs     []string // e.g. "my-product" → optional
-	TagIDs         []string // e.g. "my-tag" → optional
+	// ResourceGroup is the Azure resource group where the APIM service is located.
+	ResourceGroup string
+	// ServiceName is the name of the Azure API Management service instance.
+	ServiceName string
+	// APIID is the unique identifier for the API in APIM.
+	APIID string
+	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
+	RoutePrefix string
+	// Product is a legacy field for a single product association (deprecated, use ProductIDs).
+	Product string
+	// ServiceURL is the backend service URL that APIM will proxy requests to.
+	ServiceURL string
+	// BearerToken is the Azure AD authentication token for the APIM management API.
+	BearerToken string
+	// Revision is an optional API revision number (e.g., "2"). If specified, a new revision will be created.
+	Revision string
+	// ProductIDs is a list of product IDs to associate this API with in APIM.
+	ProductIDs []string
+	// TagIDs is a list of tag IDs to apply to this API in APIM.
+	TagIDs []string
 }
 
+// APIMProductConfig contains the configuration needed to create or update a product in Azure APIM.
+// Products are used to group APIs and require subscriptions for access.
 type APIMProductConfig struct {
-	SubscriptionID string // Azure subscription
-	ResourceGroup  string // Resource group where APIM lives
-	ServiceName    string // APIM instance name
-	ProductID      string // Unique product ID in APIM
-	DisplayName    string // UI display name
-	Description    string // Optional product description
-	BearerToken    string // Authorization token
-	Published      bool   // Whether product should be published
+	// SubscriptionID is the Azure subscription ID where the APIM service is located.
+	SubscriptionID string
+	// ResourceGroup is the Azure resource group where the APIM service is located.
+	ResourceGroup string
+	// ServiceName is the name of the Azure API Management service instance.
+	ServiceName string
+	// ProductID is the unique identifier for the product in APIM.
+	ProductID string
+	// DisplayName is the friendly name shown in the APIM UI.
+	DisplayName string
+	// Description is an optional description of the product.
+	Description string
+	// BearerToken is the Azure AD authentication token for the APIM management API.
+	BearerToken string
+	// Published indicates whether the product should be published and visible in the developer portal.
+	Published bool
 }
 
+// APIMTagConfig contains the configuration needed to create or update a tag in Azure APIM.
+// Tags are used to categorize and organize APIs.
 type APIMTagConfig struct {
+	// SubscriptionID is the Azure subscription ID where the APIM service is located.
 	SubscriptionID string
-	ResourceGroup  string
-	ServiceName    string
-	BearerToken    string
-	TagID          string
-	DisplayName    string
+	// ResourceGroup is the Azure resource group where the APIM service is located.
+	ResourceGroup string
+	// ServiceName is the name of the Azure API Management service instance.
+	ServiceName string
+	// BearerToken is the Azure AD authentication token for the APIM management API.
+	BearerToken string
+	// TagID is the unique identifier for the tag in APIM.
+	TagID string
+	// DisplayName is the friendly name shown in the APIM UI.
+	DisplayName string
 }

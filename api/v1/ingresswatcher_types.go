@@ -24,11 +24,11 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // IngressWatcherSpec defines the desired state of IngressWatcher.
+// Currently, this is a placeholder spec. The IngressWatcher controller watches
+// Kubernetes Ingress resources and creates APIMAPI resources based on annotations.
 type IngressWatcherSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of IngressWatcher. Edit ingresswatcher_types.go to remove/update
+	// Foo is a placeholder field. The IngressWatcher functionality is currently
+	// implemented through direct Ingress resource watching rather than this custom resource.
 	Foo string `json:"foo,omitempty"`
 }
 
@@ -38,8 +38,8 @@ type IngressWatcherStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // IngressWatcher is the Schema for the ingresswatchers API.
 type IngressWatcher struct {
@@ -50,7 +50,7 @@ type IngressWatcher struct {
 	Status IngressWatcherStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // IngressWatcherList contains a list of IngressWatcher.
 type IngressWatcherList struct {

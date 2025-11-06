@@ -24,13 +24,15 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ImportAPISpec defines the desired state of ImportAPI.
+// This spec contains the minimal information needed to import an OpenAPI definition
+// into Azure APIM. The ImportAPI resource is typically created by the DeployAPI controller
+// and is deleted after successful import.
 type ImportAPISpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of ImportAPI. Edit importapi_types.go to remove/update
-	APIID                string `json:"APIID"`
-	RoutePrefix          string `json:"routePrefix"`
+	// APIID is the unique identifier for the API in Azure APIM.
+	APIID string `json:"APIID"`
+	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
+	RoutePrefix string `json:"routePrefix"`
+	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
 	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
 }
 
@@ -40,8 +42,8 @@ type ImportAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // ImportAPI is the Schema for the importapis API.
 type ImportAPI struct {
@@ -52,7 +54,7 @@ type ImportAPI struct {
 	Status ImportAPIStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // ImportAPIList contains a list of ImportAPI.
 type ImportAPIList struct {

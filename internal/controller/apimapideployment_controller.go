@@ -35,15 +35,22 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
-// APIMAPIDeploymentReconciler reconciles a APIMAPIDeployment object
+// APIMAPIDeploymentReconciler reconciles APIMAPIDeployment custom resources.
+// This controller handles the complete workflow of deploying an API to Azure API Management:
+// 1. Fetching the OpenAPI definition
+// 2. Importing it into APIM
+// 3. Configuring the service URL
+// 4. Associating products and tags
+// 5. Updating the APIMAPI status with host information
+// 6. Cleaning up the deployment resource after successful completion
 type APIMAPIDeploymentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -57,12 +64,14 @@ type APIMAPIDeploymentReconciler struct {
 func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("apimapideployment_controller")
 
+	// Fetch the APIMAPIDeployment resource that triggered this reconciliation.
 	var deployment apimv1.APIMAPIDeployment
 	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
 		logger.Info("ℹ️ Unable to fetch APIMAPIDeployment")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Fetch the associated APIMAPI resource to update its status after deployment.
 	var apimApi apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -73,7 +82,8 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// 1) Fetch the OpenAPI definition
+	// Step 1: Fetch the OpenAPI definition from the specified URL.
+	// This uses retry logic to handle transient network failures.
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
 	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", deployment.Spec.APIID)
 	// resp, err := http.Get(openApiURL)
@@ -89,13 +99,15 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 	return ctrl.Result{}, err
 	// }
 
+	// Fetch the OpenAPI definition with retry logic to handle transient failures.
 	openApiContent, err := fetchOpenAPIDefinitionWithRetry(openApiURL, 5)
 	if err != nil {
 		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
-	// 2) Acquire an Azure management token
+	// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
+	// The token is obtained using workload identity credentials.
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
@@ -107,7 +119,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// 3) Build our APIMDeploymentConfig, including ProductID
+	// Step 3: Build the APIM deployment configuration with all necessary parameters.
 	config := apim.APIMDeploymentConfig{
 		SubscriptionID: deployment.Spec.Subscription,
 		ResourceGroup:  deployment.Spec.ResourceGroup,
@@ -121,21 +133,24 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		TagIDs:         deployment.Spec.TagIDs,
 	}
 
-	// 4) Import the API
+	// Step 4: Import the OpenAPI definition into Azure APIM.
+	// This creates or updates the API in APIM with the provided specification.
 	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
 		logger.Error(err, "🚫 Failed to import API")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
 
-	// 5) Patch the backend service URL
+	// Step 5: Update the backend service URL for the API.
+	// This points the API to the correct backend service endpoint.
 	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
-	// 6) Assign the API to all configured Products (if any)
+	// Step 6: Assign the API to all configured products (if any).
+	// Products are used to group APIs and require subscriptions for access.
 	if len(config.ProductIDs) > 0 {
 		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to products", "productIDs", config.ProductIDs)
@@ -146,7 +161,8 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ No product IDs configured; skipping product assignment")
 	}
 
-	// 7) Assign the API to all configured Tags (if any)
+	// Step 7: Assign the API to all configured tags (if any).
+	// Tags help organize and categorize APIs for better management.
 	if len(config.TagIDs) > 0 {
 		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to tags", "tagIDs", config.TagIDs)
@@ -157,13 +173,15 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment")
 	}
 
-	// 8) Fetch APIM host details and update status
+	// Step 8: Fetch APIM service host details and update the APIMAPI status.
+	// This provides the full URLs for accessing the API through APIM.
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
 		logger.Error(err, "⚠️ Failed to fetch APIM details")
 		return ctrl.Result{}, err
 	}
 
+	// Update the APIMAPI status with deployment information.
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.Status = "OK"
 	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
@@ -174,7 +192,8 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// 9) Clean up the deployment CR
+	// Step 9: Clean up the deployment custom resource after successful completion.
+	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
 	if err := r.Delete(ctx, &deployment); err != nil {
 		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
 		return ctrl.Result{}, err
@@ -206,6 +225,9 @@ func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// fetchOpenAPIDefinitionWithRetry fetches an OpenAPI definition from a URL with exponential backoff retry logic.
+// It attempts to fetch the definition up to maxRetries times, with increasing delays between attempts
+// (2s, 4s, 8s, 16s, 32s) to handle transient network failures or temporary service unavailability.
 func fetchOpenAPIDefinitionWithRetry(url string, maxRetries int) ([]byte, error) {
 	var lastErr error
 
@@ -216,14 +238,18 @@ func fetchOpenAPIDefinitionWithRetry(url string, maxRetries int) ([]byte, error)
 		} else {
 			defer resp.Body.Close()
 
+			// Check if the response status indicates success.
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return io.ReadAll(resp.Body)
 			}
 
+			// Read the error response body for debugging.
 			body, _ := io.ReadAll(resp.Body)
 			lastErr = fmt.Errorf("unexpected status: %s\nbody: %s", resp.Status, string(body))
 		}
 
+		// Exponential backoff: wait 2^attempt seconds before retrying.
+		// This gives transient failures time to resolve while avoiding excessive retries.
 		time.Sleep(time.Duration(2<<i) * time.Second) // 2s, 4s, 8s, 16s, 32s
 	}
 

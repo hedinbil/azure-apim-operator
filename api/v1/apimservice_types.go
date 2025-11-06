@@ -24,26 +24,26 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // APIMServiceSpec defines the desired state of APIMService.
+// This spec contains the Azure subscription and resource group information needed
+// to identify and connect to an Azure API Management service instance.
 type APIMServiceSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of APIMService. Edit apimservice_types.go to remove/update
-	Name          string `json:"name"`
+	// Name is the name of the Azure API Management service instance in Azure.
+	Name string `json:"name"`
+	// ResourceGroup is the Azure resource group where the APIM service is located.
 	ResourceGroup string `json:"resourceGroup"`
-	Subscription  string `json:"subscription"`
+	// Subscription is the Azure subscription ID where the APIM service is deployed.
+	Subscription string `json:"subscription"`
 }
 
 // APIMServiceStatus defines the observed state of APIMService.
+// This status reflects information about the APIM service that was retrieved from Azure.
 type APIMServiceStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// Host is the hostname of the APIM service (e.g., "myapim.azure-api.net").
 	Host string `json:"host,omitempty"`
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // APIMService is the Schema for the apimservices API.
 type APIMService struct {
@@ -54,7 +54,7 @@ type APIMService struct {
 	Status APIMServiceStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // APIMServiceList contains a list of APIMService.
 type APIMServiceList struct {

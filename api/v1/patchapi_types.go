@@ -24,12 +24,11 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // PatchAPISpec defines the desired state of PatchAPI.
+// This spec contains the information needed to update an existing API's service URL in APIM.
 type PatchAPISpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of PatchAPI. Edit patchapi_types.go to remove/update
-	APIID      string `json:"APIID"`
+	// APIID is the unique identifier for the API in Azure APIM that should be patched.
+	APIID string `json:"APIID"`
+	// ServiceURL is the new backend service URL that APIM will proxy requests to.
 	ServiceURL string `json:"serviceUrl"`
 }
 
@@ -39,8 +38,8 @@ type PatchAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // PatchAPI is the Schema for the patchapis API.
 type PatchAPI struct {
@@ -51,7 +50,7 @@ type PatchAPI struct {
 	Status PatchAPIStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // PatchAPIList contains a list of PatchAPI.
 type PatchAPIList struct {

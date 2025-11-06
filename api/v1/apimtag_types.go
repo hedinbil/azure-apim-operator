@@ -44,8 +44,8 @@ type APIMTagStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
+//+kubebuilder:object:root=true
+//+kubebuilder:subresource:status
 
 // APIMTag is the Schema for the apimtags API.
 type APIMTag struct {
@@ -56,7 +56,7 @@ type APIMTag struct {
 	Status APIMTagStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:object:root=true
+//+kubebuilder:object:root=true
 
 // APIMTagList contains a list of APIMTag.
 type APIMTagList struct {

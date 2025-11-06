@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package main is the entry point for the Azure API Management (APIM) operator.
+// This operator manages Azure API Management resources through Kubernetes custom resources,
+// allowing declarative management of APIs, products, tags, and deployments in APIM.
 package main
 
 import (
@@ -39,23 +42,33 @@ import (
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/controller"
-	// +kubebuilder:scaffold:imports
+	//+kubebuilder:scaffold:imports
 )
 
 var (
-	scheme   = runtime.NewScheme()
+	// scheme is the Kubernetes runtime scheme that defines how API types are serialized.
+	scheme = runtime.NewScheme()
+	// setupLog is the logger used during operator initialization and setup.
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// init initializes the Kubernetes runtime scheme by registering standard Kubernetes
+// types and custom APIM API types. This must be called before creating any controllers.
 func init() {
+	// Register standard Kubernetes API types (Pods, Services, etc.)
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	// Register custom APIM API types (APIMAPI, APIMService, etc.)
 	utilruntime.Must(apimv1.AddToScheme(scheme))
-	// +kubebuilder:scaffold:scheme
+	//+kubebuilder:scaffold:scheme
 }
 
+// main is the entry point for the operator. It sets up the controller manager,
+// configures metrics and webhook servers, registers all controllers, and starts
+// the reconciliation loop.
 // nolint:gocyclo
 func main() {
+	// Command-line flags for configuring the operator
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
@@ -95,9 +108,10 @@ func main() {
 	// 	}
 	// }()
 
+	// Initialize the logger with zap configuration
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
+	// If the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
 	// Rapid Reset CVEs. For more information see:
@@ -210,6 +224,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Register the IngressWatcher controller to watch Kubernetes Ingress resources
+	// and create APIMAPI resources when appropriate annotations are present.
 	if err = (&controller.IngressWatcherReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -217,6 +233,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "IngressWatcher")
 		os.Exit(1)
 	}
+	// Register the APIMAPI controller to manage APIMAPI custom resources.
+	// This controller updates annotations with API host information for ArgoCD integration.
 	if err = (&controller.APIMAPIReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -224,6 +242,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPI")
 		os.Exit(1)
 	}
+	// Register the ReplicaSetWatcher controller to watch ReplicaSet resources
+	// and trigger APIM API deployments when new replicas become ready.
 	if err = (&controller.ReplicaSetWatcherReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -231,6 +251,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ReplicaSetWatcher")
 		os.Exit(1)
 	}
+	// Register the APIMAPIDeployment controller to handle API deployments to Azure APIM.
+	// This controller imports OpenAPI definitions, configures service URLs, and assigns products/tags.
 	if err = (&controller.APIMAPIDeploymentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -238,6 +260,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPIDeployment")
 		os.Exit(1)
 	}
+	// Register the APIMService controller to manage APIMService custom resources.
+	// This controller provides information about Azure API Management service instances.
 	if err = (&controller.APIMServiceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -245,6 +269,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMService")
 		os.Exit(1)
 	}
+	// Register the APIMAPIPatch controller to handle patching of existing APIs in APIM.
 	if err = (&controller.APIMAPIPatchReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -252,6 +277,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPIPatch")
 		os.Exit(1)
 	}
+	// Register the PatchAPI controller to update service URLs for existing APIs in APIM.
 	if err = (&controller.PatchAPIReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -259,6 +285,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "PatchAPI")
 		os.Exit(1)
 	}
+	// Register the ImportAPI controller to import OpenAPI definitions into APIM.
 	if err = (&controller.ImportAPIReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -266,6 +293,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ImportAPI")
 		os.Exit(1)
 	}
+	// Register the DeployAPI controller to orchestrate API deployment workflows.
 	if err = (&controller.DeployAPIReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -273,6 +301,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "DeployAPI")
 		os.Exit(1)
 	}
+	// Register the APIMProduct controller to manage products in Azure APIM.
+	// Products are used to group and publish APIs with subscription requirements.
 	if err = (&controller.APIMProductReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -280,6 +310,8 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMProduct")
 		os.Exit(1)
 	}
+	// Register the APIMTag controller to manage tags in Azure APIM.
+	// Tags are used to categorize and organize APIs.
 	if err = (&controller.APIMTagReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -287,8 +319,10 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMTag")
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
+	//+kubebuilder:scaffold:builder
 
+	// Add certificate watchers to the manager if certificates are provided.
+	// These watchers will automatically reload certificates when they change on disk.
 	if metricsCertWatcher != nil {
 		setupLog.Info("Adding metrics certificate watcher to manager")
 		if err := mgr.Add(metricsCertWatcher); err != nil {
@@ -305,6 +339,7 @@ func main() {
 		}
 	}
 
+	// Configure health check endpoints for Kubernetes liveness and readiness probes.
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -314,6 +349,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start the controller manager, which will begin the reconciliation loops for all registered controllers.
+	// SetupSignalHandler sets up signal handling for graceful shutdown (SIGTERM, SIGINT).
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
