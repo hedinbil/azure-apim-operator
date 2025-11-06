@@ -65,7 +65,11 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		logger.Error(err, "❌ Failed to send request to APIM")
 		return fmt.Errorf("failed to call APIM API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -114,7 +118,11 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	if err != nil {
 		return fmt.Errorf("patch request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
@@ -169,7 +177,11 @@ func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error
 		if err != nil {
 			return fmt.Errorf("product assign request failed for %s: %w", productID, err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				logger.Error(closeErr, "⚠️ Failed to close response body")
+			}
+		}()
 
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode >= 300 {

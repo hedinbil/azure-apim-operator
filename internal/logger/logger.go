@@ -23,8 +23,7 @@ func InitTracer(ctx context.Context) func(context.Context) error {
 		log.Println("📡 Using OTLP endpoint from env:", endpoint)
 	}
 
-	conn, err := grpc.DialContext(
-		ctx,
+	conn, err := grpc.NewClient(
 		endpoint,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)

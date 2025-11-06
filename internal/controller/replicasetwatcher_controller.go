@@ -188,10 +188,6 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func pointer[T any](v T) *T {
-	return &v
-}
-
 func isPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {

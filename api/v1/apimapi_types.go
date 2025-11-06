@@ -34,7 +34,7 @@ type APIMAPI struct {
 	Status APIMAPIStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // APIMAPIList contains a list of APIMAPI
 type APIMAPIList struct {

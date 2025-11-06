@@ -36,6 +36,11 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
+const (
+	phaseError   = "Error"
+	phaseCreated = "Created"
+)
+
 // APIMProductReconciler reconciles a APIMProduct object
 type APIMProductReconciler struct {
 	client.Client
@@ -93,7 +98,7 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
-		product.Status.Phase = "Error"
+		product.Status.Phase = phaseError
 		product.Status.Message = "Failed to get Azure token"
 		_ = r.Status().Update(ctx, &product)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -113,11 +118,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if err := apim.UpsertProduct(ctx, cfg); err != nil {
 		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
-		product.Status.Phase = "Error"
+		product.Status.Phase = phaseError
 		product.Status.Message = err.Error()
 	} else {
 		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
-		product.Status.Phase = "Created"
+		product.Status.Phase = phaseCreated
 		product.Status.Message = "Product created successfully"
 	}
 
