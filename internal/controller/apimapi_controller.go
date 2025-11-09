@@ -36,12 +36,12 @@ type APIMAPIReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis/finalizers,verbs=update
 
 func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	//logger := log.FromContext(ctx)
+	// logger := log.FromContext(ctx)
 	var logger = ctrl.Log.WithName("apimapi_controller")
 
 	logger.Info("🔁 Reconciling APIMAPI", "name", req.Name, "namespace", req.Namespace)

@@ -51,8 +51,8 @@ type DeployAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // DeployAPI is the Schema for the deployapis API.
 type DeployAPI struct {
@@ -63,7 +63,7 @@ type DeployAPI struct {
 	Status DeployAPIStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // DeployAPIList contains a list of DeployAPI.
 type DeployAPIList struct {

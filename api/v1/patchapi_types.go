@@ -38,8 +38,8 @@ type PatchAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // PatchAPI is the Schema for the patchapis API.
 type PatchAPI struct {
@@ -50,7 +50,7 @@ type PatchAPI struct {
 	Status PatchAPIStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // PatchAPIList contains a list of PatchAPI.
 type PatchAPIList struct {

@@ -48,9 +48,9 @@ type APIMAPIDeploymentReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -267,16 +267,23 @@ func fetchOpenAPIDefinitionWithRetry(url string, maxRetries int) ([]byte, error)
 		if err != nil {
 			lastErr = fmt.Errorf("GET error: %w", err)
 		} else {
-			defer resp.Body.Close()
+			body, readErr := io.ReadAll(resp.Body)
+			closeErr := resp.Body.Close()
 
-			// Check if the response status indicates success.
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return io.ReadAll(resp.Body)
+			if readErr != nil {
+				lastErr = fmt.Errorf("read body error: %w", readErr)
+			} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				if closeErr != nil {
+					return nil, fmt.Errorf("close response body: %w", closeErr)
+				}
+				return body, nil
+			} else {
+				if closeErr != nil {
+					lastErr = fmt.Errorf("unexpected status: %s\nbody: %s (close error: %v)", resp.Status, string(body), closeErr)
+				} else {
+					lastErr = fmt.Errorf("unexpected status: %s\nbody: %s", resp.Status, string(body))
+				}
 			}
-
-			// Read the error response body for debugging.
-			body, _ := io.ReadAll(resp.Body)
-			lastErr = fmt.Errorf("unexpected status: %s\nbody: %s", resp.Status, string(body))
 		}
 
 		// Exponential backoff: wait 2^attempt seconds before retrying.

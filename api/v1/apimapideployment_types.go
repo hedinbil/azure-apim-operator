@@ -39,8 +39,8 @@ type APIMAPIDeploymentStatus struct {
 	Status string `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // APIMAPIDeployment is the Schema for the APIMAPIDeployments API
 type APIMAPIDeployment struct {
@@ -51,7 +51,7 @@ type APIMAPIDeployment struct {
 	Status APIMAPIDeploymentStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // APIMAPIDeploymentList contains a list of APIMAPIDeployment
 type APIMAPIDeploymentList struct {

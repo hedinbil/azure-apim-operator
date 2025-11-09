@@ -243,7 +243,11 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 		logger.Error(err, "❌ Failed to request API revisions")
 		return nil, fmt.Errorf("failed to call APIM API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -290,7 +294,11 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 	if err != nil {
 		return "", "", fmt.Errorf("request to get APIM service details failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
@@ -385,7 +393,11 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 	if err != nil {
 		return fmt.Errorf("product creation request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
@@ -445,7 +457,11 @@ func UpsertTag(ctx context.Context, config APIMTagConfig) error {
 	if err != nil {
 		return fmt.Errorf("tag request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
@@ -502,7 +518,11 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 		if err != nil {
 			return fmt.Errorf("tag assign request failed for %s: %w", tagID, err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				logger.Error(closeErr, "⚠️ Failed to close response body")
+			}
+		}()
 
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode >= 300 {

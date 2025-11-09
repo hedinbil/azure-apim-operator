@@ -39,8 +39,8 @@ type APIMAPIStatus struct {
 	DeveloperPortalHost string `json:"developerPortalHost"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // APIMAPI is the Schema for the apimapis API.
 // APIMAPI is a Kubernetes custom resource that represents an API in Azure API Management.
@@ -56,7 +56,7 @@ type APIMAPI struct {
 	Status APIMAPIStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // APIMAPIList contains a list of APIMAPI resources.
 // This is used by kubectl to list all APIMAPI instances in a namespace.

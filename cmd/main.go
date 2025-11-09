@@ -43,7 +43,7 @@ import (
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/controller"
-	//+kubebuilder:scaffold:imports
+	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -61,7 +61,7 @@ func init() {
 
 	// Register custom APIM API types (APIMAPI, APIMService, etc.)
 	utilruntime.Must(apimv1.AddToScheme(scheme))
-	//+kubebuilder:scaffold:scheme
+	// +kubebuilder:scaffold:scheme
 }
 
 // main is the entry point for the operator. It sets up the controller manager,
@@ -322,7 +322,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMTag")
 		os.Exit(1)
 	}
-	//+kubebuilder:scaffold:builder
+	// +kubebuilder:scaffold:builder
 
 	// Add certificate watchers to the manager if certificates are provided.
 	// These watchers will automatically reload certificates when they change on disk.

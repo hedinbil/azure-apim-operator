@@ -38,8 +38,8 @@ type APIMAPIPatchStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // APIMAPIPatch is the Schema for the apimapipatches API.
 type APIMAPIPatch struct {
@@ -50,7 +50,7 @@ type APIMAPIPatch struct {
 	Status APIMAPIPatchStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // APIMAPIPatchList contains a list of APIMAPIPatch.
 type APIMAPIPatchList struct {

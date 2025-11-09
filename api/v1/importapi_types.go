@@ -42,8 +42,8 @@ type ImportAPIStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // ImportAPI is the Schema for the importapis API.
 type ImportAPI struct {
@@ -54,7 +54,7 @@ type ImportAPI struct {
 	Status ImportAPIStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // ImportAPIList contains a list of ImportAPI.
 type ImportAPIList struct {

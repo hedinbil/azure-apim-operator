@@ -38,8 +38,8 @@ type IngressWatcherStatus struct {
 	// Important: Run "make" to regenerate code after modifying this file
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // IngressWatcher is the Schema for the ingresswatchers API.
 type IngressWatcher struct {
@@ -50,7 +50,7 @@ type IngressWatcher struct {
 	Status IngressWatcherStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // IngressWatcherList contains a list of IngressWatcher.
 type IngressWatcherList struct {

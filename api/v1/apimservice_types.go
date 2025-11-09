@@ -42,8 +42,8 @@ type APIMServiceStatus struct {
 	Host string `json:"host,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // APIMService is the Schema for the apimservices API.
 type APIMService struct {
@@ -54,7 +54,7 @@ type APIMService struct {
 	Status APIMServiceStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // APIMServiceList contains a list of APIMService.
 type APIMServiceList struct {
