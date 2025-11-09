@@ -54,7 +54,8 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// The app.kubernetes.io/name label is used to match ReplicaSets with APIMAPI resources.
 	appName := rs.Labels["app.kubernetes.io/name"]
 	if appName == "" {
-		// If no app label is found, skip processing this ReplicaSet.
+		logger.Info("⚠️ Missing app label on ReplicaSet; skipping APIM deployment",
+			"replicaSet", rs.Name, "namespace", rs.Namespace)
 		return ctrl.Result{}, nil
 	}
 
@@ -64,6 +65,8 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// If no APIMAPI resource exists, there's nothing to deploy.
+			logger.Info("ℹ️ APIMAPI not found for ReplicaSet; skipping deployment",
+				"replicaSet", rs.Name, "namespace", rs.Namespace, "appName", appName)
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)
@@ -125,7 +128,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	// If no ready pod is found, requeue to wait for the pod to become ready.
 	if ownerPod == nil {
-		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name)
+		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace)
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
@@ -153,6 +156,20 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// }
 
 	// logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
+
+	logger.Info("🚀 Preparing APIM deployment",
+		"replicaSet", rs.Name,
+		"namespace", rs.Namespace,
+		"apiID", apimApi.Spec.APIID,
+		"routePrefix", apimApi.Spec.RoutePrefix,
+		"openApiUrl", apimApi.Spec.OpenAPIDefinitionURL,
+		"productCount", len(apimApi.Spec.ProductIDs),
+		"tagCount", len(apimApi.Spec.TagIDs),
+	)
+
+	if apimApi.Spec.OpenAPIDefinitionURL == "" {
+		logger.Info("⚠️ APIMAPI spec has empty openApiDefinitionUrl; import will fail unless set")
+	}
 
 	apiDeployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{

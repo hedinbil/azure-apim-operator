@@ -70,6 +70,14 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ Unable to fetch APIMAPIDeployment")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	logger.Info("🧩 Loaded APIMAPIDeployment",
+		"name", deployment.Name,
+		"namespace", deployment.Namespace,
+		"apiID", deployment.Spec.APIID,
+		"revision", deployment.Spec.Revision,
+		"routePrefix", deployment.Spec.RoutePrefix,
+		"openApiUrl", deployment.Spec.OpenAPIDefinitionURL,
+	)
 
 	// Fetch the associated APIMAPI resource to update its status after deployment.
 	var apimApi apimv1.APIMAPI
@@ -81,6 +89,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
+	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status)
 
 	// Step 1: Fetch the OpenAPI definition from the specified URL.
 	// This uses retry logic to handle transient network failures.
@@ -105,12 +114,18 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries")
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
+	logger.Info("📥 OpenAPI definition downloaded",
+		"bytes", len(openApiContent),
+		"url", openApiURL,
+		"apiID", deployment.Spec.APIID,
+	)
 
 	// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
 	// The token is obtained using workload identity credentials.
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
+		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
 		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
 	}
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
@@ -118,6 +133,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to get Azure token")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	logger.Info("🔐 Obtained Azure AD token for APIM call", "apiID", deployment.Spec.APIID)
 
 	// Step 3: Build the APIM deployment configuration with all necessary parameters.
 	config := apim.APIMDeploymentConfig{
@@ -132,6 +148,16 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		ProductIDs:     deployment.Spec.ProductIDs,
 		TagIDs:         deployment.Spec.TagIDs,
 	}
+	logger.Info("🛠️ Built APIM deployment config",
+		"apiID", config.APIID,
+		"subscription", config.SubscriptionID,
+		"resourceGroup", config.ResourceGroup,
+		"serviceName", config.ServiceName,
+		"routePrefix", config.RoutePrefix,
+		"revision", config.Revision,
+		"productCount", len(config.ProductIDs),
+		"tagCount", len(config.TagIDs),
+	)
 
 	// Step 4: Import the OpenAPI definition into Azure APIM.
 	// This creates or updates the API in APIM with the provided specification.
@@ -191,6 +217,11 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "⚠️ Failed to update APIMAPI status")
 		return ctrl.Result{}, err
 	}
+	logger.Info("📝 APIMAPI status updated after import",
+		"name", apimApi.Name,
+		"apiHost", apimApi.Status.ApiHost,
+		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+	)
 
 	// Step 9: Clean up the deployment custom resource after successful completion.
 	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
