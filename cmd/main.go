@@ -24,11 +24,13 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -94,9 +96,23 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	opts := zap.Options{
-		Development: true,
+	stacktraceEncoder := func(stack string, enc zapcore.PrimitiveArrayEncoder) {
+		stack = strings.ReplaceAll(stack, "\t", "")
+		stack = strings.ReplaceAll(stack, "\n", " | ")
+		stack = strings.TrimSpace(stack)
+		if stack == "" {
+			return
+		}
+		enc.AppendString(stack)
 	}
+
+	opts := zap.Options{
+		Development:     true,
+		StacktraceLevel: zapcore.DPanicLevel,
+	}
+	opts.EncoderConfigOptions = append(opts.EncoderConfigOptions, func(ec *zapcore.EncoderConfig) {
+		ec.EncodeStacktrace = stacktraceEncoder
+	})
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
