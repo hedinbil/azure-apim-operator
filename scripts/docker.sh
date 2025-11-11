@@ -5,7 +5,7 @@ set -euo pipefail
 IMAGE_NAME="azure-apim-operator"
 ACR_NAME="hedinit"
 ACR_REGISTRY="${ACR_NAME}.azurecr.io"
-VERSION="${1:-v0.17.0}"
+VERSION="${1:-v0.18.0}"
 FULL_IMAGE_NAME="${ACR_REGISTRY}/${IMAGE_NAME}:${VERSION}"
 DOCKERFILE_DIR="../"  # The directory where the Dockerfile is
 
