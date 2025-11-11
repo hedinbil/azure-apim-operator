@@ -127,9 +127,11 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 	// If no ready pod is found, requeue to wait for the pod to become ready.
+	// Use a longer interval to reduce log spam, and rely on ReplicaSet status updates
+	// to trigger reconciliation when pods become ready.
 	if ownerPod == nil {
-		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace)
-		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace, "readyReplicas", rs.Status.ReadyReplicas, "replicas", rs.Status.Replicas)
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// var ingressList networkingv1.IngressList
@@ -209,8 +211,21 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.ReplicaSet{}).
 		WithEventFilter(predicate.Funcs{
-			CreateFunc:  func(e event.CreateEvent) bool { return true },
-			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
+			CreateFunc: func(e event.CreateEvent) bool { return true },
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Only reconcile on ReplicaSet updates when the status changes
+				// Specifically, when ReadyReplicas changes, indicating pods becoming ready
+				oldRS, ok := e.ObjectOld.(*appsv1.ReplicaSet)
+				if !ok {
+					return false
+				}
+				newRS, ok := e.ObjectNew.(*appsv1.ReplicaSet)
+				if !ok {
+					return false
+				}
+				// Reconcile if ReadyReplicas changed
+				return oldRS.Status.ReadyReplicas != newRS.Status.ReadyReplicas
+			},
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
 		}).
