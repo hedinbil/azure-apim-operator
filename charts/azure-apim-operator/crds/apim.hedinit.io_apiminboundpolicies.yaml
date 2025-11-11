@@ -39,15 +39,28 @@ spec:
           spec:
             description: APIMInboundPolicySpec defines the desired state of APIMInboundPolicy.
             properties:
-              PolicyId:
-                description: PolicyId is the unique identifier for the policy in APIM
+              apiId:
+                description: APIID is the unique identifier for the API in APIM where
+                  the policy will be applied
                 type: string
               apimService:
                 description: APIMService is the name of the APIMService custom resource
                 type: string
+              operationId:
+                description: |-
+                  OperationID is the unique identifier for the operation (endpoint) within the API.
+                  If specified, the policy will be applied to this specific operation.
+                  If not specified, the policy will be applied to the entire API.
+                type: string
+              policyContent:
+                description: |-
+                  PolicyContent is the XML content of the policy to be applied.
+                  This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
+                type: string
             required:
-            - PolicyId
+            - apiId
             - apimService
+            - policyContent
             type: object
           status:
             description: APIMInboundPolicyStatus defines the observed state of APIMInboundPolicy.

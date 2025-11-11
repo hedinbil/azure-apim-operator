@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Image version (e.g., v0.18.0)'
+        description: 'Image version (e.g., v0.19.0)'
         required: true
-        default: 'v0.18.0'
+        default: 'v0.19.0'
 
 permissions:
   contents: write
@@ -73,7 +73,7 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/}"
           else
             # Use git commit SHA for non-tag pushes
-            VERSION="v0.18.0-${GITHUB_SHA::8}"
+            VERSION="v0.19.0-${GITHUB_SHA::8}"
           fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "🔖 Image version: ${VERSION}"

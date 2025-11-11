@@ -100,19 +100,29 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		SubscriptionID: apimService.Spec.Subscription,
 		ResourceGroup:  apimService.Spec.ResourceGroup,
 		ServiceName:    policy.Spec.APIMService,
-		PolicyID:       policy.Spec.PolicyID,
-		// DisplayName:    policy.Spec.DisplayName,
-		BearerToken: token,
+		APIID:          policy.Spec.APIID,
+		OperationID:    policy.Spec.OperationID,
+		PolicyContent:  policy.Spec.PolicyContent,
+		BearerToken:    token,
 	}
 
 	if err := apim.UpsertInboundPolicy(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to upsert APIM Inbound Policy", "policyID", cfg.PolicyID)
+		if cfg.OperationID != "" {
+			logger.Error(err, "❌ Failed to upsert APIM Inbound Policy", "apiID", cfg.APIID, "operationID", cfg.OperationID)
+		} else {
+			logger.Error(err, "❌ Failed to upsert APIM Inbound Policy", "apiID", cfg.APIID)
+		}
 		policy.Status.Phase = phaseError
 		policy.Status.Message = err.Error()
 	} else {
-		logger.Info("✅ Successfully upserted APIM Inbound Policy", "policyID", cfg.PolicyID)
+		if cfg.OperationID != "" {
+			logger.Info("✅ Successfully upserted APIM Inbound Policy", "apiID", cfg.APIID, "operationID", cfg.OperationID)
+			policy.Status.Message = fmt.Sprintf("APIM Inbound Policy created or updated for operation %s", cfg.OperationID)
+		} else {
+			logger.Info("✅ Successfully upserted APIM Inbound Policy", "apiID", cfg.APIID)
+			policy.Status.Message = "APIM Inbound Policy created or updated"
+		}
 		policy.Status.Phase = phaseCreated
-		policy.Status.Message = "Tag created or updated"
 	}
 
 	if err := r.Status().Update(ctx, &policy); err != nil {

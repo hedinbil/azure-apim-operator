@@ -31,8 +31,17 @@ type APIMInboundPolicySpec struct {
 	// APIMService is the name of the APIMService custom resource
 	APIMService string `json:"apimService"`
 
-	// PolicyId is the unique identifier for the policy in APIM
-	PolicyID string `json:"PolicyId"`
+	// APIID is the unique identifier for the API in APIM where the policy will be applied
+	APIID string `json:"apiId"`
+
+	// OperationID is the unique identifier for the operation (endpoint) within the API.
+	// If specified, the policy will be applied to this specific operation.
+	// If not specified, the policy will be applied to the entire API.
+	OperationID string `json:"operationId,omitempty"`
+
+	// PolicyContent is the XML content of the policy to be applied.
+	// This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
+	PolicyContent string `json:"policyContent"`
 }
 
 // APIMInboundPolicyStatus defines the observed state of APIMInboundPolicy.

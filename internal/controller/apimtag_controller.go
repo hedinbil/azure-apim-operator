@@ -109,7 +109,7 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if err := apim.UpsertTag(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to upsert tag", "tagID", cfg.TagID)
+		logger.Error(err, "❌ Failed to upsert APIM tag", "tagID", cfg.TagID)
 		tag.Status.Phase = phaseError
 		tag.Status.Message = err.Error()
 	} else {
