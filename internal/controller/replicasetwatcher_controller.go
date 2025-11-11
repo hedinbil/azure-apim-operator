@@ -50,6 +50,15 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Skip old ReplicaSet revisions that have been scaled down to 0 replicas.
+	// When a Deployment is updated, the old ReplicaSet is scaled down to 0,
+	// and we should not process these old revisions.
+	if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+		logger.Info("⏭️ Skipping old ReplicaSet revision (scaled down to 0)",
+			"replicaSet", rs.Name, "namespace", rs.Namespace)
+		return ctrl.Result{}, nil
+	}
+
 	// Extract the application name from the ReplicaSet labels.
 	// The app.kubernetes.io/name label is used to match ReplicaSets with APIMAPI resources.
 	appName := rs.Labels["app.kubernetes.io/name"]
