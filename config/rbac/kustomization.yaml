@@ -31,9 +31,6 @@ resources:
 - apimproduct_admin_role.yaml
 - apimproduct_editor_role.yaml
 - apimproduct_viewer_role.yaml
-- apimapipatch_admin_role.yaml
-- apimapipatch_editor_role.yaml
-- apimapipatch_viewer_role.yaml
 - apimservice_admin_role.yaml
 - apimservice_editor_role.yaml
 - apimservice_viewer_role.yaml
