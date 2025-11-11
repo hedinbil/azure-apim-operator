@@ -22,24 +22,15 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- apiminboundpolicy_admin_role.yaml
+- apiminboundpolicy_editor_role.yaml
+- apiminboundpolicy_viewer_role.yaml
 - apimtag_admin_role.yaml
 - apimtag_editor_role.yaml
 - apimtag_viewer_role.yaml
 - apimproduct_admin_role.yaml
 - apimproduct_editor_role.yaml
 - apimproduct_viewer_role.yaml
-- deployapi_admin_role.yaml
-- deployapi_editor_role.yaml
-- deployapi_viewer_role.yaml
-- importapi_admin_role.yaml
-- importapi_editor_role.yaml
-- importapi_viewer_role.yaml
-- patchapi_admin_role.yaml
-- patchapi_editor_role.yaml
-- patchapi_viewer_role.yaml
-- import_admin_role.yaml
-- import_editor_role.yaml
-- import_viewer_role.yaml
 - apimapipatch_admin_role.yaml
 - apimapipatch_editor_role.yaml
 - apimapipatch_viewer_role.yaml
@@ -52,7 +43,3 @@ resources:
 - apimapi_admin_role.yaml
 - apimapi_editor_role.yaml
 - apimapi_viewer_role.yaml
-- ingresswatcher_admin_role.yaml
-- ingresswatcher_editor_role.yaml
-- ingresswatcher_viewer_role.yaml
-

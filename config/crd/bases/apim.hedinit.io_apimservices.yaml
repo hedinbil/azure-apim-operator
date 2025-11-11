@@ -37,15 +37,22 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMServiceSpec defines the desired state of APIMService.
+            description: |-
+              APIMServiceSpec defines the desired state of APIMService.
+              This spec contains the Azure subscription and resource group information needed
+              to identify and connect to an Azure API Management service instance.
             properties:
               name:
-                description: Foo is an example field of APIMService. Edit apimservice_types.go
-                  to remove/update
+                description: Name is the name of the Azure API Management service
+                  instance in Azure.
                 type: string
               resourceGroup:
+                description: ResourceGroup is the Azure resource group where the APIM
+                  service is located.
                 type: string
               subscription:
+                description: Subscription is the Azure subscription ID where the APIM
+                  service is deployed.
                 type: string
             required:
             - name
@@ -53,9 +60,12 @@ spec:
             - subscription
             type: object
           status:
-            description: APIMServiceStatus defines the observed state of APIMService.
+            description: |-
+              APIMServiceStatus defines the observed state of APIMService.
+              This status reflects information about the APIM service that was retrieved from Azure.
             properties:
               host:
+                description: Host is the hostname of the APIM service (e.g., "myapim.azure-api.net").
                 type: string
             type: object
         type: object

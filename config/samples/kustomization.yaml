@@ -5,4 +5,5 @@ resources:
 - apim_v1_apimservice.yaml
 - apim_v1_apimproduct.yaml
 - apim_v1_apimtag.yaml
+- apim_v1_apiminboundpolicy.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

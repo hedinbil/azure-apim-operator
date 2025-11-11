@@ -542,6 +542,10 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 	return nil
 }
 
+func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) error {
+	return nil
+}
+
 // APIRevision represents a single API revision in Azure APIM.
 // Revisions allow versioning of APIs and testing changes before making them current.
 type APIRevision struct {
@@ -625,4 +629,19 @@ type APIMTagConfig struct {
 	TagID string
 	// DisplayName is the friendly name shown in the APIM UI.
 	DisplayName string
+}
+
+// APIMInboundPolicyConfig contains the configuration needed to create or update an inbound policy in Azure APIM.
+// Inbound policies are used to control the inbound traffic to an API.
+type APIMInboundPolicyConfig struct {
+	// SubscriptionID is the Azure subscription ID where the APIM service is located.
+	SubscriptionID string
+	// ResourceGroup is the Azure resource group where the APIM service is located.
+	ResourceGroup string
+	// PolicyID is the unique identifier for the policy in APIM.
+	PolicyID string
+	// ServiceName is the name of the Azure API Management service instance.
+	ServiceName string
+	// BearerToken is the Azure AD authentication token for the APIM management API.
+	BearerToken string
 }

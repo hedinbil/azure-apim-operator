@@ -8,15 +8,11 @@ rules:
   - apim.hedinit.io
   resources:
   - apimapideployments
-  - apimapipatches
   - apimapis
+  - apiminboundpolicies
   - apimproducts
   - apimservices
   - apimtags
-  - deployapis
-  - importapis
-  - ingresswatchers
-  - patchapis
   - replicasetwatchers
   verbs:
   - create
@@ -30,15 +26,11 @@ rules:
   - apim.hedinit.io
   resources:
   - apimapideployments/finalizers
-  - apimapipatches/finalizers
   - apimapis/finalizers
+  - apiminboundpolicies/finalizers
   - apimproducts/finalizers
   - apimservices/finalizers
   - apimtags/finalizers
-  - deployapis/finalizers
-  - importapis/finalizers
-  - ingresswatchers/finalizers
-  - patchapis/finalizers
   - replicasetwatchers/finalizers
   verbs:
   - update
@@ -46,15 +38,11 @@ rules:
   - apim.hedinit.io
   resources:
   - apimapideployments/status
-  - apimapipatches/status
   - apimapis/status
+  - apiminboundpolicies/status
   - apimproducts/status
   - apimservices/status
   - apimtags/status
-  - deployapis/status
-  - importapis/status
-  - ingresswatchers/status
-  - patchapis/status
   - replicasetwatchers/status
   verbs:
   - get

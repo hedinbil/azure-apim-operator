@@ -37,29 +37,48 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
+            description: |-
+              APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment.
+              This spec contains all the information needed to deploy an API to Azure API Management,
+              including the OpenAPI definition, service URL, route configuration, and associations.
             properties:
               APIID:
+                description: APIID is the unique identifier for the API in Azure APIM.
                 type: string
               apimService:
+                description: APIMService is the name of the APIMService custom resource.
                 type: string
               openApiDefinitionUrl:
+                description: OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger
+                  definition can be fetched.
                 type: string
               productIds:
+                description: ProductIDs is a list of product IDs to associate this
+                  API with in APIM.
                 items:
                   type: string
                 type: array
               resourceGroup:
+                description: ResourceGroup is the Azure resource group where the APIM
+                  service is located.
                 type: string
               revision:
+                description: Revision is an optional API revision number. If specified,
+                  a new revision will be created.
                 type: string
               routePrefix:
+                description: RoutePrefix is the base route path in APIM (e.g., "/myapi").
                 type: string
               serviceUrl:
+                description: ServiceURL is the backend service URL that APIM will
+                  proxy requests to.
                 type: string
               subscription:
+                description: Subscription is the Azure subscription ID where the APIM
+                  service is deployed.
                 type: string
               tagIds:
+                description: TagIDs is a list of tag IDs to apply to this API in APIM.
                 items:
                   type: string
                 type: array
@@ -73,10 +92,17 @@ spec:
             - subscription
             type: object
           status:
+            description: |-
+              APIMAPIDeploymentStatus defines the observed state of APIMAPIDeployment.
+              This status tracks the deployment progress and result.
             properties:
               importedAt:
+                description: ImportedAt is the timestamp when the API was successfully
+                  imported into APIM.
                 type: string
               status:
+                description: Status indicates the current deployment status (e.g.,
+                  "OK", "Error").
                 type: string
             type: object
         type: object
