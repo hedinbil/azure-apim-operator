@@ -65,6 +65,8 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 		etag = strings.Trim(etag, "\"")
 		// Remove any remaining whitespace
 		etag = strings.TrimSpace(etag)
+		// Format etag with quotes for use in If-Match header (Azure APIM requirement)
+		etag = fmt.Sprintf(`"%s"`, etag)
 	}
 
 	return etag, true, nil
@@ -129,7 +131,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json")
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
 	// Set If-Match header for conditional updates (etag) or unconditional updates (*)
-	// Azure APIM requires this header when updating existing APIs
+	// GetAPI already formats the etag with quotes, so we can use it directly
 	req.Header.Set("If-Match", etag)
 
 	q := req.URL.Query()
