@@ -56,10 +56,15 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 	}
 
 	// Get etag from response header
+	// Azure APIM returns etags in format: "W/\"etag-value\"" or "\"etag-value\""
 	etag = resp.Header.Get("ETag")
 	if etag != "" {
+		// Remove W/ prefix if present (weak etag)
+		etag = strings.TrimPrefix(etag, "W/")
 		// Remove quotes if present
 		etag = strings.Trim(etag, "\"")
+		// Remove any remaining whitespace
+		etag = strings.TrimSpace(etag)
 	}
 
 	return etag, true, nil
@@ -77,8 +82,8 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
 	}
 
-	// Check if API exists to get proper etag for updates
-	// Only check for non-revision APIs (revisions are always new)
+	// Check if API exists and get etag for proper update handling
+	// For updates, we use the actual etag; for creates, we use "*"
 	var etag string
 	if apimParams.Revision == "" {
 		existingEtag, exists, err := GetAPI(ctx, apimParams)
@@ -87,17 +92,21 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 			etag = "*"
 		} else if exists {
 			if existingEtag != "" {
+				// Use the actual etag for conditional update
 				etag = existingEtag
 				logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", etag)
 			} else {
+				// Fallback to unconditional update if no etag
 				etag = "*"
 				logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
 			}
 		} else {
+			// API doesn't exist, use "*" for create
 			etag = "*"
 			logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
 		}
 	} else {
+		// Revisions are always new, use "*"
 		etag = "*"
 		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
 	}
@@ -119,19 +128,17 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 
 	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json")
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
+	// Set If-Match header for conditional updates (etag) or unconditional updates (*)
+	// Azure APIM requires this header when updating existing APIs
+	req.Header.Set("If-Match", etag)
 
 	q := req.URL.Query()
 	q.Set("import", "true")
 	q.Set("path", apimParams.RoutePrefix)
-	// Explicitly set format to ensure proper OpenAPI import
-	q.Set("format", "openapi+json")
 	if apimParams.Revision != "" {
 		q.Set("createRevision", "true")
 	}
 	req.URL.RawQuery = q.Encode()
-
-	// Use proper etag for updates, or "*" for creates
-	req.Header.Set("If-Match", etag)
 
 	logger.Info("📤 Sending request to APIM",
 		"method", req.Method,
@@ -139,7 +146,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
 		"ifMatch", etag,
-		"format", "openapi+json",
+		"contentType", "application/vnd.oai.openapi+json",
 	)
 
 	// Log beginning of the Swagger content for debug purposes
