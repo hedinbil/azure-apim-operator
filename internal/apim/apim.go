@@ -18,15 +18,88 @@ import (
 // logger is the logger instance for APIM operations.
 var logger = ctrl.Log.WithName("apim")
 
+// GetAPI retrieves an existing API from Azure APIM to get its etag.
+// This is used to properly update existing APIs with the correct If-Match header.
+func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exists bool, err error) {
+	url := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.APIID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to call APIM API: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
+
+	if resp.StatusCode == 404 {
+		return "", false, nil // API doesn't exist
+	}
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", false, fmt.Errorf("failed to get API: %s\n%s", resp.Status, string(body))
+	}
+
+	// Get etag from response header
+	etag = resp.Header.Get("ETag")
+	if etag != "" {
+		// Remove quotes if present
+		etag = strings.Trim(etag, "\"")
+	}
+
+	return etag, true, nil
+}
+
 // ImportOpenAPIDefinitionToAPIM imports an OpenAPI/Swagger definition into Azure API Management.
 // It creates or updates an API in APIM with the provided OpenAPI content, route prefix, and optional revision.
 // The function uses the Azure Management API to perform the import operation.
+// For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
 func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
 	// Construct the API ID, including revision if specified.
 	// APIM uses the format "apiId;rev=revisionNumber" for revisions.
 	apiID := apimParams.APIID
 	if apimParams.Revision != "" {
 		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
+	}
+
+	// Check if API exists to get proper etag for updates
+	// Only check for non-revision APIs (revisions are always new)
+	var etag string
+	if apimParams.Revision == "" {
+		existingEtag, exists, err := GetAPI(ctx, apimParams)
+		if err != nil {
+			logger.Error(err, "⚠️ Failed to check if API exists, will use If-Match: *", "apiID", apimParams.APIID)
+			etag = "*"
+		} else if exists {
+			if existingEtag != "" {
+				etag = existingEtag
+				logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", etag)
+			} else {
+				etag = "*"
+				logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
+			}
+		} else {
+			etag = "*"
+			logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
+		}
+	} else {
+		etag = "*"
+		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
 	}
 
 	// Build the Azure Management API URL for importing the API.
@@ -44,23 +117,29 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json") // or +json if needed
+	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json")
 	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
 
 	q := req.URL.Query()
 	q.Set("import", "true")
 	q.Set("path", apimParams.RoutePrefix)
+	// Explicitly set format to ensure proper OpenAPI import
+	q.Set("format", "openapi+json")
 	if apimParams.Revision != "" {
 		q.Set("createRevision", "true")
 	}
-	req.Header.Set("If-Match", "*") // <-- Required to overwrite existing APIs
 	req.URL.RawQuery = q.Encode()
+
+	// Use proper etag for updates, or "*" for creates
+	req.Header.Set("If-Match", etag)
 
 	logger.Info("📤 Sending request to APIM",
 		"method", req.Method,
 		"url", req.URL.String(),
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
+		"ifMatch", etag,
+		"format", "openapi+json",
 	)
 
 	// Log beginning of the Swagger content for debug purposes
