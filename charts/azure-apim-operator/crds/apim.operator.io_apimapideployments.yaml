@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimproducts.apim.hedinit.io
+  name: apimapideployments.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMProduct
-    listKind: APIMProductList
-    plural: apimproducts
-    singular: apimproduct
+    kind: APIMAPIDeployment
+    listKind: APIMAPIDeploymentList
+    plural: apimapideployments
+    singular: apimapideployment
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMProduct is the Schema for the apimproducts API
+        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
         properties:
           apiVersion:
             description: |-
@@ -37,31 +37,46 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMProductSpec defines the desired state
+            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
             properties:
-              apiID:
+              APIID:
                 type: string
               apimService:
                 type: string
-              description:
+              openApiDefinitionUrl:
                 type: string
-              displayName:
+              productIds:
+                items:
+                  type: string
+                type: array
+              resourceGroup:
                 type: string
-              productId:
+              revision:
                 type: string
-              published:
-                type: boolean
+              routePrefix:
+                type: string
+              serviceUrl:
+                type: string
+              subscription:
+                type: string
+              tagIds:
+                items:
+                  type: string
+                type: array
             required:
+            - APIID
             - apimService
-            - displayName
-            - productId
+            - openApiDefinitionUrl
+            - resourceGroup
+            - routePrefix
+            - serviceUrl
+            - subscription
             type: object
           status:
-            description: APIMProductStatus defines the observed state
             properties:
-              message:
+              importedAt:
                 type: string
-              phase:
+              status:
                 type: string
             type: object
         type: object

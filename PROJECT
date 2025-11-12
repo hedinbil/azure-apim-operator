@@ -2,7 +2,7 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: hedinit.io
+domain: operator.io
 layout:
 - go.kubebuilder.io/v4
 projectName: azure-apim-operator
@@ -12,7 +12,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: IngressWatcher
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -21,13 +21,13 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: ReplicaSetWatcher
   version: v1
@@ -35,7 +35,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMAPIDeployment
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -44,7 +44,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMService
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -53,7 +53,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: PatchAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -62,7 +62,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: ImportAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -71,7 +71,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: DeployAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -80,7 +80,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMProduct
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -89,7 +89,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMTag
   path: github.com/hedinit/azure-apim-operator/api/v1
@@ -98,7 +98,7 @@ resources:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: hedinit.io
+  domain: operator.io
   group: apim
   kind: APIMInboundPolicy
   path: github.com/hedinit/azure-apim-operator/api/v1

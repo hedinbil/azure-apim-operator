@@ -2,12 +2,12 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/apim.hedinit.io_apimapis.yaml
-- bases/apim.hedinit.io_apimapideployments.yaml
-- bases/apim.hedinit.io_apimservices.yaml
-- bases/apim.hedinit.io_apimproducts.yaml
-- bases/apim.hedinit.io_apimtags.yaml
-- bases/apim.hedinit.io_apiminboundpolicies.yaml
+- bases/apim.operator.io_apimapis.yaml
+- bases/apim.operator.io_apimapideployments.yaml
+- bases/apim.operator.io_apimservices.yaml
+- bases/apim.operator.io_apimproducts.yaml
+- bases/apim.operator.io_apimtags.yaml
+- bases/apim.operator.io_apiminboundpolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

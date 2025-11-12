@@ -22,7 +22,7 @@
 
 ## Proprietary Branding & Hardcoded Identifiers
 - **Go module path**: `go.mod:1` uses `github.com/hedinit/azure-apim-operator`. Decide on the public namespace and adjust imports.
-- **Kubebuilder domain**: CRD group names use `apim.hedinit.io` throughout (`api/v1/groupversion_info.go:19`, `config/crd/bases/...`, `config/samples/*`). For open source, adopt a neutral domain you control (e.g., `apim.azure-operator.io`) and regenerate CRDs/code.
+- **Kubebuilder domain**: CRD group names use `apim.operator.io` throughout (`api/v1/groupversion_info.go:19`, `config/crd/bases/...`, `config/samples/*`). For open source, adopt a neutral domain you control (e.g., `apim.azure-operator.io`) and regenerate CRDs/code.
 - **Leader election ID**: `cmd/main.go:195` references `50287eb5.hedinit.io`; update to match the new domain to avoid collisions.
 - **Helm chart defaults**: `charts/azure-apim-operator/values.yaml:10` pins the image repository to `hedinit.azurecr.io/azure-apim-operator`; `charts/azure-apim-operator/values.yaml:167` defines `hedinit.io/openapi-export`. Replace with public-friendly defaults and document optional overrides.
 - **Project metadata**: `PROJECT:5-105` hardcodes `domain: hedinit.io` and repository path. Update and re-run Kubebuilder scaffolding as needed.

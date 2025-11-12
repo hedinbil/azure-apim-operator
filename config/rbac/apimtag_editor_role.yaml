@@ -1,7 +1,7 @@
 # This rule is not used by the project azure-apim-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the apim.hedinit.io.
+# Grants permissions to create, update, and delete resources within the apim.operator.io.
 # This role is intended for users who need to manage these resources
 # but should not control RBAC or manage permissions for others.
 
@@ -14,7 +14,7 @@ metadata:
   name: apimtag-editor-role
 rules:
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimtags
   verbs:
@@ -26,7 +26,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimtags/status
   verbs:

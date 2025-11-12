@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapideployments.apim.hedinit.io
+  name: apimservices.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMAPIDeployment
-    listKind: APIMAPIDeploymentList
-    plural: apimapideployments
-    singular: apimapideployment
+    kind: APIMService
+    listKind: APIMServiceList
+    plural: apimservices
+    singular: apimservice
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPIDeployment is the Schema for the APIMAPIDeployments API
+        description: APIMService is the Schema for the apimservices API.
         properties:
           apiVersion:
             description: |-
@@ -37,46 +37,25 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPIDeploymentSpec defines the desired state of APIMAPIDeployment
+            description: APIMServiceSpec defines the desired state of APIMService.
             properties:
-              APIID:
+              name:
+                description: Foo is an example field of APIMService. Edit apimservice_types.go
+                  to remove/update
                 type: string
-              apimService:
-                type: string
-              openApiDefinitionUrl:
-                type: string
-              productIds:
-                items:
-                  type: string
-                type: array
               resourceGroup:
-                type: string
-              revision:
-                type: string
-              routePrefix:
-                type: string
-              serviceUrl:
                 type: string
               subscription:
                 type: string
-              tagIds:
-                items:
-                  type: string
-                type: array
             required:
-            - APIID
-            - apimService
-            - openApiDefinitionUrl
+            - name
             - resourceGroup
-            - routePrefix
-            - serviceUrl
             - subscription
             type: object
           status:
+            description: APIMServiceStatus defines the observed state of APIMService.
             properties:
-              importedAt:
-                type: string
-              status:
+              host:
                 type: string
             type: object
         type: object

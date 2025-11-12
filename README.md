@@ -86,7 +86,7 @@ helm upgrade --install azure-apim-operator ./charts/azure-apim-operator \
 Create an `APIMService` resource to define your Azure APIM instance:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMService
 metadata:
   name: my-apim-instance
@@ -126,7 +126,7 @@ metadata:
 Create an `APIMAPI` resource for your application:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMAPI
 metadata:
   name: my-api
@@ -209,7 +209,7 @@ The operator will automatically:
 Check that CRDs are installed:
 
 ```bash
-kubectl get crds | grep apim.hedinit.io
+kubectl get crds | grep apim.operator.io
 ```
 
 Check operator status:
@@ -538,7 +538,7 @@ The operator consists of several specialized controllers:
 Defines an Azure API Management service instance:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMService
 metadata:
   name: my-apim-service
@@ -554,7 +554,7 @@ spec:
 Defines an API to be registered in Azure APIM:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMAPI
 metadata:
   name: my-api
@@ -577,7 +577,7 @@ spec:
 Defines an APIM Product:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMProduct
 metadata:
   name: my-product
@@ -595,7 +595,7 @@ spec:
 Defines an APIM Tag:
 
 ```yaml
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMTag
 metadata:
   name: my-tag
@@ -815,7 +815,7 @@ kubectl get apimapideployment -A
 **Solution**:
 ```bash
 # Check if CRDs exist
-kubectl get crds | grep apim.hedinit.io
+kubectl get crds | grep apim.operator.io
 
 # If missing, install them
 kubectl apply -f config/crd/bases/
@@ -956,7 +956,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the LICENSE file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -970,7 +970,9 @@ This project is licensed under the Apache License 2.0 - see the LICENSE file for
 
 <div align="center">
 
-**© 2025 Hedin IT - All rights reserved**
+**Copyright 2025 Hedin IT**
+
+Licensed under the Apache License, Version 2.0
 
 [Report Bug](https://github.com/hedinit/azure-apim-operator/issues) • [Request Feature](https://github.com/hedinit/azure-apim-operator/issues) • [Documentation](https://github.com/hedinit/azure-apim-operator)
 

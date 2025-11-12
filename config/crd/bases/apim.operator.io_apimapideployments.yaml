@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapideployments.apim.hedinit.io
+  name: apimapideployments.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
     kind: APIMAPIDeployment
     listKind: APIMAPIDeploymentList

@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimtags.apim.hedinit.io
+  name: apiminboundpolicies.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMTag
-    listKind: APIMTagList
-    plural: apimtags
-    singular: apimtag
+    kind: APIMInboundPolicy
+    listKind: APIMInboundPolicyList
+    plural: apiminboundpolicies
+    singular: apiminboundpolicy
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMTag is the Schema for the apimtags API.
+        description: APIMInboundPolicy is the Schema for the apiminboundpolicies API.
         properties:
           apiVersion:
             description: |-
@@ -37,24 +37,33 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMTagSpec defines the desired state of APIMTag.
+            description: APIMInboundPolicySpec defines the desired state of APIMInboundPolicy.
             properties:
+              apiId:
+                description: APIID is the unique identifier for the API in APIM where
+                  the policy will be applied
+                type: string
               apimService:
                 description: APIMService is the name of the APIMService custom resource
                 type: string
-              displayName:
-                description: DisplayName is the name shown in the APIM UI
+              operationId:
+                description: |-
+                  OperationID is the unique identifier for the operation (endpoint) within the API.
+                  If specified, the policy will be applied to this specific operation.
+                  If not specified, the policy will be applied to the entire API.
                 type: string
-              tagId:
-                description: TagID is the unique identifier for the tag in APIM
+              policyContent:
+                description: |-
+                  PolicyContent is the XML content of the policy to be applied.
+                  This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
                 type: string
             required:
+            - apiId
             - apimService
-            - displayName
-            - tagId
+            - policyContent
             type: object
           status:
-            description: APIMTagStatus defines the observed state of APIMTag.
+            description: APIMInboundPolicyStatus defines the observed state of APIMInboundPolicy.
             properties:
               message:
                 description: Message contains error details or status context

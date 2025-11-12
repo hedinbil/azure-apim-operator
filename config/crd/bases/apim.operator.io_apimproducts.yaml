@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimtags.apim.hedinit.io
+  name: apimproducts.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMTag
-    listKind: APIMTagList
-    plural: apimtags
-    singular: apimtag
+    kind: APIMProduct
+    listKind: APIMProductList
+    plural: apimproducts
+    singular: apimproduct
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMTag is the Schema for the apimtags API.
+        description: APIMProduct is the Schema for the apimproducts API
         properties:
           apiVersion:
             description: |-
@@ -37,30 +37,31 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMTagSpec defines the desired state of APIMTag.
+            description: APIMProductSpec defines the desired state
             properties:
+              apiID:
+                type: string
               apimService:
-                description: APIMService is the name of the APIMService custom resource
+                type: string
+              description:
                 type: string
               displayName:
-                description: DisplayName is the name shown in the APIM UI
                 type: string
-              tagId:
-                description: TagID is the unique identifier for the tag in APIM
+              productId:
                 type: string
+              published:
+                type: boolean
             required:
             - apimService
             - displayName
-            - tagId
+            - productId
             type: object
           status:
-            description: APIMTagStatus defines the observed state of APIMTag.
+            description: APIMProductStatus defines the observed state
             properties:
               message:
-                description: Message contains error details or status context
                 type: string
               phase:
-                description: Phase indicates lifecycle state like "Created" or "Error"
                 type: string
             type: object
         type: object

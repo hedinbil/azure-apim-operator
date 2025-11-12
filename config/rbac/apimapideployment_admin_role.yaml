@@ -1,7 +1,7 @@
 # This rule is not used by the project azure-apim-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants full permissions ('*') over apim.hedinit.io.
+# Grants full permissions ('*') over apim.operator.io.
 # This role is intended for users authorized to modify roles and bindings within the cluster,
 # enabling them to delegate specific permissions to other users or groups as needed.
 
@@ -14,13 +14,13 @@ metadata:
   name: apimapideployment-admin-role
 rules:
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimapideployments
   verbs:
   - '*'
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimapideployments/status
   verbs:

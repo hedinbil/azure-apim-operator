@@ -30,13 +30,13 @@ type ReplicaSetWatcherReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=replicasetwatchers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=replicasetwatchers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=replicasetwatchers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.hedinit.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.operator.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("replicasetwatcher_controller")
@@ -188,7 +188,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			Namespace: rs.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
-					Group:   "apim.hedinit.io",
+					Group:   "apim.operator.io",
 					Version: "v1",
 					Kind:    "APIMAPI",
 				}),

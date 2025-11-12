@@ -1,7 +1,7 @@
 # This rule is not used by the project azure-apim-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants read-only access to apim.hedinit.io resources.
+# Grants read-only access to apim.operator.io resources.
 # This role is intended for users who need visibility into these resources
 # without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
 
@@ -14,7 +14,7 @@ metadata:
   name: apiminboundpolicy-viewer-role
 rules:
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apiminboundpolicies
   verbs:
@@ -22,7 +22,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apiminboundpolicies/status
   verbs:

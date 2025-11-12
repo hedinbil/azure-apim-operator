@@ -1,4 +1,4 @@
-apiVersion: apim.hedinit.io/v1
+apiVersion: apim.operator.io/v1
 kind: APIMAPI
 metadata:
   labels:

@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapis.apim.hedinit.io
+  name: apimtags.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMAPI
-    listKind: APIMAPIList
-    plural: apimapis
-    singular: apimapi
+    kind: APIMTag
+    listKind: APIMTagList
+    plural: apimtags
+    singular: apimtag
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMAPI is the Schema for the apimapis API
+        description: APIMTag is the Schema for the apimtags API.
         properties:
           apiVersion:
             description: |-
@@ -37,46 +37,31 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMAPISpec defines the desired state of APIMAPI
+            description: APIMTagSpec defines the desired state of APIMTag.
             properties:
-              APIID:
-                type: string
               apimService:
+                description: APIMService is the name of the APIMService custom resource
                 type: string
-              openApiDefinitionUrl:
+              displayName:
+                description: DisplayName is the name shown in the APIM UI
                 type: string
-              productIds:
-                items:
-                  type: string
-                type: array
-              routePrefix:
+              tagId:
+                description: TagID is the unique identifier for the tag in APIM
                 type: string
-              serviceUrl:
-                type: string
-              tagIds:
-                items:
-                  type: string
-                type: array
             required:
-            - APIID
             - apimService
-            - openApiDefinitionUrl
-            - routePrefix
-            - serviceUrl
+            - displayName
+            - tagId
             type: object
           status:
+            description: APIMTagStatus defines the observed state of APIMTag.
             properties:
-              apiHost:
+              message:
+                description: Message contains error details or status context
                 type: string
-              developerPortalHost:
+              phase:
+                description: Phase indicates lifecycle state like "Created" or "Error"
                 type: string
-              importedAt:
-                type: string
-              status:
-                type: string
-            required:
-            - apiHost
-            - developerPortalHost
             type: object
         type: object
     served: true

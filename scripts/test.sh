@@ -2,11 +2,13 @@
 # set -euo pipefail
 
 # Default API endpoint
-# API_URL="https://petstore3.operations-test.external.hedinit.io/v3/user"
-API_URL="https://api-dev.hedinit.com/petstore3/user"
+# Replace with your API endpoint for testing
+API_URL="${API_URL:-https://api.example.com/v3/user}"
 
 # API Management subscription key (Ocp-Apim-Subscription-Key)
-SUBSCRIPTION_KEY="a41a90fea9314469a885e13fb3ac7023"
+# IMPORTANT: Set this via environment variable or replace with your test key
+# This key should be revoked if it was previously committed to version control
+SUBSCRIPTION_KEY="${SUBSCRIPTION_KEY:-your-subscription-key-here}"
 
 # JSON payload
 read -r -d '' PAYLOAD <<'EOF'

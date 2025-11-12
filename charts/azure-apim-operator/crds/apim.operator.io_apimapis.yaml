@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimapis.apim.hedinit.io
+  name: apimapis.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
     kind: APIMAPI
     listKind: APIMAPIList
@@ -17,11 +17,7 @@ spec:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: |-
-          APIMAPI is the Schema for the apimapis API.
-          APIMAPI is a Kubernetes custom resource that represents an API in Azure API Management.
-          When created, it triggers the import of an OpenAPI definition into APIM and configures
-          the API with the specified route prefix, service URL, products, and tags.
+        description: APIMAPI is the Schema for the apimapis API
         properties:
           apiVersion:
             description: |-
@@ -41,38 +37,23 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of the API in APIM.
+            description: APIMAPISpec defines the desired state of APIMAPI
             properties:
               APIID:
-                description: APIID is the unique identifier for the API in Azure APIM.
                 type: string
               apimService:
-                description: |-
-                  APIMService is the name of the APIMService custom resource that references
-                  the Azure API Management service instance.
                 type: string
               openApiDefinitionUrl:
-                description: OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger
-                  definition can be fetched.
                 type: string
               productIds:
-                description: |-
-                  ProductIDs is a list of product IDs to associate this API with in APIM.
-                  Products are used to group APIs and require subscriptions.
                 items:
                   type: string
                 type: array
               routePrefix:
-                description: RoutePrefix is the base route path in APIM (e.g., "/myapi").
                 type: string
               serviceUrl:
-                description: ServiceURL is the backend service URL that APIM will
-                  proxy requests to.
                 type: string
               tagIds:
-                description: |-
-                  TagIDs is a list of tag IDs to apply to this API in APIM.
-                  Tags are used for categorization and organization.
                 items:
                   type: string
                 type: array
@@ -84,23 +65,14 @@ spec:
             - serviceUrl
             type: object
           status:
-            description: Status reflects the observed state of the API in APIM.
             properties:
               apiHost:
-                description: ApiHost is the full URL to access the API through APIM
-                  (e.g., "https://api.example.com/myapi").
                 type: string
               developerPortalHost:
-                description: DeveloperPortalHost is the URL of the APIM developer
-                  portal.
                 type: string
               importedAt:
-                description: ImportedAt is the timestamp when the API was successfully
-                  imported into APIM.
                 type: string
               status:
-                description: Status indicates the current status of the API (e.g.,
-                  "OK", "Error").
                 type: string
             required:
             - apiHost

@@ -5,7 +5,7 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimapideployments
   - apimapis
@@ -23,7 +23,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimapideployments/finalizers
   - apimapis/finalizers
@@ -35,7 +35,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - apim.hedinit.io
+  - apim.operator.io
   resources:
   - apimapideployments/status
   - apimapis/status

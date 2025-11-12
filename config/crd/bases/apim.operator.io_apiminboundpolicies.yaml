@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: apimproducts.apim.hedinit.io
+  name: apiminboundpolicies.apim.operator.io
 spec:
-  group: apim.hedinit.io
+  group: apim.operator.io
   names:
-    kind: APIMProduct
-    listKind: APIMProductList
-    plural: apimproducts
-    singular: apimproduct
+    kind: APIMInboundPolicy
+    listKind: APIMInboundPolicyList
+    plural: apiminboundpolicies
+    singular: apiminboundpolicy
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: APIMProduct is the Schema for the apimproducts API
+        description: APIMInboundPolicy is the Schema for the apiminboundpolicies API.
         properties:
           apiVersion:
             description: |-
@@ -37,31 +37,39 @@ spec:
           metadata:
             type: object
           spec:
-            description: APIMProductSpec defines the desired state
+            description: APIMInboundPolicySpec defines the desired state of APIMInboundPolicy.
             properties:
-              apiID:
+              apiId:
+                description: APIID is the unique identifier for the API in APIM where
+                  the policy will be applied
                 type: string
               apimService:
+                description: APIMService is the name of the APIMService custom resource
                 type: string
-              description:
+              operationId:
+                description: |-
+                  OperationID is the unique identifier for the operation (endpoint) within the API.
+                  If specified, the policy will be applied to this specific operation.
+                  If not specified, the policy will be applied to the entire API.
                 type: string
-              displayName:
+              policyContent:
+                description: |-
+                  PolicyContent is the XML content of the policy to be applied.
+                  This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
                 type: string
-              productId:
-                type: string
-              published:
-                type: boolean
             required:
+            - apiId
             - apimService
-            - displayName
-            - productId
+            - policyContent
             type: object
           status:
-            description: APIMProductStatus defines the observed state
+            description: APIMInboundPolicyStatus defines the observed state of APIMInboundPolicy.
             properties:
               message:
+                description: Message contains error details or status context
                 type: string
               phase:
+                description: Phase indicates lifecycle state like "Created" or "Error"
                 type: string
             type: object
         type: object
