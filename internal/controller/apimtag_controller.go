@@ -94,7 +94,7 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		tag.Status.Phase = phaseError
-		tag.Status.Message = "Failed to get Azure token"
+		tag.Status.Message = errMsgFailedToGetAzureToken
 		_ = r.Status().Update(ctx, &tag)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}

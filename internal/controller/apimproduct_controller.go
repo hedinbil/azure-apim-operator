@@ -42,6 +42,11 @@ const (
 	phaseCreated = "Created" // Indicates the product was successfully created or updated.
 )
 
+// Error message constants shared across controllers.
+const (
+	errMsgFailedToGetAzureToken = "Failed to get Azure token"
+)
+
 // APIMProductReconciler reconciles APIMProduct custom resources.
 // This controller manages products in Azure API Management, which are used to group
 // APIs and require subscriptions for access. Products can be published or unpublished
@@ -103,7 +108,7 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		product.Status.Phase = phaseError
-		product.Status.Message = "Failed to get Azure token"
+		product.Status.Message = errMsgFailedToGetAzureToken
 		_ = r.Status().Update(ctx, &product)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}

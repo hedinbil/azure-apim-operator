@@ -91,7 +91,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		policy.Status.Phase = phaseError
-		policy.Status.Message = "Failed to get Azure token"
+		policy.Status.Message = errMsgFailedToGetAzureToken
 		_ = r.Status().Update(ctx, &policy)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
