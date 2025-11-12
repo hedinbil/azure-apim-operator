@@ -64,6 +64,12 @@ jobs:
         run: |
           az acr login --name ${{ env.ACR_NAME }}
 
+      - name: Get short SHA
+        id: sha
+        run: |
+          echo "short_sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
+          echo "🔖 Short SHA: ${GITHUB_SHA::8}"
+
       - name: Determine image version
         id: version
         run: |
@@ -109,7 +115,7 @@ jobs:
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${GITHUB_SHA::8}
+            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}
             ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-latest
           cache-from: type=gha
@@ -117,6 +123,6 @@ jobs:
 
       - name: Image digest
         run: |
-          echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${GITHUB_SHA::8}"
+          echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}"
           echo "✅ Image pushed: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-latest"
 
