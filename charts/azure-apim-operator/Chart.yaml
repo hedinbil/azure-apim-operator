@@ -1,6 +1,6 @@
 apiVersion: v2
 name: azure-apim-operator
-description: A Helm chart for Kubernetes
+description: A Kubernetes operator that automates the registration and management of APIs in Azure API Management (APIM) using declarative Custom Resource Definitions (CRDs)
 
 # A chart can be either an 'application' or a 'library' chart.
 #
