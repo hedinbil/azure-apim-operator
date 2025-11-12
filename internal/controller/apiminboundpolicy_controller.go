@@ -138,8 +138,24 @@ func (r *APIMInboundPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMInboundPolicy{}).
 		WithEventFilter(predicate.Funcs{
-			CreateFunc:  func(e event.CreateEvent) bool { return true },
-			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
+			CreateFunc: func(e event.CreateEvent) bool { return true },
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Only reconcile on policy updates when the spec changes
+				// This ensures policy changes are picked up and applied to APIM
+				oldPolicy, ok := e.ObjectOld.(*apimv1.APIMInboundPolicy)
+				if !ok {
+					return false
+				}
+				newPolicy, ok := e.ObjectNew.(*apimv1.APIMInboundPolicy)
+				if !ok {
+					return false
+				}
+				// Reconcile if any spec field changed
+				return oldPolicy.Spec.APIMService != newPolicy.Spec.APIMService ||
+					oldPolicy.Spec.APIID != newPolicy.Spec.APIID ||
+					oldPolicy.Spec.OperationID != newPolicy.Spec.OperationID ||
+					oldPolicy.Spec.PolicyContent != newPolicy.Spec.PolicyContent
+			},
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
 		}).
