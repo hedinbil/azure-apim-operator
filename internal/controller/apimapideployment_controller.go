@@ -89,7 +89,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
-	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status)
+	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status, "apiID", deployment.Spec.APIID)
 
 	// Step 1: Fetch the OpenAPI definition from the specified URL.
 	// This uses retry logic to handle transient network failures.
@@ -111,7 +111,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Fetch the OpenAPI definition with retry logic to handle transient failures.
 	openApiContent, err := fetchOpenAPIDefinitionWithRetry(openApiURL, 5)
 	if err != nil {
-		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries")
+		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("📥 OpenAPI definition downloaded",
@@ -125,12 +125,12 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
-		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
+		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
 	}
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
-		logger.Error(err, "❌ Failed to get Azure token")
+		logger.Error(err, "❌ Failed to get Azure token", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	logger.Info("🔐 Obtained Azure AD token for APIM call", "apiID", deployment.Spec.APIID)
@@ -162,7 +162,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 4: Import the OpenAPI definition into Azure APIM.
 	// This creates or updates the API in APIM with the provided specification.
 	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
-		logger.Error(err, "🚫 Failed to import API")
+		logger.Error(err, "🚫 Failed to import API", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
@@ -170,7 +170,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 5: Update the backend service URL for the API.
 	// This points the API to the correct backend service endpoint.
 	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
-		logger.Error(err, "🚫 Failed to patch service URL")
+		logger.Error(err, "🚫 Failed to patch service URL", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
@@ -179,31 +179,31 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Products are used to group APIs and require subscriptions for access.
 	if len(config.ProductIDs) > 0 {
 		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
-			logger.Error(err, "🚫 Failed to assign API to products", "productIDs", config.ProductIDs)
+			logger.Error(err, "🚫 Failed to assign API to products", "apiID", deployment.Spec.APIID, "productIDs", config.ProductIDs)
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
 		logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
 	} else {
-		logger.Info("ℹ️ No product IDs configured; skipping product assignment")
+		logger.Info("ℹ️ No product IDs configured; skipping product assignment", "apiID", deployment.Spec.APIID)
 	}
 
 	// Step 7: Assign the API to all configured tags (if any).
 	// Tags help organize and categorize APIs for better management.
 	if len(config.TagIDs) > 0 {
 		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
-			logger.Error(err, "🚫 Failed to assign API to tags", "tagIDs", config.TagIDs)
+			logger.Error(err, "🚫 Failed to assign API to tags", "apiID", deployment.Spec.APIID, "tagIDs", config.TagIDs)
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
 		logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
 	} else {
-		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment")
+		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment", "apiID", deployment.Spec.APIID)
 	}
 
 	// Step 8: Fetch APIM service host details and update the APIMAPI status.
 	// This provides the full URLs for accessing the API through APIM.
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
-		logger.Error(err, "⚠️ Failed to fetch APIM details")
+		logger.Error(err, "⚠️ Failed to fetch APIM details", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 
@@ -214,11 +214,12 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
 	if err := r.Status().Update(ctx, &apimApi); err != nil {
-		logger.Error(err, "⚠️ Failed to update APIMAPI status")
+		logger.Error(err, "⚠️ Failed to update APIMAPI status", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 	logger.Info("📝 APIMAPI status updated after import",
 		"name", apimApi.Name,
+		"apiID", deployment.Spec.APIID,
 		"apiHost", apimApi.Status.ApiHost,
 		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
 	)
@@ -226,10 +227,10 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 9: Clean up the deployment custom resource after successful completion.
 	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
 	if err := r.Delete(ctx, &deployment); err != nil {
-		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object")
+		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
-	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", deployment.Name)
+	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", deployment.Name, "apiID", deployment.Spec.APIID)
 
 	return ctrl.Result{}, nil
 }
