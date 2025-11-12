@@ -121,7 +121,6 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		apimParams.ServiceName,
 		apiID,
 	)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(openApiContent))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request")
