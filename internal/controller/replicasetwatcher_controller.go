@@ -176,6 +176,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"openApiUrl", apimApi.Spec.OpenAPIDefinitionURL,
 		"productCount", len(apimApi.Spec.ProductIDs),
 		"tagCount", len(apimApi.Spec.TagIDs),
+		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
 	)
 
 	if apimApi.Spec.OpenAPIDefinitionURL == "" {
