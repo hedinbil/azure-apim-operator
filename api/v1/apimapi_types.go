@@ -24,6 +24,11 @@ type APIMAPISpec struct {
 	APIMService string `json:"apimService"`
 	// APIID is the unique identifier for the API in Azure APIM.
 	APIID string `json:"APIID"`
+	// SubscriptionRequired controls whether a subscription key is required to access the API.
+	// If set to false, the API can be accessed without a subscription key.
+	// If not specified, defaults to true (subscription required).
+	// +optional
+	SubscriptionRequired *bool `json:"subscriptionRequired,omitempty"`
 }
 
 // APIMAPIStatus defines the observed state of APIMAPI.

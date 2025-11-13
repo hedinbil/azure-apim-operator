@@ -28,6 +28,11 @@ type APIMAPIDeploymentSpec struct {
 	APIID string `json:"APIID"`
 	// Revision is an optional API revision number. If specified, a new revision will be created.
 	Revision string `json:"revision,omitempty"`
+	// SubscriptionRequired controls whether a subscription key is required to access the API.
+	// If set to false, the API can be accessed without a subscription key.
+	// If not specified, defaults to true (subscription required).
+	// +optional
+	SubscriptionRequired *bool `json:"subscriptionRequired,omitempty"`
 }
 
 // APIMAPIDeploymentStatus defines the observed state of APIMAPIDeployment.

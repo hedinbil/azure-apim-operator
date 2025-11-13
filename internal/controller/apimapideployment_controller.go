@@ -40,9 +40,10 @@ import (
 // 1. Fetching the OpenAPI definition
 // 2. Importing it into APIM
 // 3. Configuring the service URL
-// 4. Associating products and tags
-// 5. Updating the APIMAPI status with host information
-// 6. Cleaning up the deployment resource after successful completion
+// 4. Setting subscription requirements
+// 5. Associating products and tags
+// 6. Updating the APIMAPI status with host information
+// 7. Cleaning up the deployment resource after successful completion
 type APIMAPIDeploymentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -137,16 +138,17 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Step 3: Build the APIM deployment configuration with all necessary parameters.
 	config := apim.APIMDeploymentConfig{
-		SubscriptionID: deployment.Spec.Subscription,
-		ResourceGroup:  deployment.Spec.ResourceGroup,
-		ServiceName:    deployment.Spec.APIMService,
-		APIID:          deployment.Spec.APIID,
-		RoutePrefix:    deployment.Spec.RoutePrefix,
-		ServiceURL:     deployment.Spec.ServiceURL,
-		Revision:       deployment.Spec.Revision,
-		BearerToken:    token,
-		ProductIDs:     deployment.Spec.ProductIDs,
-		TagIDs:         deployment.Spec.TagIDs,
+		SubscriptionID:       deployment.Spec.Subscription,
+		ResourceGroup:        deployment.Spec.ResourceGroup,
+		ServiceName:          deployment.Spec.APIMService,
+		APIID:                deployment.Spec.APIID,
+		RoutePrefix:          deployment.Spec.RoutePrefix,
+		ServiceURL:           deployment.Spec.ServiceURL,
+		Revision:             deployment.Spec.Revision,
+		BearerToken:          token,
+		ProductIDs:           deployment.Spec.ProductIDs,
+		TagIDs:               deployment.Spec.TagIDs,
+		SubscriptionRequired: deployment.Spec.SubscriptionRequired,
 	}
 	logger.Info("🛠️ Built APIM deployment config",
 		"apiID", config.APIID,
@@ -175,7 +177,20 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
-	// Step 6: Assign the API to all configured products (if any).
+	// Step 6: Update the subscription requirement setting for the API.
+	// This controls whether a subscription key is required to access the API.
+	// Defaults to true (subscription required) if not explicitly set to false.
+	subscriptionRequired := true
+	if config.SubscriptionRequired != nil {
+		subscriptionRequired = *config.SubscriptionRequired
+	}
+	if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
+		logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+	logger.Info("✅ Subscription requirement patched in APIM", "apiID", deployment.Spec.APIID, "subscriptionRequired", subscriptionRequired)
+
+	// Step 7: Assign the API to all configured products (if any).
 	// Products are used to group APIs and require subscriptions for access.
 	if len(config.ProductIDs) > 0 {
 		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
@@ -187,7 +202,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ No product IDs configured; skipping product assignment", "apiID", deployment.Spec.APIID)
 	}
 
-	// Step 7: Assign the API to all configured tags (if any).
+	// Step 8: Assign the API to all configured tags (if any).
 	// Tags help organize and categorize APIs for better management.
 	if len(config.TagIDs) > 0 {
 		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
@@ -199,7 +214,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment", "apiID", deployment.Spec.APIID)
 	}
 
-	// Step 8: Fetch APIM service host details and update the APIMAPI status.
+	// Step 9: Fetch APIM service host details and update the APIMAPI status.
 	// This provides the full URLs for accessing the API through APIM.
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
@@ -224,7 +239,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
 	)
 
-	// Step 9: Clean up the deployment custom resource after successful completion.
+	// Step 10: Clean up the deployment custom resource after successful completion.
 	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
 	if err := r.Delete(ctx, &deployment); err != nil {
 		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object", "apiID", deployment.Spec.APIID)

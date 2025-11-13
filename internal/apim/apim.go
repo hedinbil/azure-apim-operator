@@ -197,7 +197,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 
 	body := fmt.Sprintf(`{"properties":{"serviceUrl":"%s"}}`, config.ServiceURL)
 
-	// Log what we’re about to do
+	// Log what we're about to do
 	logger.Info("🔧 Patching APIM service URL",
 		"method", http.MethodPatch,
 		"url", patchURL,
@@ -238,6 +238,74 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 		"apiID", config.APIID,
 		"status", resp.Status,
 		"serviceUrl", config.ServiceURL,
+	)
+
+	return nil
+}
+
+// SetSubscriptionRequired updates the subscription requirement setting for an existing API in Azure APIM.
+// This controls whether a subscription key is required to access the API.
+// If subscriptionRequired is nil, it defaults to true (subscription required).
+// Only if explicitly set to false will subscription be disabled.
+func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) error {
+	// Default to true if not explicitly set
+	subscriptionRequired := true
+	if config.SubscriptionRequired != nil {
+		subscriptionRequired = *config.SubscriptionRequired
+	}
+
+	patchURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.APIID,
+	)
+
+	// Build the JSON body with the subscriptionRequired property
+	body := fmt.Sprintf(`{"properties":{"subscriptionRequired":%t}}`, subscriptionRequired)
+
+	// Log what we're about to do
+	logger.Info("🔧 Patching APIM subscription requirement",
+		"method", http.MethodPatch,
+		"url", patchURL,
+		"apiID", config.APIID,
+		"subscriptionRequired", subscriptionRequired,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("building PATCH request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("patch request failed: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		errMsg := fmt.Errorf("status code: %d", resp.StatusCode)
+		logger.Error(errMsg, "❌ PATCH returned error",
+			"apiID", config.APIID,
+			"status", resp.Status,
+			"body", string(respBody),
+		)
+		return fmt.Errorf("subscriptionRequired patch failed: %s\n%s", resp.Status, string(respBody))
+	}
+
+	logger.Info("✅ Successfully patched subscriptionRequired",
+		"apiID", config.APIID,
+		"status", resp.Status,
+		"subscriptionRequired", subscriptionRequired,
 	)
 
 	return nil
@@ -408,4 +476,7 @@ type APIMDeploymentConfig struct {
 	ProductIDs []string
 	// TagIDs is a list of tag IDs to apply to this API in APIM.
 	TagIDs []string
+	// SubscriptionRequired controls whether a subscription key is required to access the API.
+	// If nil, defaults to true (subscription required). If set to false, subscription is disabled.
+	SubscriptionRequired *bool
 }

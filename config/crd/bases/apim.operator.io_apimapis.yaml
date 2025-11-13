@@ -76,6 +76,12 @@ spec:
                 items:
                   type: string
                 type: array
+              subscriptionRequired:
+                description: |-
+                  SubscriptionRequired controls whether a subscription key is required to access the API.
+                  If set to false, the API can be accessed without a subscription key.
+                  If not specified, defaults to true (subscription required).
+                type: boolean
             required:
             - APIID
             - apimService
