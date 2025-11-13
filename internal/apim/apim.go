@@ -250,8 +250,16 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) error {
 	// Default to true if not explicitly set
 	subscriptionRequired := true
+	logger.Info("🔍 SetSubscriptionRequired called",
+		"apiID", config.APIID,
+		"config.SubscriptionRequired", config.SubscriptionRequired,
+		"config.SubscriptionRequiredIsNil", config.SubscriptionRequired == nil,
+	)
 	if config.SubscriptionRequired != nil {
 		subscriptionRequired = *config.SubscriptionRequired
+		logger.Info("✅ Using explicit subscriptionRequired value", "apiID", config.APIID, "value", subscriptionRequired)
+	} else {
+		logger.Info("⚠️ subscriptionRequired is nil, defaulting to true", "apiID", config.APIID)
 	}
 
 	patchURL := fmt.Sprintf(

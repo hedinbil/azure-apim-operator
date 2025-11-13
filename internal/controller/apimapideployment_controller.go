@@ -78,6 +78,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"revision", deployment.Spec.Revision,
 		"routePrefix", deployment.Spec.RoutePrefix,
 		"openApiUrl", deployment.Spec.OpenAPIDefinitionURL,
+		"subscriptionRequired", deployment.Spec.SubscriptionRequired,
 	)
 
 	// Fetch the associated APIMAPI resource to update its status after deployment.
@@ -159,6 +160,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"revision", config.Revision,
 		"productCount", len(config.ProductIDs),
 		"tagCount", len(config.TagIDs),
+		"subscriptionRequired", config.SubscriptionRequired,
 	)
 
 	// Step 4: Import the OpenAPI definition into Azure APIM.
