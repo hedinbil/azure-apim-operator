@@ -77,17 +77,18 @@ spec:
                 description: Subscription is the Azure subscription ID where the APIM
                   service is deployed.
                 type: string
-              tagIds:
-                description: TagIDs is a list of tag IDs to apply to this API in APIM.
-                items:
-                  type: string
-                type: array
               subscriptionRequired:
+                default: true
                 description: |-
                   SubscriptionRequired controls whether a subscription key is required to access the API.
                   If set to false, the API can be accessed without a subscription key.
                   If not specified, defaults to true (subscription required).
                 type: boolean
+              tagIds:
+                description: TagIDs is a list of tag IDs to apply to this API in APIM.
+                items:
+                  type: string
+                type: array
             required:
             - APIID
             - apimService

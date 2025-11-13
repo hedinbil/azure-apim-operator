@@ -69,6 +69,13 @@ spec:
                 description: ServiceURL is the backend service URL that APIM will
                   proxy requests to.
                 type: string
+              subscriptionRequired:
+                default: true
+                description: |-
+                  SubscriptionRequired controls whether a subscription key is required to access the API.
+                  If set to false, the API can be accessed without a subscription key.
+                  If not specified, defaults to true (subscription required).
+                type: boolean
               tagIds:
                 description: |-
                   TagIDs is a list of tag IDs to apply to this API in APIM.
@@ -76,12 +83,6 @@ spec:
                 items:
                   type: string
                 type: array
-              subscriptionRequired:
-                description: |-
-                  SubscriptionRequired controls whether a subscription key is required to access the API.
-                  If set to false, the API can be accessed without a subscription key.
-                  If not specified, defaults to true (subscription required).
-                type: boolean
             required:
             - APIID
             - apimService

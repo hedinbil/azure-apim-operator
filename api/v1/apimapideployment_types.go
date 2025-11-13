@@ -31,6 +31,7 @@ type APIMAPIDeploymentSpec struct {
 	// SubscriptionRequired controls whether a subscription key is required to access the API.
 	// If set to false, the API can be accessed without a subscription key.
 	// If not specified, defaults to true (subscription required).
+	// +kubebuilder:default=true
 	SubscriptionRequired bool `json:"subscriptionRequired,omitempty"`
 }
 
