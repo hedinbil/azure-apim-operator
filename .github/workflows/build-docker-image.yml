@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Image version (e.g., v0.20.0)'
+        description: 'Image version (e.g., v0.21.0)'
         required: true
-        default: 'v0.20.0'
+        default: 'v0.21.0'
 
 permissions:
   contents: write
@@ -76,7 +76,7 @@ jobs:
           # Image version scenarios:
           # 
           # Scenario 1: Manual workflow dispatch (workflow_dispatch)
-          #   - Base version: Uses the 'version' input parameter (default: v0.20.0)
+          #   - Base version: Uses the 'version' input parameter (default: v0.21.0)
           #   - Example tags: v0.21.0-abc12345, latest, v0.21.0-latest
           #
           # Scenario 2: Git tag push (refs/tags/*)
@@ -84,8 +84,8 @@ jobs:
           #   - Example tags: v0.22.0-def67890, latest, v0.22.0-latest
           #
           # Scenario 3: Push to main branch or pull request
-          #   - Base version: Hardcoded to v0.20.0
-          #   - Example tags: v0.20.0-12345678, latest, v0.20.0-latest
+          #   - Base version: Hardcoded to v0.21.0
+          #   - Example tags: v0.21.0-12345678, latest, v0.21.0-latest
           #   - Note: Pull requests build but don't push images
           #
           # All scenarios create three tags:
@@ -104,8 +104,8 @@ jobs:
             echo "🔖 Base version: ${VERSION}"
           else
             # Scenario 3: Push to main branch or pull request
-            echo "version=v0.20.0" >> $GITHUB_OUTPUT
-            echo "🔖 Base version: v0.20.0"
+            echo "version=v0.21.0" >> $GITHUB_OUTPUT
+            echo "🔖 Base version: v0.21.0"
           fi
 
       - name: Build and push Docker image
