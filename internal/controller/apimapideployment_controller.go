@@ -182,10 +182,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 6: Update the subscription requirement setting for the API.
 	// This controls whether a subscription key is required to access the API.
 	// Defaults to true (subscription required) if not explicitly set to false.
-	subscriptionRequired := true
-	if config.SubscriptionRequired != nil {
-		subscriptionRequired = *config.SubscriptionRequired
-	}
+	subscriptionRequired := config.SubscriptionRequired
 	if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
