@@ -222,20 +222,23 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Update the APIMAPI status with deployment information.
+	// Use Patch to update only status without touching spec fields (like subscriptionRequired).
+	statusPatch := client.MergeFrom(apimApi.DeepCopy())
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.Status = "OK"
 	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
-	if err := r.Status().Update(ctx, &apimApi); err != nil {
-		logger.Error(err, "⚠️ Failed to update APIMAPI status", "apiID", deployment.Spec.APIID)
+	if err := r.Status().Patch(ctx, &apimApi, statusPatch); err != nil {
+		logger.Error(err, "⚠️ Failed to patch APIMAPI status", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
-	logger.Info("📝 APIMAPI status updated after import",
+	logger.Info("📝 APIMAPI status patched after import",
 		"name", apimApi.Name,
 		"apiID", deployment.Spec.APIID,
 		"apiHost", apimApi.Status.ApiHost,
 		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
 	)
 
 	// Step 10: Clean up the deployment custom resource after successful completion.
