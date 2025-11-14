@@ -125,22 +125,40 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		BearerToken:    token,
 	}
 
-	if err := apim.UpsertProduct(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
-		product.Status.Phase = phaseError
-		product.Status.Message = err.Error()
+	// Check if the product is being deleted
+	if !product.DeletionTimestamp.IsZero() {
+		logger.Info("🗑️ APIMProduct is being deleted", "name", req.NamespacedName, "productId", cfg.ProductID)
+		if err := apim.DeleteProduct(ctx, cfg); err != nil {
+			logger.Error(err, "❌ Failed to delete product in APIM", "productId", cfg.ProductID)
+			product.Status.Phase = phaseError
+			product.Status.Message = err.Error()
+			if updateErr := r.Status().Update(ctx, &product); updateErr != nil {
+				logger.Error(updateErr, "❌ Failed to update APIMProduct status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		logger.Info("✅ Successfully deleted APIM product", "productId", cfg.ProductID)
+		return ctrl.Result{}, nil
 	} else {
+		// Handle creation/update
+		if err := apim.UpsertProduct(ctx, cfg); err != nil {
+			logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
+			product.Status.Phase = phaseError
+			product.Status.Message = err.Error()
+			if updateErr := r.Status().Update(ctx, &product); updateErr != nil {
+				logger.Error(updateErr, "❌ Failed to update APIMProduct status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
 		product.Status.Phase = phaseCreated
 		product.Status.Message = "Product created successfully"
+		if err := r.Status().Update(ctx, &product); err != nil {
+			logger.Error(err, "❌ Failed to update APIMProduct status")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
-
-	if err := r.Status().Update(ctx, &product); err != nil {
-		logger.Error(err, "❌ Failed to update APIMProduct status")
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -150,7 +168,7 @@ func (r *APIMProductReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(predicate.Funcs{
 			CreateFunc:  func(e event.CreateEvent) bool { return true },
 			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
-			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
+			DeleteFunc:  func(e event.DeleteEvent) bool { return true },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
 		}).
 		Named("apimproduct").

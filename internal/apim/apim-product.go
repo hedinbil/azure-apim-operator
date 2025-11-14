@@ -93,6 +93,71 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 	return nil
 }
 
+// DeleteProduct deletes a product from Azure APIM.
+// Products are used to group APIs and require subscriptions for access.
+// This function removes the product from the APIM service.
+func DeleteProduct(ctx context.Context, config APIMProductConfig) error {
+	// Skip if no product ID is provided.
+	if config.ProductID == "" {
+		logger.Info("ℹ️ No product ID specified; skipping product deletion")
+		return nil
+	}
+
+	productURL := fmt.Sprintf(
+		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s?api-version=2021-08-01",
+		config.SubscriptionID,
+		config.ResourceGroup,
+		config.ServiceName,
+		config.ProductID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, productURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build product deletion request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	req.Header.Set("If-Match", "*")
+
+	logger.Info("🗑️ Deleting product",
+		"productId", config.ProductID,
+		"url", productURL,
+	)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("product deletion request failed: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.Error(closeErr, "⚠️ Failed to close response body")
+		}
+	}()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 404 {
+		logger.Info("ℹ️ Product not found, already deleted",
+			"productId", config.ProductID,
+		)
+		return nil // Product doesn't exist, consider deletion successful
+	}
+
+	if resp.StatusCode >= 300 {
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to delete product",
+			"status", resp.Status,
+			"body", string(body),
+		)
+		return fmt.Errorf("failed to delete product: %s\n%s", resp.Status, string(body))
+	}
+
+	logger.Info("✅ Product deleted successfully",
+		"productId", config.ProductID,
+		"status", resp.Status,
+	)
+
+	return nil
+}
+
 // AssignProductsToAPI associates an API with one or more products in Azure APIM.
 // Products are used to group APIs and require subscriptions for access.
 // This function assigns the API to all products specified in the config.
