@@ -97,6 +97,7 @@ spec:
             - routePrefix
             - serviceUrl
             - subscription
+            - subscriptionRequired
             type: object
           status:
             description: |-

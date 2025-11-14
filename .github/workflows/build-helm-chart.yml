@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Chart version (e.g., 0.22.0)'
+        description: 'Chart version (e.g., 0.23.0)'
         required: true
-        default: '0.22.0'
+        default: '0.23.0'
 
 permissions:
   contents: write

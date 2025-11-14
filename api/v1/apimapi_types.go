@@ -28,7 +28,7 @@ type APIMAPISpec struct {
 	// If set to false, the API can be accessed without a subscription key.
 	// If not specified, defaults to true (subscription required).
 	// +kubebuilder:default=true
-	SubscriptionRequired bool `json:"subscriptionRequired,omitempty"`
+	SubscriptionRequired bool `json:"subscriptionRequired"`
 }
 
 // APIMAPIStatus defines the observed state of APIMAPI.

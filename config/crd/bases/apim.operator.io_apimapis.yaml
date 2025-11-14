@@ -89,6 +89,7 @@ spec:
             - openApiDefinitionUrl
             - routePrefix
             - serviceUrl
+            - subscriptionRequired
             type: object
           status:
             description: Status reflects the observed state of the API in APIM.
