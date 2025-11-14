@@ -116,10 +116,12 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
+	// Check if an APIMAPIDeployment already exists. If it does, delete it first
+	// to ensure we get the latest version of the swagger when the pod becomes ready.
 	var existingRevision apimv1.APIMAPIDeployment
 	err = r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existingRevision)
 	if err == nil {
-		logger.Info("♻️ APIMAPIDeployment already exists, recreating", "name", appName)
+		logger.Info("♻️ APIMAPIDeployment already exists, deleting to get latest swagger", "name", appName)
 		if err := r.Delete(ctx, &existingRevision); err != nil {
 			logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", appName)
 			return ctrl.Result{}, err
@@ -248,7 +250,11 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
 					return false
 				}
-				return true
+				// Only process Create events if pods are already ready.
+				// If pods aren't ready yet, we'll wait for the Update event when ReadyReplicas
+				// changes from 0 to >0. This prevents duplicate deployments from both Create
+				// and Update events when a ReplicaSet is created with ready pods.
+				return rs.Status.ReadyReplicas > 0
 			},
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				// Only reconcile on ReplicaSet updates when the status changes
@@ -272,6 +278,8 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				// Reconcile only when ReadyReplicas changes from 0 to greater than 0.
 				// This ensures we only trigger APIM deployments when pods actually become ready,
 				// not when they decrease or change in other ways.
+				// This handles the case where a ReplicaSet is created with ReadyReplicas = 0,
+				// and then pods become ready later.
 				return oldRS.Status.ReadyReplicas == 0 && newRS.Status.ReadyReplicas > 0
 			},
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
