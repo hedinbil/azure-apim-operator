@@ -54,35 +54,39 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name)
 
-	// Only update annotations if the API host is available and the annotation needs updating.
-	// Use Patch instead of Update to avoid overwriting spec fields (like subscriptionRequired).
-	expectedAnnotation := apimApi.Status.ApiHost
-	currentAnnotation := ""
-	if apimApi.Annotations != nil {
-		currentAnnotation = apimApi.Annotations["link.argocd.argoproj.io/external-link"]
+	// Initialize annotations map if it doesn't exist.
+	if apimApi.Annotations == nil {
+		apimApi.Annotations = map[string]string{}
+		logger.Info("ℹ️ Annotations were nil, initializing map")
 	}
 
-	// Only patch if the annotation is missing or different
-	if expectedAnnotation != "" && currentAnnotation != expectedAnnotation {
-		// Use Patch to update only annotations without touching the spec
-		patch := client.MergeFrom(apimApi.DeepCopy())
-		if apimApi.Annotations == nil {
-			apimApi.Annotations = make(map[string]string)
-		}
-		apimApi.Annotations["link.argocd.argoproj.io/external-link"] = expectedAnnotation
+	// Update the ArgoCD external link annotation with the API host URL.
+	// This allows ArgoCD to display a link to the API in its UI.
+	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
 
-		if err := r.Patch(ctx, &apimApi, patch); err != nil {
-			logger.Error(err, "❌ Failed to patch APIMAPI annotations")
-			return ctrl.Result{}, err
-		}
-		logger.Info("✅ Successfully patched APIMAPI annotations", "name", apimApi.Name,
-			"annotation", expectedAnnotation,
-			"subscriptionRequired", apimApi.Spec.SubscriptionRequired)
-	} else if expectedAnnotation == "" {
-		logger.Info("ℹ️ Skipping annotation update - API host not available yet", "name", apimApi.Name)
+	if err := r.Update(ctx, &apimApi); err != nil {
+		logger.Error(err, "❌ Failed to update APIMAPI with external link annotations")
+		return ctrl.Result{}, err
 	} else {
-		logger.Info("ℹ️ Annotation already up to date", "name", apimApi.Name,
-			"subscriptionRequired", apimApi.Spec.SubscriptionRequired)
+		logger.Info("📋 APIMAPI details after successful update",
+			"name", apimApi.Name,
+			"namespace", apimApi.Namespace,
+			"generation", apimApi.Generation,
+			"resourceVersion", apimApi.ResourceVersion,
+			"apiID", apimApi.Spec.APIID,
+			"apimService", apimApi.Spec.APIMService,
+			"routePrefix", apimApi.Spec.RoutePrefix,
+			"serviceUrl", apimApi.Spec.ServiceURL,
+			"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
+			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+			"productIds", apimApi.Spec.ProductIDs,
+			"tagIds", apimApi.Spec.TagIDs,
+			"apiHost", apimApi.Status.ApiHost,
+			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+			"status", apimApi.Status.Status,
+			"importedAt", apimApi.Status.ImportedAt,
+			"externalLinkAnnotation", apimApi.Annotations["link.argocd.argoproj.io/external-link"],
+		)
 	}
 
 	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name)
