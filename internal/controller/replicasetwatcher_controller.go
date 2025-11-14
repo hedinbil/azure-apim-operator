@@ -198,10 +198,6 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
 	)
 
-	if apimApi.Spec.OpenAPIDefinitionURL == "" {
-		logger.Info("⚠️ APIMAPI spec has empty openApiDefinitionUrl; import will fail unless set")
-	}
-
 	apiDeployment := &apimv1.APIMAPIDeployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appName,
@@ -241,7 +237,19 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.ReplicaSet{}).
 		WithEventFilter(predicate.Funcs{
-			CreateFunc: func(e event.CreateEvent) bool { return true },
+			CreateFunc: func(e event.CreateEvent) bool {
+				// Skip creates for old ReplicaSet revisions that have been scaled down to 0.
+				// When a Deployment is updated, old ReplicaSets may be recreated or watched
+				// with 0 replicas, and we should not process these old revisions.
+				rs, ok := e.Object.(*appsv1.ReplicaSet)
+				if !ok {
+					return false
+				}
+				if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+					return false
+				}
+				return true
+			},
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				// Only reconcile on ReplicaSet updates when the status changes
 				// Specifically, when ReadyReplicas changes, indicating pods becoming ready
@@ -253,8 +261,18 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if !ok {
 					return false
 				}
-				// Reconcile if ReadyReplicas changed
-				return oldRS.Status.ReadyReplicas != newRS.Status.ReadyReplicas
+
+				// Skip updates on old ReplicaSet revisions that have been scaled down to 0.
+				// When a Deployment is updated, the old ReplicaSet is scaled down to 0,
+				// and we should not process these old revisions even if ReadyReplicas changes.
+				if newRS.Spec.Replicas != nil && *newRS.Spec.Replicas == 0 {
+					return false
+				}
+
+				// Reconcile only when ReadyReplicas changes from 0 to greater than 0.
+				// This ensures we only trigger APIM deployments when pods actually become ready,
+				// not when they decrease or change in other ways.
+				return oldRS.Status.ReadyReplicas == 0 && newRS.Status.ReadyReplicas > 0
 			},
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
