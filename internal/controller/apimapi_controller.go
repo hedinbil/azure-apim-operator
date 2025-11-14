@@ -67,6 +67,26 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.Update(ctx, &apimApi); err != nil {
 		logger.Error(err, "❌ Failed to update APIMAPI with external link annotations")
 		return ctrl.Result{}, err
+	} else {
+		logger.Info("📋 APIMAPI details after successful update",
+			"name", apimApi.Name,
+			"namespace", apimApi.Namespace,
+			"generation", apimApi.Generation,
+			"resourceVersion", apimApi.ResourceVersion,
+			"apiID", apimApi.Spec.APIID,
+			"apimService", apimApi.Spec.APIMService,
+			"routePrefix", apimApi.Spec.RoutePrefix,
+			"serviceUrl", apimApi.Spec.ServiceURL,
+			"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
+			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+			"productIds", apimApi.Spec.ProductIDs,
+			"tagIds", apimApi.Spec.TagIDs,
+			"apiHost", apimApi.Status.ApiHost,
+			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+			"status", apimApi.Status.Status,
+			"importedAt", apimApi.Status.ImportedAt,
+			"externalLinkAnnotation", apimApi.Annotations["link.argocd.argoproj.io/external-link"],
+		)
 	}
 
 	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name)

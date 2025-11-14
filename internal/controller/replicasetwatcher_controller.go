@@ -80,6 +80,25 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)
 		return ctrl.Result{}, err
+	} else {
+		logger.Info("📋 APIMAPI details after successful fetch",
+			"name", apimApi.Name,
+			"namespace", apimApi.Namespace,
+			"generation", apimApi.Generation,
+			"resourceVersion", apimApi.ResourceVersion,
+			"apiID", apimApi.Spec.APIID,
+			"apimService", apimApi.Spec.APIMService,
+			"routePrefix", apimApi.Spec.RoutePrefix,
+			"serviceUrl", apimApi.Spec.ServiceURL,
+			"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
+			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+			"productIds", apimApi.Spec.ProductIDs,
+			"tagIds", apimApi.Spec.TagIDs,
+			"apiHost", apimApi.Status.ApiHost,
+			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+			"status", apimApi.Status.Status,
+			"importedAt", apimApi.Status.ImportedAt,
+		)
 	}
 
 	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
