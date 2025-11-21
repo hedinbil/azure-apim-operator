@@ -90,9 +90,11 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
+		// Use Patch to update only status without touching spec fields.
+		statusPatch := client.MergeFrom(policy.DeepCopy())
 		policy.Status.Phase = phaseError
 		policy.Status.Message = errMsgFailedToGetAzureToken
-		_ = r.Status().Update(ctx, &policy)
+		_ = r.Status().Patch(ctx, &policy, statusPatch)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -125,8 +127,10 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		policy.Status.Phase = phaseCreated
 	}
 
-	if err := r.Status().Update(ctx, &policy); err != nil {
-		logger.Error(err, "❌ Failed to update APIMInboundPolicy status")
+	// Use Patch to update only status without touching spec fields.
+	statusPatch := client.MergeFrom(policy.DeepCopy())
+	if err := r.Status().Patch(ctx, &policy, statusPatch); err != nil {
+		logger.Error(err, "❌ Failed to patch APIMInboundPolicy status")
 		return ctrl.Result{}, err
 	}
 

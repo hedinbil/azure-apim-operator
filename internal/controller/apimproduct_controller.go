@@ -107,9 +107,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
+		// Use Patch to update only status without touching spec fields.
+		statusPatch := client.MergeFrom(product.DeepCopy())
 		product.Status.Phase = phaseError
 		product.Status.Message = errMsgFailedToGetAzureToken
-		_ = r.Status().Update(ctx, &product)
+		_ = r.Status().Patch(ctx, &product, statusPatch)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -130,10 +132,12 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		logger.Info("🗑️ APIMProduct is being deleted", "name", req.NamespacedName, "productId", cfg.ProductID)
 		if err := apim.DeleteProduct(ctx, cfg); err != nil {
 			logger.Error(err, "❌ Failed to delete product in APIM", "productId", cfg.ProductID)
+			// Use Patch to update only status without touching spec fields.
+			statusPatch := client.MergeFrom(product.DeepCopy())
 			product.Status.Phase = phaseError
 			product.Status.Message = err.Error()
-			if updateErr := r.Status().Update(ctx, &product); updateErr != nil {
-				logger.Error(updateErr, "❌ Failed to update APIMProduct status")
+			if updateErr := r.Status().Patch(ctx, &product, statusPatch); updateErr != nil {
+				logger.Error(updateErr, "❌ Failed to patch APIMProduct status")
 			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
@@ -143,18 +147,22 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Handle creation/update
 		if err := apim.UpsertProduct(ctx, cfg); err != nil {
 			logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
+			// Use Patch to update only status without touching spec fields.
+			statusPatch := client.MergeFrom(product.DeepCopy())
 			product.Status.Phase = phaseError
 			product.Status.Message = err.Error()
-			if updateErr := r.Status().Update(ctx, &product); updateErr != nil {
-				logger.Error(updateErr, "❌ Failed to update APIMProduct status")
+			if updateErr := r.Status().Patch(ctx, &product, statusPatch); updateErr != nil {
+				logger.Error(updateErr, "❌ Failed to patch APIMProduct status")
 			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
+		// Use Patch to update only status without touching spec fields.
+		statusPatch := client.MergeFrom(product.DeepCopy())
 		product.Status.Phase = phaseCreated
 		product.Status.Message = "Product created successfully"
-		if err := r.Status().Update(ctx, &product); err != nil {
-			logger.Error(err, "❌ Failed to update APIMProduct status")
+		if err := r.Status().Patch(ctx, &product, statusPatch); err != nil {
+			logger.Error(err, "❌ Failed to patch APIMProduct status")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil

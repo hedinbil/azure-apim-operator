@@ -62,10 +62,12 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Update the ArgoCD external link annotation with the API host URL.
 	// This allows ArgoCD to display a link to the API in its UI.
+	// Use Patch to update only annotations without touching spec or status fields.
+	annotationPatch := client.MergeFrom(apimApi.DeepCopy())
 	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
 
-	if err := r.Update(ctx, &apimApi); err != nil {
-		logger.Error(err, "❌ Failed to update APIMAPI with external link annotations")
+	if err := r.Patch(ctx, &apimApi, annotationPatch); err != nil {
+		logger.Error(err, "❌ Failed to patch APIMAPI with external link annotations")
 		return ctrl.Result{}, err
 	} else {
 		logger.Info("📋 APIMAPI details after successful update",

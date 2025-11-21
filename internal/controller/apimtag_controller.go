@@ -93,9 +93,11 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
+		// Use Patch to update only status without touching spec fields.
+		statusPatch := client.MergeFrom(tag.DeepCopy())
 		tag.Status.Phase = phaseError
 		tag.Status.Message = errMsgFailedToGetAzureToken
-		_ = r.Status().Update(ctx, &tag)
+		_ = r.Status().Patch(ctx, &tag, statusPatch)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -118,8 +120,10 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		tag.Status.Message = "Tag created or updated"
 	}
 
-	if err := r.Status().Update(ctx, &tag); err != nil {
-		logger.Error(err, "❌ Failed to update APIMTag status")
+	// Use Patch to update only status without touching spec fields.
+	statusPatch := client.MergeFrom(tag.DeepCopy())
+	if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
+		logger.Error(err, "❌ Failed to patch APIMTag status")
 		return ctrl.Result{}, err
 	}
 
