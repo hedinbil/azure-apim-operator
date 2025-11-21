@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push to Azure Container Registry
 
 on:
   push:
@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Image version (e.g., v0.23.0)'
-        required: true
-        default: 'v0.23.0'
+        description: 'Image version (leave empty to use DEFAULT_IMAGE_VERSION variable)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -95,8 +95,13 @@ jobs:
           #
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Scenario 1: Manual workflow dispatch
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "🔖 Base version: ${{ github.event.inputs.version }}"
+            INPUT_VERSION="${{ github.event.inputs.version }}"
+            if [ -z "${INPUT_VERSION}" ]; then
+              # Use default from variable if input is empty
+              INPUT_VERSION="${{ vars.DEFAULT_IMAGE_VERSION || 'v0.23.0' }}"
+            fi
+            echo "version=${INPUT_VERSION}" >> $GITHUB_OUTPUT
+            echo "🔖 Base version: ${INPUT_VERSION}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             # Scenario 2: Git tag push
             VERSION="${GITHUB_REF#refs/tags/}"
@@ -104,8 +109,9 @@ jobs:
             echo "🔖 Base version: ${VERSION}"
           else
             # Scenario 3: Push to main branch or pull request
-            echo "version=v0.23.0" >> $GITHUB_OUTPUT
-            echo "🔖 Base version: v0.23.0"
+            DEFAULT_VERSION="${{ vars.DEFAULT_IMAGE_VERSION || 'v0.23.0' }}"
+            echo "version=${DEFAULT_VERSION}" >> $GITHUB_OUTPUT
+            echo "🔖 Base version: ${DEFAULT_VERSION}"
           fi
 
       - name: Build and push Docker image
