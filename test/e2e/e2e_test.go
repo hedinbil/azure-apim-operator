@@ -320,7 +320,8 @@ spec:
 			cmd := exec.Command("kubectl", "create", "ns", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("creating APIMService resource as dependency")
+			By("creating APIMService resource as dependency in operator namespace")
+			// APIMService must be in the operator namespace, not the test namespace
 			apimServiceYAML := fmt.Sprintf(`apiVersion: apim.operator.io/v1
 kind: APIMService
 metadata:
@@ -330,7 +331,7 @@ spec:
   name: test-apim
   resourceGroup: test-rg
   subscription: test-subscription-id
-`, apimServiceName, testNamespace)
+`, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(apimServiceYAML)
@@ -342,8 +343,8 @@ spec:
 			cmd := exec.Command("kubectl", "delete", "apimtag", "--all", "-n", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("cleaning up APIMService resources")
-			cmd = exec.Command("kubectl", "delete", "apimservice", "--all", "-n", testNamespace)
+			By("cleaning up APIMService resources from operator namespace")
+			cmd = exec.Command("kubectl", "delete", "apimservice", apimServiceName, "-n", namespace)
 			_, _ = utils.Run(cmd)
 
 			By("removing test namespace")
@@ -428,7 +429,8 @@ spec:
 			cmd := exec.Command("kubectl", "create", "ns", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("creating APIMService resource as dependency")
+			By("creating APIMService resource as dependency in operator namespace")
+			// APIMService must be in the operator namespace, not the test namespace
 			apimServiceYAML := fmt.Sprintf(`apiVersion: apim.operator.io/v1
 kind: APIMService
 metadata:
@@ -438,7 +440,7 @@ spec:
   name: test-apim
   resourceGroup: test-rg
   subscription: test-subscription-id
-`, apimServiceName, testNamespace)
+`, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(apimServiceYAML)
@@ -450,8 +452,8 @@ spec:
 			cmd := exec.Command("kubectl", "delete", "apimproduct", "--all", "-n", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("cleaning up APIMService resources")
-			cmd = exec.Command("kubectl", "delete", "apimservice", "--all", "-n", testNamespace)
+			By("cleaning up APIMService resources from operator namespace")
+			cmd = exec.Command("kubectl", "delete", "apimservice", apimServiceName, "-n", namespace)
 			_, _ = utils.Run(cmd)
 
 			By("removing test namespace")
@@ -550,7 +552,8 @@ spec:
 			cmd := exec.Command("kubectl", "create", "ns", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("creating APIMService resource as dependency")
+			By("creating APIMService resource as dependency in operator namespace")
+			// APIMService must be in the operator namespace, not the test namespace
 			apimServiceYAML := fmt.Sprintf(`apiVersion: apim.operator.io/v1
 kind: APIMService
 metadata:
@@ -560,7 +563,7 @@ spec:
   name: test-apim
   resourceGroup: test-rg
   subscription: test-subscription-id
-`, apimServiceName, testNamespace)
+`, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(apimServiceYAML)
@@ -572,8 +575,8 @@ spec:
 			cmd := exec.Command("kubectl", "delete", "apiminboundpolicy", "--all", "-n", testNamespace)
 			_, _ = utils.Run(cmd)
 
-			By("cleaning up APIMService resources")
-			cmd = exec.Command("kubectl", "delete", "apimservice", "--all", "-n", testNamespace)
+			By("cleaning up APIMService resources from operator namespace")
+			cmd = exec.Command("kubectl", "delete", "apimservice", apimServiceName, "-n", namespace)
 			_, _ = utils.Run(cmd)
 
 			By("removing test namespace")
