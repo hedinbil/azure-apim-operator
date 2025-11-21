@@ -1,4 +1,4 @@
-name: Build and Push Helm Chart To Azure Container Registry
+name: Build and Push Helm Chart To GitHub Container Registry
 
 on:
   push:
@@ -21,22 +21,13 @@ on:
         default: ''
 
 permissions:
-  contents: write
-  id-token: write
-  pull-requests: write
+  contents: read
   packages: write
 
 env:
-  ARM_CLIENT_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ vars.OPERATIONS_AKS_PROD_AZURE_SUBSCRIPTION_ID }}
-  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  ACR_NAME: hedinit
-  ACR_REGISTRY: hedinit.azurecr.io
   CHART_NAME: azure-apim-operator
   CHART_DIR: charts/azure-apim-operator
-  OCI_REPO: oci://hedinit.azurecr.io/helm-charts
-  GIT_USER_EMAIL: github-actions@hedinit.com
-  GIT_USER_NAME: GitHub Actions - helm-chart
+  REGISTRY: ghcr.io
 
 jobs:
   build-and-push:
@@ -46,26 +37,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Git config user.email
-        run: git config --global user.email "${{ env.GIT_USER_EMAIL }}"
-      - name: Git config user.name
-        run: git config --global user.name "${{ env.GIT_USER_NAME }}"        
-
       - name: Set up Helm
         uses: azure/setup-helm@v3
         with:
           version: 'latest'
 
-      - name: Login via Azure CLI
-        uses: Azure/login@v2
-        with:
-          client-id: ${{ env.ARM_CLIENT_ID }}
-          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
-          tenant-id: ${{ env.ARM_TENANT_ID }}
-
-      - name: Login to Azure Container Registry
+      - name: Log in to GitHub Container Registry
         run: |
-          az acr login --name ${{ env.ACR_NAME }}
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Determine chart version
         id: version
@@ -112,14 +91,16 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           cd charts
-          helm push ${{ env.CHART_NAME }}-${{ steps.version.outputs.version }}.tgz ${{ env.OCI_REPO }}
-          echo "✅ Chart pushed to ${{ env.OCI_REPO }}/${{ env.CHART_NAME }}:${{ steps.version.outputs.version }}"
+          helm push ${{ env.CHART_NAME }}-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
+          echo "✅ Chart pushed to oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}:${{ steps.version.outputs.version }}"
 
       - name: Chart digest
         if: github.event_name != 'pull_request'
         run: |
           echo "✅ Helm chart pushed successfully"
-          echo "📦 Chart: ${{ env.OCI_REPO }}/${{ env.CHART_NAME }}:${{ steps.version.outputs.version }}"
+          echo "📦 Chart: oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts/${{ env.CHART_NAME }}:${{ steps.version.outputs.version }}"
+          echo ""
+          echo "📦 Chart available at: https://github.com/${{ github.repository }}/pkgs/container/charts%2F${{ env.CHART_NAME }}"
 
       - name: Validate chart (PR only)
         if: github.event_name == 'pull_request'
