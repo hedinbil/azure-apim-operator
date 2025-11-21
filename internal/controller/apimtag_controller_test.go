@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"os"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,54 +33,207 @@ import (
 )
 
 var _ = Describe("APIMTag Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	const resourceName = "test-apim-tag"
+	const apimServiceName = "test-apim-service"
 
-		ctx := context.Background()
+	ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		apimtag := &apimv1.APIMTag{}
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+	apimServiceNamespacedName := types.NamespacedName{
+		Name:      apimServiceName,
+		Namespace: "default",
+	}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind APIMTag")
-			err := k8sClient.Get(ctx, typeNamespacedName, apimtag)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &apimv1.APIMTag{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+	BeforeEach(func() {
+		By("creating the APIMService resource")
+		apimService := &apimv1.APIMService{}
+		err := k8sClient.Get(ctx, apimServiceNamespacedName, apimService)
+		if err != nil && errors.IsNotFound(err) {
+			apimService = &apimv1.APIMService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      apimServiceName,
+					Namespace: "default",
+				},
+				Spec: apimv1.APIMServiceSpec{
+					Name:          "test-apim",
+					ResourceGroup: "test-rg",
+					Subscription:  "test-subscription-id",
+				},
 			}
-		})
+			Expect(k8sClient.Create(ctx, apimService)).To(Succeed())
+		}
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &apimv1.APIMTag{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+		By("creating the APIMTag resource")
+		apimTag := &apimv1.APIMTag{}
+		err = k8sClient.Get(ctx, typeNamespacedName, apimTag)
+		if err != nil && errors.IsNotFound(err) {
+			apimTag = &apimv1.APIMTag{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: apimv1.APIMTagSpec{
+					APIMService: apimServiceName,
+					TagID:       "test-tag-id",
+					DisplayName: "Test Tag",
+				},
+			}
+			Expect(k8sClient.Create(ctx, apimTag)).To(Succeed())
+		}
+	})
 
-			By("Cleanup the specific resource instance APIMTag")
+	AfterEach(func() {
+		By("cleaning up the APIMTag resource")
+		resource := &apimv1.APIMTag{}
+		err := k8sClient.Get(ctx, typeNamespacedName, resource)
+		if err == nil {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+		}
+
+		By("cleaning up the APIMService resource")
+		apimService := &apimv1.APIMService{}
+		err = k8sClient.Get(ctx, apimServiceNamespacedName, apimService)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, apimService)).To(Succeed())
+		}
+	})
+
+	Context("When reconciling a resource", func() {
+		It("should handle missing Azure credentials gracefully", func() {
+			By("ensuring Azure credentials are not set")
+			// Save original values if they exist
+			originalClientID := os.Getenv("AZURE_CLIENT_ID")
+			originalTenantID := os.Getenv("AZURE_TENANT_ID")
+			defer func() {
+				if originalClientID != "" {
+					os.Setenv("AZURE_CLIENT_ID", originalClientID)
+				} else {
+					os.Unsetenv("AZURE_CLIENT_ID")
+				}
+				if originalTenantID != "" {
+					os.Setenv("AZURE_TENANT_ID", originalTenantID)
+				} else {
+					os.Unsetenv("AZURE_TENANT_ID")
+				}
+			}()
+			os.Unsetenv("AZURE_CLIENT_ID")
+			os.Unsetenv("AZURE_TENANT_ID")
+
+			By("reconciling the resource")
 			controllerReconciler := &APIMTagReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
+
+			By("verifying that an error is returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
+			Expect(result.Requeue).To(BeFalse())
+		})
+
+		It("should handle missing APIMService gracefully", func() {
+			By("creating a tag with a non-existent APIMService")
+			invalidTagName := types.NamespacedName{
+				Name:      "test-tag-invalid-service",
+				Namespace: "default",
+			}
+			invalidTag := &apimv1.APIMTag{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      invalidTagName.Name,
+					Namespace: invalidTagName.Namespace,
+				},
+				Spec: apimv1.APIMTagSpec{
+					APIMService: "non-existent-service",
+					TagID:       "test-tag-id",
+					DisplayName: "Test Tag",
+				},
+			}
+			Expect(k8sClient.Create(ctx, invalidTag)).To(Succeed())
+			defer func() {
+				Expect(k8sClient.Delete(ctx, invalidTag)).To(Succeed())
+			}()
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMTagReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: invalidTagName,
+			})
+
+			By("verifying that the error is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(result.Requeue).To(BeFalse())
+		})
+
+		It("should update status when Azure token retrieval fails", func() {
+			By("setting invalid Azure credentials")
+			originalClientID := os.Getenv("AZURE_CLIENT_ID")
+			originalTenantID := os.Getenv("AZURE_TENANT_ID")
+			defer func() {
+				if originalClientID != "" {
+					os.Setenv("AZURE_CLIENT_ID", originalClientID)
+				} else {
+					os.Unsetenv("AZURE_CLIENT_ID")
+				}
+				if originalTenantID != "" {
+					os.Setenv("AZURE_TENANT_ID", originalTenantID)
+				} else {
+					os.Unsetenv("AZURE_TENANT_ID")
+				}
+			}()
+			os.Setenv("AZURE_CLIENT_ID", "invalid-client-id")
+			os.Setenv("AZURE_TENANT_ID", "invalid-tenant-id")
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMTagReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			By("verifying that reconciliation is requeued")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+			By("verifying that status is updated with error")
+			tag := &apimv1.APIMTag{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tag)).To(Succeed())
+			Expect(tag.Status.Phase).To(Equal("Error"))
+			Expect(tag.Status.Message).To(ContainSubstring("Failed to get Azure token"))
+		})
+
+		It("should handle deleted resource gracefully", func() {
+			By("deleting the resource")
+			tag := &apimv1.APIMTag{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tag)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tag)).To(Succeed())
+
+			By("reconciling the deleted resource")
+			controllerReconciler := &APIMTagReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			By("verifying that deletion is handled gracefully")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse())
 		})
 	})
 })
