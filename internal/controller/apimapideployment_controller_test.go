@@ -76,7 +76,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 					ResourceGroup:        "test-rg",
 					RoutePrefix:          "/test-api",
 					ServiceURL:           "https://example.com/api",
-					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					OpenAPIDefinitionURL: "https://petstore3.swagger.io/api/v3/openapi.json",
 					SubscriptionRequired: true,
 				},
 			}
