@@ -33,7 +33,6 @@ import (
 
 var _ = Describe("APIMAPIDeployment Controller", func() {
 	const resourceName = "test-apim-api-deployment"
-	const apimAPIName = "test-apim-api"
 
 	ctx := context.Background()
 
@@ -41,19 +40,16 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 		Name:      resourceName,
 		Namespace: "default",
 	}
-	apimAPINamespacedName := types.NamespacedName{
-		Name:      apimAPIName,
-		Namespace: "default",
-	}
 
 	BeforeEach(func() {
 		By("creating the APIMAPI resource as dependency")
+		// The APIMAPI must have the same name as the deployment for the controller to find it
 		apimAPI := &apimv1.APIMAPI{}
-		err := k8sClient.Get(ctx, apimAPINamespacedName, apimAPI)
+		err := k8sClient.Get(ctx, typeNamespacedName, apimAPI)
 		if err != nil && errors.IsNotFound(err) {
 			apimAPI = &apimv1.APIMAPI{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      apimAPIName,
+					Name:      resourceName, // Same name as deployment
 					Namespace: "default",
 				},
 				Spec: apimv1.APIMAPISpec{
@@ -98,7 +94,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 		By("cleaning up the APIMAPI resource")
 		apimAPI := &apimv1.APIMAPI{}
-		err = k8sClient.Get(ctx, apimAPINamespacedName, apimAPI)
+		err = k8sClient.Get(ctx, typeNamespacedName, apimAPI) // Same name as deployment
 		if err == nil {
 			Expect(k8sClient.Delete(ctx, apimAPI)).To(Succeed())
 		}

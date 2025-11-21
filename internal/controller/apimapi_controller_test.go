@@ -58,13 +58,16 @@ var _ = Describe("APIMAPI Controller", func() {
 					OpenAPIDefinitionURL: "https://example.com/openapi.json",
 					SubscriptionRequired: true,
 				},
-				Status: apimv1.APIMAPIStatus{
-					ApiHost:             "https://test-apim.azure-api.net/test-api",
-					DeveloperPortalHost: "https://test-apim.developer.azure-api.net",
-					Status:              "OK",
-				},
 			}
 			Expect(k8sClient.Create(ctx, apimAPI)).To(Succeed())
+
+			// Update status separately since status is not persisted on create
+			apimAPI.Status = apimv1.APIMAPIStatus{
+				ApiHost:             "https://test-apim.azure-api.net/test-api",
+				DeveloperPortalHost: "https://test-apim.developer.azure-api.net",
+				Status:              "OK",
+			}
+			Expect(k8sClient.Status().Update(ctx, apimAPI)).To(Succeed())
 		}
 	})
 
@@ -116,14 +119,17 @@ var _ = Describe("APIMAPI Controller", func() {
 					APIID:       "test-api-id-2",
 					APIMService: "test-apim-service",
 				},
-				Status: apimv1.APIMAPIStatus{
-					ApiHost: "https://test-apim.azure-api.net/test-api-2",
-				},
 			}
 			Expect(k8sClient.Create(ctx, api)).To(Succeed())
 			defer func() {
 				Expect(k8sClient.Delete(ctx, api)).To(Succeed())
 			}()
+
+			// Update status separately since status is not persisted on create
+			api.Status = apimv1.APIMAPIStatus{
+				ApiHost: "https://test-apim.azure-api.net/test-api-2",
+			}
+			Expect(k8sClient.Status().Update(ctx, api)).To(Succeed())
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIReconciler{
