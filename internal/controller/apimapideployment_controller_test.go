@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,54 +32,172 @@ import (
 )
 
 var _ = Describe("APIMAPIDeployment Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	const resourceName = "test-apim-api-deployment"
+	const apimAPIName = "test-apim-api"
 
-		ctx := context.Background()
+	ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		APIMAPIDeployment := &apimv1.APIMAPIDeployment{}
+	typeNamespacedName := types.NamespacedName{
+		Name:      resourceName,
+		Namespace: "default",
+	}
+	apimAPINamespacedName := types.NamespacedName{
+		Name:      apimAPIName,
+		Namespace: "default",
+	}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind APIMAPIDeployment")
-			err := k8sClient.Get(ctx, typeNamespacedName, APIMAPIDeployment)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &apimv1.APIMAPIDeployment{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+	BeforeEach(func() {
+		By("creating the APIMAPI resource as dependency")
+		apimAPI := &apimv1.APIMAPI{}
+		err := k8sClient.Get(ctx, apimAPINamespacedName, apimAPI)
+		if err != nil && errors.IsNotFound(err) {
+			apimAPI = &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      apimAPIName,
+					Namespace: "default",
+				},
+				Spec: apimv1.APIMAPISpec{
+					APIID:       "test-api-id",
+					APIMService: "test-apim-service",
+				},
 			}
-		})
+			Expect(k8sClient.Create(ctx, apimAPI)).To(Succeed())
+		}
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &apimv1.APIMAPIDeployment{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+		By("creating the APIMAPIDeployment resource")
+		deployment := &apimv1.APIMAPIDeployment{}
+		err = k8sClient.Get(ctx, typeNamespacedName, deployment)
+		if err != nil && errors.IsNotFound(err) {
+			deployment = &apimv1.APIMAPIDeployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: "default",
+				},
+				Spec: apimv1.APIMAPIDeploymentSpec{
+					APIID:                "test-api-id",
+					APIMService:          "test-apim-service",
+					Subscription:         "test-subscription-id",
+					ResourceGroup:        "test-rg",
+					RoutePrefix:          "/test-api",
+					ServiceURL:           "https://example.com/api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					SubscriptionRequired: true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
+		}
+	})
 
-			By("Cleanup the specific resource instance APIMAPIDeployment")
+	AfterEach(func() {
+		By("cleaning up the APIMAPIDeployment resource")
+		resource := &apimv1.APIMAPIDeployment{}
+		err := k8sClient.Get(ctx, typeNamespacedName, resource)
+		if err == nil {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+		}
+
+		By("cleaning up the APIMAPI resource")
+		apimAPI := &apimv1.APIMAPI{}
+		err = k8sClient.Get(ctx, apimAPINamespacedName, apimAPI)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, apimAPI)).To(Succeed())
+		}
+	})
+
+	Context("When reconciling a resource", func() {
+		It("should handle missing Azure credentials gracefully", func() {
+			By("ensuring Azure credentials are not set")
+			originalClientID := os.Getenv("AZURE_CLIENT_ID")
+			originalTenantID := os.Getenv("AZURE_TENANT_ID")
+			defer func() {
+				if originalClientID != "" {
+					os.Setenv("AZURE_CLIENT_ID", originalClientID)
+				} else {
+					os.Unsetenv("AZURE_CLIENT_ID")
+				}
+				if originalTenantID != "" {
+					os.Setenv("AZURE_TENANT_ID", originalTenantID)
+				} else {
+					os.Unsetenv("AZURE_TENANT_ID")
+				}
+			}()
+			os.Unsetenv("AZURE_CLIENT_ID")
+			os.Unsetenv("AZURE_TENANT_ID")
+
+			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
+
+			By("verifying that an error is returned")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
+			Expect(result.Requeue).To(BeFalse())
+		})
+
+		It("should handle missing APIMAPI dependency gracefully", func() {
+			By("creating a deployment with non-existent APIMAPI")
+			invalidDeploymentName := types.NamespacedName{
+				Name:      "test-deployment-invalid-api",
+				Namespace: "default",
+			}
+			invalidDeployment := &apimv1.APIMAPIDeployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      invalidDeploymentName.Name,
+					Namespace: invalidDeploymentName.Namespace,
+				},
+				Spec: apimv1.APIMAPIDeploymentSpec{
+					APIID:                "test-api-id",
+					APIMService:          "test-apim-service",
+					Subscription:         "test-subscription-id",
+					ResourceGroup:        "test-rg",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+				},
+			}
+			Expect(k8sClient.Create(ctx, invalidDeployment)).To(Succeed())
+			defer func() {
+				Expect(k8sClient.Delete(ctx, invalidDeployment)).To(Succeed())
+			}()
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: invalidDeploymentName,
+			})
+
+			By("verifying that the error is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(result.Requeue).To(BeFalse())
+		})
+
+		It("should handle deleted resource gracefully", func() {
+			By("deleting the resource")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, deployment)).To(Succeed())
+
+			By("reconciling the deleted resource")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			By("verifying that deletion is handled gracefully")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse())
 		})
 	})
 })
