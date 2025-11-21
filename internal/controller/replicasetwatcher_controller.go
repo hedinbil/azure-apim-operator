@@ -3,8 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
@@ -101,12 +99,11 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		)
 	}
 
-	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to read operator namespace")
-		return ctrl.Result{}, fmt.Errorf("read operator namespace: %w", err)
+		logger.Error(err, "❌ Failed to get operator namespace")
+		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
 	}
-	operatorNamespace := strings.TrimSpace(string(nsBytes))
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {

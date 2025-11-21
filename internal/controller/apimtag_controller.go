@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -71,12 +70,11 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to read operator namespace")
-		return ctrl.Result{}, fmt.Errorf("read operator namespace: %w", err)
+		logger.Error(err, "❌ Failed to get operator namespace")
+		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
 	}
-	operatorNamespace := strings.TrimSpace(string(nsBytes))
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: tag.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {

@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -34,17 +33,6 @@ import (
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
 	"github.com/hedinit/azure-apim-operator/internal/identity"
-)
-
-// Phase constants for APIMProduct status tracking.
-const (
-	phaseError   = "Error"   // Indicates an error occurred during product creation/update.
-	phaseCreated = "Created" // Indicates the product was successfully created or updated.
-)
-
-// Error message constants shared across controllers.
-const (
-	errMsgFailedToGetAzureToken = "Failed to get Azure token"
 )
 
 // APIMProductReconciler reconciles APIMProduct custom resources.
@@ -82,12 +70,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to read operator namespace")
-		return ctrl.Result{}, fmt.Errorf("read operator namespace: %w", err)
+		logger.Error(err, "❌ Failed to get operator namespace")
+		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
 	}
-	operatorNamespace := strings.TrimSpace(string(nsBytes))
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: product.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
