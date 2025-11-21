@@ -85,7 +85,13 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
-		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
+		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
+		// Use Patch to update only status without touching spec fields.
+		statusPatch := client.MergeFrom(tag.DeepCopy())
+		tag.Status.Phase = phaseError
+		tag.Status.Message = "missing AZURE_CLIENT_ID or AZURE_TENANT_ID"
+		_ = r.Status().Patch(ctx, &tag, statusPatch)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
