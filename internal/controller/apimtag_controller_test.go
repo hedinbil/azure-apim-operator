@@ -132,10 +132,15 @@ var _ = Describe("APIMTag Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 
-			By("verifying that an error is returned")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
-			Expect(result.Requeue).To(BeFalse())
+			By("verifying that no error is returned and status is updated")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+			By("verifying that the status is set to Error")
+			var tag apimv1.APIMTag
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &tag)).To(Succeed())
+			Expect(tag.Status.Phase).To(Equal("Error"))
+			Expect(tag.Status.Message).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
 		})
 
 		It("should handle missing APIMService gracefully", func() {

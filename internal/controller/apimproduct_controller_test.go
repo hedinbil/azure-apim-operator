@@ -133,10 +133,15 @@ var _ = Describe("APIMProduct Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 
-			By("verifying that an error is returned")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
-			Expect(result.Requeue).To(BeFalse())
+			By("verifying that no error is returned and status is updated")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+			By("verifying that the status is set to Error")
+			var product apimv1.APIMProduct
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &product)).To(Succeed())
+			Expect(product.Status.Phase).To(Equal("Error"))
+			Expect(product.Status.Message).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
 		})
 
 		It("should handle missing APIMService gracefully", func() {
