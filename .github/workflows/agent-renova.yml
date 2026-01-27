@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run Renova Agent
-        uses: hedinbil/hedin-github-actions/agent-renova@main
+        uses: hedinbil/hedin-github-actions-public/agent-renova@main
         with:
           cleanup-type: ${{ github.event.inputs.cleanup_type || 'all' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
