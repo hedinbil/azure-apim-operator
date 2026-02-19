@@ -1,0 +1,27 @@
+name: Agent Wille - Worklog Automation
+run-name: Wille Run ${{ github.run_number }}
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # Daily at 01:00 UTC
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  wille-worklog:
+    name: Wille - Worklog Automation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Run Wille Agent
+        uses: hedinbil/hedin-github-actions/agent-wille@main
+        with:
+          cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          agent-wille-client-secret: ${{ secrets.AGENT_WILLE_CLIENT_SECRET }}
