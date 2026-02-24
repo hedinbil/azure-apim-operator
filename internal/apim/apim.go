@@ -150,12 +150,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		"contentType", "application/vnd.oai.openapi+json",
 	)
 
-	// Log beginning of the Swagger content for debug purposes
-	snippet := string(openApiContent)
-	if len(snippet) > 200 {
-		snippet = snippet[:200] + "..."
-	}
-	logger.Info("📄 Swagger snippet", "preview", strings.TrimSpace(snippet))
+	logger.Info("📄 Swagger content", "content", strings.TrimSpace(string(openApiContent)))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
