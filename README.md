@@ -197,10 +197,10 @@ spec:
 
 The operator will automatically:
 1. Detect the ReplicaSet when pods are ready
-2. Verify the Ingress exists
-3. Create an `APIMAPIDeployment` resource
-4. Fetch the OpenAPI specification
-5. Register the API in Azure APIM
+2. Create an `APIMAPIDeployment` resource
+3. Fetch the OpenAPI specification
+4. Register the API in Azure APIM
+5. Poll APIM async import status when Azure returns `202 Accepted`
 6. Assign products and tags
 7. Clean up intermediate resources
 
@@ -492,9 +492,7 @@ The operator consists of several specialized controllers:
 - **Behavior**:
   - Watches for ReplicaSet changes
   - Matches ReplicaSets to `APIMAPI` resources using `app.kubernetes.io/name` labels
-  - Verifies that:
-    - Pods are ready and running
-    - Ingress resource exists
+  - Verifies that pods are ready and running
   - Creates an intermediate `APIMAPIDeployment` CR when all conditions are met
 
 #### 2. **APIMAPIDeployment Controller**
@@ -503,8 +501,10 @@ The operator consists of several specialized controllers:
 - **Behavior**:
   - Watches for `APIMAPIDeployment` resources
   - Fetches OpenAPI/Swagger specification from the application endpoint
+  - Logs the fetched Swagger/OpenAPI payload for debugging
   - Authenticates with Azure AD using Workload Identity
   - Registers or updates the API in Azure APIM via Azure Management API
+  - Polls APIM long-running operation status when import returns `202 Accepted`
   - Updates service URLs to point to the Kubernetes service
   - Assigns products and tags if configured
   - Cleans up the intermediate CR after successful deployment
@@ -839,10 +839,31 @@ kubectl apply -f config/crd/bases/
 - Check ReplicaSet Watcher logs
 - Verify `APIMAPI` resource exists and is correct
 - Ensure pods are ready
-- Verify Ingress exists
 - Check `APIMAPIDeployment` status
 
-#### 4. OpenAPI Fetch Fails
+#### 4. Import Returns 202 But Endpoints Are Missing
+
+**Symptoms**:
+- Logs show `✅ API imported to APIM`, but new endpoints are not visible in APIM
+- Azure import request returns `202 Accepted`
+
+**What it means**:
+- Azure APIM import is asynchronous and may still be processing (or may fail later)
+
+**What to check in logs**:
+- `📄 Swagger content` - confirms exact document fetched by operator
+- `⏳ Polling APIM async import status` - confirms async polling started
+- `⌛ APIM async import still in progress` - operation still running
+- `✅ APIM async import completed` - operation reached terminal success
+- `❌ APIM async import did not complete successfully` - operation failed
+
+**Solution**:
+- Ensure operator version includes async polling for `202 Accepted` imports
+- Verify the logged Swagger content contains expected new endpoints
+- If async operation fails, inspect the error body in operator logs for APIM validation details
+- Re-run deployment only after fixing the reported APIM validation error
+
+#### 5. OpenAPI Fetch Fails
 
 **Symptoms**: Cannot fetch OpenAPI specification
 
@@ -852,7 +873,7 @@ kubectl apply -f config/crd/bases/
 - Verify the endpoint returns valid OpenAPI JSON
 - Check application logs
 
-#### 5. Products/Tags Not Assigned
+#### 6. Products/Tags Not Assigned
 
 **Symptoms**: API registered but products/tags missing
 
@@ -880,6 +901,10 @@ kubectl get apimapideployment -A -o yaml
 # Check RBAC
 kubectl get clusterrole azure-apim-operator-manager-role -o yaml
 kubectl get clusterrolebinding azure-apim-operator-manager-rolebinding -o yaml
+
+# Tail operator logs and focus on OpenAPI import lifecycle
+kubectl logs -f -l app.kubernetes.io/name=azure-apim-operator -n apim-operator \
+  | egrep "Swagger content|Polling APIM async import status|async import|API imported to APIM"
 ```
 
 ---

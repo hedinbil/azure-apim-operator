@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -170,6 +171,15 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		return fmt.Errorf("APIM API failed: %s\n%s", resp.Status, string(body))
 	}
 
+	// Azure APIM may return 202 (Accepted) for asynchronous import operations.
+	// Poll completion explicitly so we don't report success while the import later fails.
+	if resp.StatusCode == http.StatusAccepted {
+		if err := waitForAsyncImportCompletion(ctx, apimParams.BearerToken, resp); err != nil {
+			logger.Error(err, "❌ APIM async import did not complete successfully", "api", apimParams.APIID)
+			return err
+		}
+	}
+
 	logger.Info("✅ Successfully imported API into APIM",
 		"api", apimParams.APIID,
 		"status", resp.Status,
@@ -177,6 +187,102 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 	)
 
 	return nil
+}
+
+// waitForAsyncImportCompletion polls Azure APIM long-running operation URLs until completion.
+// APIM may return either Azure-AsyncOperation or Location headers on 202 responses.
+func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, initialResp *http.Response) error {
+	pollURL := strings.TrimSpace(initialResp.Header.Get("Azure-AsyncOperation"))
+	if pollURL == "" {
+		pollURL = strings.TrimSpace(initialResp.Header.Get("Location"))
+	}
+	if pollURL == "" {
+		logger.Info("ℹ️ Import returned 202 without polling URL headers; cannot verify completion")
+		return nil
+	}
+
+	if strings.HasPrefix(pollURL, "/") {
+		pollURL = "https://management.azure.com" + pollURL
+	}
+
+	logger.Info("⏳ Polling APIM async import status", "pollURL", pollURL)
+
+	timeout := time.After(3 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for async import completion: %w", ctx.Err())
+		case <-timeout:
+			return fmt.Errorf("timed out waiting for async import completion")
+		case <-ticker.C:
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+			if err != nil {
+				return fmt.Errorf("build async poll request: %w", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("poll async operation: %w", err)
+			}
+
+			body, readErr := io.ReadAll(resp.Body)
+			closeErr := resp.Body.Close()
+			if readErr != nil {
+				if closeErr != nil {
+					return fmt.Errorf("read async poll body: %w (close error: %v)", readErr, closeErr)
+				}
+				return fmt.Errorf("read async poll body: %w", readErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close async poll response body: %w", closeErr)
+			}
+
+			// If poll endpoint returns a terminal non-202 status and no status field,
+			// treat 2xx as success and non-2xx as failure.
+			if resp.StatusCode >= 300 && resp.StatusCode != http.StatusAccepted {
+				return fmt.Errorf("async poll failed: %s\n%s", resp.Status, string(body))
+			}
+
+			status := extractAsyncStatus(body)
+			switch strings.ToLower(status) {
+			case "succeeded", "success":
+				logger.Info("✅ APIM async import completed", "pollURL", pollURL)
+				return nil
+			case "failed", "canceled", "cancelled":
+				return fmt.Errorf("async import reported status=%s body=%s", status, string(body))
+			case "inprogress", "running", "":
+				// If there's no status field and status code is terminal success, consider done.
+				if status == "" && resp.StatusCode != http.StatusAccepted {
+					logger.Info("✅ APIM async import completed (terminal HTTP status)", "httpStatus", resp.Status)
+					return nil
+				}
+				logger.Info("⌛ APIM async import still in progress", "httpStatus", resp.Status, "operationStatus", status)
+			default:
+				logger.Info("ℹ️ APIM async import returned unknown status", "operationStatus", status, "httpStatus", resp.Status)
+			}
+		}
+	}
+}
+
+func extractAsyncStatus(body []byte) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+
+	if status, ok := payload["status"].(string); ok {
+		return status
+	}
+	if props, ok := payload["properties"].(map[string]interface{}); ok {
+		if status, ok := props["provisioningState"].(string); ok {
+			return status
+		}
+	}
+	return ""
 }
 
 // AssignServiceUrlToApi updates the backend service URL for an existing API in Azure APIM.
