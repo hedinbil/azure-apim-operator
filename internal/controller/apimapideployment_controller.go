@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -122,124 +123,138 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"apiID", deployment.Spec.APIID,
 	)
 
-	// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
-	// The token is obtained using workload identity credentials.
-	clientID := os.Getenv("AZURE_CLIENT_ID")
-	tenantID := os.Getenv("AZURE_TENANT_ID")
-	if clientID == "" || tenantID == "" {
-		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
-	}
-	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
-	if err != nil {
-		logger.Error(err, "❌ Failed to get Azure token", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-	logger.Info("🔐 Obtained Azure AD token for APIM call", "apiID", deployment.Spec.APIID)
+	// Compute SHA-256 hash of the fetched spec to detect changes.
+	specHashBytes := sha256.Sum256(openApiContent)
+	newSpecHash := fmt.Sprintf("%x", specHashBytes)
 
-	// Step 3: Build the APIM deployment configuration with all necessary parameters.
-	config := apim.APIMDeploymentConfig{
-		SubscriptionID:       deployment.Spec.Subscription,
-		ResourceGroup:        deployment.Spec.ResourceGroup,
-		ServiceName:          deployment.Spec.APIMService,
-		APIID:                deployment.Spec.APIID,
-		RoutePrefix:          deployment.Spec.RoutePrefix,
-		ServiceURL:           deployment.Spec.ServiceURL,
-		Revision:             deployment.Spec.Revision,
-		BearerToken:          token,
-		ProductIDs:           deployment.Spec.ProductIDs,
-		TagIDs:               deployment.Spec.TagIDs,
-		SubscriptionRequired: deployment.Spec.SubscriptionRequired,
-	}
-	logger.Info("🛠️ Built APIM deployment config",
-		"apiID", config.APIID,
-		"subscription", config.SubscriptionID,
-		"resourceGroup", config.ResourceGroup,
-		"serviceName", config.ServiceName,
-		"routePrefix", config.RoutePrefix,
-		"revision", config.Revision,
-		"productCount", len(config.ProductIDs),
-		"tagCount", len(config.TagIDs),
-		"subscriptionRequired", config.SubscriptionRequired,
-	)
+	// If the spec hash matches what we last imported, skip the entire import workflow.
+	if apimApi.Status.SpecHash == newSpecHash {
+		logger.Info("ℹ️ Spec unchanged, skipping import",
+			"apiID", deployment.Spec.APIID,
+			"specHash", newSpecHash,
+		)
+	} else {
+		// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
+		// The token is obtained using workload identity credentials.
+		clientID := os.Getenv("AZURE_CLIENT_ID")
+		tenantID := os.Getenv("AZURE_TENANT_ID")
+		if clientID == "" || tenantID == "" {
+			logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
+		}
+		token, err := identity.GetManagementToken(ctx, clientID, tenantID)
+		if err != nil {
+			logger.Error(err, "❌ Failed to get Azure token", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		logger.Info("🔐 Obtained Azure AD token for APIM call", "apiID", deployment.Spec.APIID)
 
-	// Step 4: Import the OpenAPI definition into Azure APIM.
-	// This creates or updates the API in APIM with the provided specification.
-	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
-		logger.Error(err, "🚫 Failed to import API", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	}
-	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
+		// Step 3: Build the APIM deployment configuration with all necessary parameters.
+		config := apim.APIMDeploymentConfig{
+			SubscriptionID:       deployment.Spec.Subscription,
+			ResourceGroup:        deployment.Spec.ResourceGroup,
+			ServiceName:          deployment.Spec.APIMService,
+			APIID:                deployment.Spec.APIID,
+			RoutePrefix:          deployment.Spec.RoutePrefix,
+			ServiceURL:           deployment.Spec.ServiceURL,
+			Revision:             deployment.Spec.Revision,
+			BearerToken:          token,
+			ProductIDs:           deployment.Spec.ProductIDs,
+			TagIDs:               deployment.Spec.TagIDs,
+			SubscriptionRequired: deployment.Spec.SubscriptionRequired,
+		}
+		logger.Info("🛠️ Built APIM deployment config",
+			"apiID", config.APIID,
+			"subscription", config.SubscriptionID,
+			"resourceGroup", config.ResourceGroup,
+			"serviceName", config.ServiceName,
+			"routePrefix", config.RoutePrefix,
+			"revision", config.Revision,
+			"productCount", len(config.ProductIDs),
+			"tagCount", len(config.TagIDs),
+			"subscriptionRequired", config.SubscriptionRequired,
+		)
 
-	// Step 5: Update the backend service URL for the API.
-	// This points the API to the correct backend service endpoint.
-	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
-		logger.Error(err, "🚫 Failed to patch service URL", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	}
-	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
-
-	// Step 6: Update the subscription requirement setting for the API.
-	// This controls whether a subscription key is required to access the API.
-	// Defaults to true (subscription required) if not explicitly set to false.
-	subscriptionRequired := config.SubscriptionRequired
-	if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
-		logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
-	}
-	logger.Info("✅ Subscription requirement patched in APIM", "apiID", deployment.Spec.APIID, "subscriptionRequired", subscriptionRequired)
-
-	// Step 7: Assign the API to all configured products (if any).
-	// Products are used to group APIs and require subscriptions for access.
-	if len(config.ProductIDs) > 0 {
-		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
-			logger.Error(err, "🚫 Failed to assign API to products", "apiID", deployment.Spec.APIID, "productIDs", config.ProductIDs)
+		// Step 4: Import the OpenAPI definition into Azure APIM.
+		// This creates or updates the API in APIM with the provided specification.
+		if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
+			logger.Error(err, "🚫 Failed to import API", "apiID", deployment.Spec.APIID)
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
-		logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
-	} else {
-		logger.Info("ℹ️ No product IDs configured; skipping product assignment", "apiID", deployment.Spec.APIID)
-	}
+		logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
 
-	// Step 8: Assign the API to all configured tags (if any).
-	// Tags help organize and categorize APIs for better management.
-	if len(config.TagIDs) > 0 {
-		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
-			logger.Error(err, "🚫 Failed to assign API to tags", "apiID", deployment.Spec.APIID, "tagIDs", config.TagIDs)
+		// Step 5: Update the backend service URL for the API.
+		// This points the API to the correct backend service endpoint.
+		if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
+			logger.Error(err, "🚫 Failed to patch service URL", "apiID", deployment.Spec.APIID)
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
-		logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
-	} else {
-		logger.Info("ℹ️ No tag IDs configured; skipping tag assignment", "apiID", deployment.Spec.APIID)
-	}
+		logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
-	// Step 9: Fetch APIM service host details and update the APIMAPI status.
-	// This provides the full URLs for accessing the API through APIM.
-	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
-	if err != nil {
-		logger.Error(err, "⚠️ Failed to fetch APIM details", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{}, err
-	}
+		// Step 6: Update the subscription requirement setting for the API.
+		// This controls whether a subscription key is required to access the API.
+		// Defaults to true (subscription required) if not explicitly set to false.
+		subscriptionRequired := config.SubscriptionRequired
+		if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
+			logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		}
+		logger.Info("✅ Subscription requirement patched in APIM", "apiID", deployment.Spec.APIID, "subscriptionRequired", subscriptionRequired)
 
-	// Update the APIMAPI status with deployment information.
-	// Use Patch to update only status without touching spec fields (like subscriptionRequired).
-	statusPatch := client.MergeFrom(apimApi.DeepCopy())
-	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
-	apimApi.Status.Status = "OK"
-	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
-	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
+		// Step 7: Assign the API to all configured products (if any).
+		// Products are used to group APIs and require subscriptions for access.
+		if len(config.ProductIDs) > 0 {
+			if err := apim.AssignProductsToAPI(ctx, config); err != nil {
+				logger.Error(err, "🚫 Failed to assign API to products", "apiID", deployment.Spec.APIID, "productIDs", config.ProductIDs)
+				return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+			}
+			logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
+		} else {
+			logger.Info("ℹ️ No product IDs configured; skipping product assignment", "apiID", deployment.Spec.APIID)
+		}
 
-	if err := r.Status().Patch(ctx, &apimApi, statusPatch); err != nil {
-		logger.Error(err, "⚠️ Failed to patch APIMAPI status", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{}, err
+		// Step 8: Assign the API to all configured tags (if any).
+		// Tags help organize and categorize APIs for better management.
+		if len(config.TagIDs) > 0 {
+			if err := apim.AssignTagsToAPI(ctx, config); err != nil {
+				logger.Error(err, "🚫 Failed to assign API to tags", "apiID", deployment.Spec.APIID, "tagIDs", config.TagIDs)
+				return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+			}
+			logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
+		} else {
+			logger.Info("ℹ️ No tag IDs configured; skipping tag assignment", "apiID", deployment.Spec.APIID)
+		}
+
+		// Step 9: Fetch APIM service host details and update the APIMAPI status.
+		// This provides the full URLs for accessing the API through APIM.
+		apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
+		if err != nil {
+			logger.Error(err, "⚠️ Failed to fetch APIM details", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{}, err
+		}
+
+		// Update the APIMAPI status with deployment information including the new spec hash.
+		// Use Patch to update only status without touching spec fields (like subscriptionRequired).
+		statusPatch := client.MergeFrom(apimApi.DeepCopy())
+		apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
+		apimApi.Status.Status = "OK"
+		apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
+		apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
+		apimApi.Status.SpecHash = newSpecHash
+
+		if err := r.Status().Patch(ctx, &apimApi, statusPatch); err != nil {
+			logger.Error(err, "⚠️ Failed to patch APIMAPI status", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{}, err
+		}
+		logger.Info("📝 APIMAPI status patched after import",
+			"name", apimApi.Name,
+			"apiID", deployment.Spec.APIID,
+			"apiHost", apimApi.Status.ApiHost,
+			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+			"specHash", newSpecHash,
+		)
 	}
-	logger.Info("📝 APIMAPI status patched after import",
-		"name", apimApi.Name,
-		"apiID", deployment.Spec.APIID,
-		"apiHost", apimApi.Status.ApiHost,
-		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
-		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
-	)
 
 	// Step 10: Clean up the deployment custom resource after successful completion.
 	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
