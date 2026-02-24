@@ -107,18 +107,18 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			originalTenantID := os.Getenv("AZURE_TENANT_ID")
 			defer func() {
 				if originalClientID != "" {
-					os.Setenv("AZURE_CLIENT_ID", originalClientID)
+					_ = os.Setenv("AZURE_CLIENT_ID", originalClientID)
 				} else {
-					os.Unsetenv("AZURE_CLIENT_ID")
+					_ = os.Unsetenv("AZURE_CLIENT_ID")
 				}
 				if originalTenantID != "" {
-					os.Setenv("AZURE_TENANT_ID", originalTenantID)
+					_ = os.Setenv("AZURE_TENANT_ID", originalTenantID)
 				} else {
-					os.Unsetenv("AZURE_TENANT_ID")
+					_ = os.Unsetenv("AZURE_TENANT_ID")
 				}
 			}()
-			os.Unsetenv("AZURE_CLIENT_ID")
-			os.Unsetenv("AZURE_TENANT_ID")
+			_ = os.Unsetenv("AZURE_CLIENT_ID")
+			_ = os.Unsetenv("AZURE_TENANT_ID")
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
