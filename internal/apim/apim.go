@@ -43,7 +43,7 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
 		}
 	}()
 
@@ -124,7 +124,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(openApiContent))
 	if err != nil {
-		logger.Error(err, "❌ Failed to build APIM request")
+		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 
@@ -151,37 +151,37 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		"contentType", "application/vnd.oai.openapi+json",
 	)
 
-	logger.Info("📄 Swagger content", "content", strings.TrimSpace(string(openApiContent)))
+	logger.Info("📄 Swagger content", "apiID", apimParams.APIID, "content", strings.TrimSpace(string(openApiContent)))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Error(err, "❌ Failed to send request to APIM")
+		logger.Error(err, "❌ Failed to send request to APIM", "apiID", apimParams.APIID)
 		return fmt.Errorf("failed to call APIM API: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", apimParams.APIID)
 		}
 	}()
 
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ APIM API returned error", "status", resp.Status, "body", string(body))
+		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ APIM API returned error", "apiID", apimParams.APIID, "status", resp.Status, "body", string(body))
 		return fmt.Errorf("APIM API failed: %s\n%s", resp.Status, string(body))
 	}
 
 	// Azure APIM may return 202 (Accepted) for asynchronous import operations.
 	// Poll completion explicitly so we don't report success while the import later fails.
 	if resp.StatusCode == http.StatusAccepted {
-		if err := waitForAsyncImportCompletion(ctx, apimParams.BearerToken, resp); err != nil {
-			logger.Error(err, "❌ APIM async import did not complete successfully", "api", apimParams.APIID)
+		if err := waitForAsyncImportCompletion(ctx, apimParams.BearerToken, apimParams.APIID, resp); err != nil {
+			logger.Error(err, "❌ APIM async import did not complete successfully", "apiID", apimParams.APIID)
 			return err
 		}
 	}
 
 	logger.Info("✅ Successfully imported API into APIM",
-		"api", apimParams.APIID,
+		"apiID", apimParams.APIID,
 		"status", resp.Status,
 		"statusCode", resp.StatusCode,
 	)
@@ -191,13 +191,13 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 
 // waitForAsyncImportCompletion polls Azure APIM long-running operation URLs until completion.
 // APIM may return either Azure-AsyncOperation or Location headers on 202 responses.
-func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, initialResp *http.Response) error {
+func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, apiID string, initialResp *http.Response) error {
 	pollURL := strings.TrimSpace(initialResp.Header.Get("Azure-AsyncOperation"))
 	if pollURL == "" {
 		pollURL = strings.TrimSpace(initialResp.Header.Get("Location"))
 	}
 	if pollURL == "" {
-		logger.Info("ℹ️ Import returned 202 without polling URL headers; cannot verify completion")
+		logger.Info("ℹ️ Import returned 202 without polling URL headers; cannot verify completion", "apiID", apiID)
 		return nil
 	}
 
@@ -205,7 +205,7 @@ func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, initi
 		pollURL = "https://management.azure.com" + pollURL
 	}
 
-	logger.Info("⏳ Polling APIM async import status", "pollURL", pollURL)
+	logger.Info("⏳ Polling APIM async import status", "apiID", apiID, "pollURL", pollURL)
 
 	timeout := time.After(3 * time.Minute)
 	ticker := time.NewTicker(2 * time.Second)
@@ -250,19 +250,19 @@ func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, initi
 			status := extractAsyncStatus(body)
 			switch strings.ToLower(status) {
 			case "succeeded", "success":
-				logger.Info("✅ APIM async import completed", "pollURL", pollURL)
+				logger.Info("✅ APIM async import completed", "apiID", apiID, "pollURL", pollURL)
 				return nil
 			case "failed", "canceled", "cancelled":
 				return fmt.Errorf("async import reported status=%s body=%s", status, string(body))
 			case "inprogress", "running", "":
 				// If there's no status field and status code is terminal success, consider done.
 				if status == "" && resp.StatusCode != http.StatusAccepted {
-					logger.Info("✅ APIM async import completed (terminal HTTP status)", "httpStatus", resp.Status)
+					logger.Info("✅ APIM async import completed (terminal HTTP status)", "apiID", apiID, "httpStatus", resp.Status)
 					return nil
 				}
-				logger.Info("⌛ APIM async import still in progress", "httpStatus", resp.Status, "operationStatus", status)
+				logger.Info("⌛ APIM async import still in progress", "apiID", apiID, "httpStatus", resp.Status, "operationStatus", status)
 			default:
-				logger.Info("ℹ️ APIM async import returned unknown status", "operationStatus", status, "httpStatus", resp.Status)
+				logger.Info("ℹ️ APIM async import returned unknown status", "apiID", apiID, "operationStatus", status, "httpStatus", resp.Status)
 			}
 		}
 	}
@@ -320,7 +320,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
 		}
 	}()
 
@@ -385,7 +385,7 @@ func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) e
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
 		}
 	}()
 
@@ -422,7 +422,7 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		logger.Error(err, "❌ Failed to build request for API revisions")
+		logger.Error(err, "❌ Failed to build request for API revisions", "apiID", config.APIID)
 		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
 
@@ -435,12 +435,12 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Error(err, "❌ Failed to request API revisions")
+		logger.Error(err, "❌ Failed to request API revisions", "apiID", config.APIID)
 		return nil, fmt.Errorf("failed to call APIM API: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
 		}
 	}()
 
@@ -448,6 +448,7 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 
 	if resp.StatusCode >= 300 {
 		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to get API revisions",
+			"apiID", config.APIID,
 			"status", resp.Status,
 			"body", string(body),
 		)
@@ -456,7 +457,7 @@ func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRev
 
 	var result APIRevisionListResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		logger.Error(err, "❌ Failed to parse API revisions response")
+		logger.Error(err, "❌ Failed to parse API revisions response", "apiID", config.APIID)
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
