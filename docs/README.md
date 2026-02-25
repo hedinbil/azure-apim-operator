@@ -10,7 +10,7 @@ The Azure APIM Operator is a Kubernetes operator that automates API registration
 | [Getting Started](getting-started.md) | Installation via Helm and deploying your first API to APIM |
 | [Custom Resources](custom-resources.md) | CRD reference for all six resource types with field descriptions and example YAML |
 | [Authentication](authentication.md) | Azure Workload Identity setup, fallback methods, and required permissions |
-| [OpenAPI Spec Requirements](openapi-spec-requirements.md) | Producing APIM-compatible OpenAPI specs -- operationId, naming, and migration guide |
+| [OpenAPI Spec Requirements](openapi-spec-requirements.md) | Producing APIM-compatible OpenAPI specs -- operationId and naming conventions |
 | [Helm Configuration](helm-configuration.md) | Complete Helm chart values reference |
 | [Troubleshooting](troubleshooting.md) | Common errors, their causes, and how to resolve them |
 

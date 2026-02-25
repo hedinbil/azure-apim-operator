@@ -58,11 +58,7 @@ kubectl get apiminboundpolicy -n azure-apim-operator-system -o yaml
 
 **Solution:**
 
-1. Add `operationId` (via `.WithName()` in ASP.NET or equivalent in your framework) to every endpoint
-2. Delete the existing API from APIM: `az apim api delete --resource-group <rg> --service-name <apim> --api-id <id> --yes`
-3. Let the operator re-import with the corrected spec
-
-See [OpenAPI Spec Requirements](openapi-spec-requirements.md) for detailed guidance.
+Add `operationId` (via `.WithName()` in ASP.NET or equivalent in your framework) to every endpoint and re-deploy. See [OpenAPI Spec Requirements](openapi-spec-requirements.md) for detailed guidance.
 
 ---
 

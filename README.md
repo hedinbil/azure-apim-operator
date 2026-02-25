@@ -867,11 +867,10 @@ kubectl apply -f config/crd/bases/
 
 **Symptoms**: `ValidationError` stating an operation already exists when the operator re-imports an API
 
-**Cause**: APIM uses the OpenAPI `operationId` as the internal resource name. If your spec omits `operationId`, APIM auto-generates resource names on first import and generates different names on subsequent imports, so it tries to create duplicates instead of updating. The same problem occurs if you add or rename an `operationId` after the initial import.
+**Cause**: APIM uses the OpenAPI `operationId` as the internal resource name. If your spec omits `operationId`, APIM auto-generates resource names on first import and generates different names on subsequent imports, so it tries to create duplicates instead of updating.
 
 **Solution**:
-- Add a stable, unique `operationId` to every operation in your OpenAPI spec **before** the first import
-- If you already imported without `operationId` values, delete the API in the Azure portal and let the operator re-create it on the next deployment
+- Add a stable, unique `operationId` to every operation in your OpenAPI spec and re-deploy
 - See the [Best Practices](#-best-practices) section for framework-specific examples
 
 #### 6. OpenAPI Fetch Fails
@@ -937,7 +936,7 @@ kubectl logs -f -l app.kubernetes.io/name=azure-apim-operator -n apim-operator \
 
 4. **OpenAPI Endpoint**: Ensure your OpenAPI/Swagger endpoint is accessible and returns valid JSON
 
-5. **Set `operationId` on Every Operation**: Your OpenAPI spec **must** include a stable, unique `operationId` for each operation. APIM uses the `operationId` as the internal resource name to match incoming operations against existing ones during re-imports. Without it, APIM auto-generates resource names on first import and generates *different* names on subsequent imports, causing `ValidationError: Operation already exists` failures. Once you pick an `operationId`, do not rename it — changing it after the initial import has the same effect as omitting it.
+5. **Set `operationId` on Every Operation**: Your OpenAPI spec **must** include a stable, unique `operationId` for each operation. APIM uses the `operationId` as the internal resource name to match incoming operations against existing ones during re-imports. Without it, APIM auto-generates resource names on first import and generates *different* names on subsequent imports, causing `ValidationError: Operation already exists` failures.
 
    Common framework examples:
 
