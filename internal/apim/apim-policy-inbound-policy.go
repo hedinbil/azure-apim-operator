@@ -25,7 +25,7 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 
 	// Skip if no policy content is provided.
 	if config.PolicyContent == "" {
-		logger.Info("ℹ️ No policy content specified; skipping policy creation")
+		logger.Info("ℹ️ No policy content specified; skipping policy creation", "apiID", config.APIID)
 		return nil
 	}
 
@@ -97,13 +97,14 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
+			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
 		}
 	}()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to upsert inbound policy",
+			"apiID", config.APIID,
 			"status", resp.Status,
 			"body", string(respBody),
 		)

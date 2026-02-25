@@ -101,32 +101,32 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to get operator namespace")
+		logger.Error(err, "❌ Failed to get operator namespace", "apiID", apimApi.Spec.APIID)
 		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
 	}
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService)
+		logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService, "apiID", apimApi.Spec.APIID)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	logger.Info("🔗 Found APIMService", "name", apimService.Name)
+	logger.Info("🔗 Found APIMService", "name", apimService.Name, "apiID", apimApi.Spec.APIID)
 
 	// Check if an APIMAPIDeployment already exists. If it does, delete it first
 	// to ensure we get the latest version of the swagger when the pod becomes ready.
 	var existingRevision apimv1.APIMAPIDeployment
 	err = r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existingRevision)
 	if err == nil {
-		logger.Info("♻️ APIMAPIDeployment already exists, deleting to get latest swagger", "name", appName)
+		logger.Info("♻️ APIMAPIDeployment already exists, deleting to get latest swagger", "name", appName, "apiID", apimApi.Spec.APIID)
 		if err := r.Delete(ctx, &existingRevision); err != nil {
-			logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", appName)
+			logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", appName, "apiID", apimApi.Spec.APIID)
 			return ctrl.Result{}, err
 		}
 		// Wait briefly to avoid race condition with deletion
 		time.Sleep(2 * time.Second)
 	} else if !apierrors.IsNotFound(err) {
-		logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name)
+		logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name, "apiID", apimApi.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 
@@ -135,7 +135,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// to ensure the application is actually running and can serve requests.
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err != nil {
-		logger.Error(err, "❌ Failed listing Pods", "replicaSet", rs.Name)
+		logger.Error(err, "❌ Failed listing Pods", "replicaSet", rs.Name, "apiID", apimApi.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 
@@ -157,7 +157,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Use a longer interval to reduce log spam, and rely on ReplicaSet status updates
 	// to trigger reconciliation when pods become ready.
 	if ownerPod == nil {
-		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace, "readyReplicas", rs.Status.ReadyReplicas, "replicas", rs.Status.Replicas)
+		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace, "apiID", apimApi.Spec.APIID, "readyReplicas", rs.Status.ReadyReplicas, "replicas", rs.Status.Replicas)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -224,9 +224,9 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if err := r.Create(ctx, apiDeployment); err != nil {
-		logger.Error(err, "❌ Failed to create APIMAPIDeployment")
+		logger.Error(err, "❌ Failed to create APIMAPIDeployment", "apiID", apimApi.Spec.APIID)
 	} else {
-		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name)
+		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name, "apiID", apimApi.Spec.APIID)
 	}
 
 	return ctrl.Result{}, nil

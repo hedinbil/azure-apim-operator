@@ -52,12 +52,12 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name)
+	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
 
 	// Initialize annotations map if it doesn't exist.
 	if apimApi.Annotations == nil {
 		apimApi.Annotations = map[string]string{}
-		logger.Info("ℹ️ Annotations were nil, initializing map")
+		logger.Info("ℹ️ Annotations were nil, initializing map", "apiID", apimApi.Spec.APIID)
 	}
 
 	// Update the ArgoCD external link annotation with the API host URL.
@@ -67,7 +67,7 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
 
 	if err := r.Patch(ctx, &apimApi, annotationPatch); err != nil {
-		logger.Error(err, "❌ Failed to patch APIMAPI with external link annotations")
+		logger.Error(err, "❌ Failed to patch APIMAPI with external link annotations", "apiID", apimApi.Spec.APIID)
 		return ctrl.Result{}, err
 	} else {
 		logger.Info("📋 APIMAPI details after successful update",
@@ -91,7 +91,7 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		)
 	}
 
-	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name)
+	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
 
 	return ctrl.Result{}, nil
 }

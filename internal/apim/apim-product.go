@@ -198,7 +198,7 @@ func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error
 		}
 		defer func() {
 			if closeErr := resp.Body.Close(); closeErr != nil {
-				logger.Error(closeErr, "⚠️ Failed to close response body")
+				logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID, "productID", productID)
 			}
 		}()
 

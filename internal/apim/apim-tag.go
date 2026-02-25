@@ -115,13 +115,15 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 		}
 		defer func() {
 			if closeErr := resp.Body.Close(); closeErr != nil {
-				logger.Error(closeErr, "⚠️ Failed to close response body")
+				logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID, "tagID", tagID)
 			}
 		}()
 
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode >= 300 {
 			logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to assign tag to API",
+				"apiID", config.APIID,
+				"tagID", tagID,
 				"status", resp.Status,
 				"body", string(body),
 			)

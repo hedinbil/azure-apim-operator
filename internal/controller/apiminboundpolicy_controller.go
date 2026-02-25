@@ -69,20 +69,20 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to get operator namespace")
+		logger.Error(err, "❌ Failed to get operator namespace", "apiID", policy.Spec.APIID)
 		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
 	}
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: policy.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", policy.Spec.APIMService)
+		logger.Error(err, "❌ Failed to get APIMService", "name", policy.Spec.APIMService, "apiID", policy.Spec.APIID)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
-		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
+		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set", "apiID", policy.Spec.APIID)
 		// Use Patch to update only status without touching spec fields.
 		statusPatch := client.MergeFrom(policy.DeepCopy())
 		policy.Status.Phase = phaseError
@@ -93,7 +93,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
-		logger.Error(err, "❌ Failed to get Azure token")
+		logger.Error(err, "❌ Failed to get Azure token", "apiID", policy.Spec.APIID)
 		// Use Patch to update only status without touching spec fields.
 		statusPatch := client.MergeFrom(policy.DeepCopy())
 		policy.Status.Phase = phaseError
@@ -134,7 +134,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Use Patch to update only status without touching spec fields.
 	statusPatch := client.MergeFrom(policy.DeepCopy())
 	if err := r.Status().Patch(ctx, &policy, statusPatch); err != nil {
-		logger.Error(err, "❌ Failed to patch APIMInboundPolicy status")
+		logger.Error(err, "❌ Failed to patch APIMInboundPolicy status", "apiID", cfg.APIID)
 		return ctrl.Result{}, err
 	}
 
