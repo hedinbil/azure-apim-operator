@@ -42,9 +42,6 @@ type APIMAPIStatus struct {
 	ApiHost string `json:"apiHost"`
 	// DeveloperPortalHost is the URL of the APIM developer portal.
 	DeveloperPortalHost string `json:"developerPortalHost"`
-	// SpecHash is the SHA-256 hash of the last successfully imported OpenAPI definition.
-	// Used to skip redundant imports when the spec has not changed.
-	SpecHash string `json:"specHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
