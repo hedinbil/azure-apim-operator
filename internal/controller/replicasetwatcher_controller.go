@@ -73,7 +73,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if client.IgnoreNotFound(err) == nil {
 			// If no APIMAPI resource exists, there's nothing to deploy.
 			logger.Info("ℹ️ APIMAPI not found for ReplicaSet; skipping deployment",
-				"replicaSet", rs.Name, "namespace", rs.Namespace, "appName", appName)
+				"replicaSet", rs.Name, "namespace", rs.Namespace, "apiID", appName)
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)

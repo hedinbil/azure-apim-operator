@@ -85,10 +85,10 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	var apimApi apimv1.APIMAPI
 	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "name", deployment.Spec.APIID)
+			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "apiID", deployment.Spec.APIID)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "❌ Failed to get APIMAPI", "name", deployment.Spec.APIID)
+		logger.Error(err, "❌ Failed to get APIMAPI", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
 	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status, "apiID", deployment.Spec.APIID)
@@ -96,7 +96,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 1: Fetch the OpenAPI definition from the specified URL.
 	// This uses retry logic to handle transient network failures.
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
-	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "name", deployment.Spec.APIID)
+	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "apiID", deployment.Spec.APIID)
 	// resp, err := http.Get(openApiURL)
 	// if err != nil {
 	// 	logger.Error(err, "❌ Failed to fetch OpenAPI definition")
