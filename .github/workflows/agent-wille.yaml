@@ -3,8 +3,8 @@ run-name: Wille Run ${{ github.run_number }}
 
 on:
   schedule:
-    - cron: '0 1 * * *'  # Daily at 01:00 UTC
-  workflow_dispatch: # Allow manual triggering
+    - cron: '0 1 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,15 +14,7 @@ permissions:
 
 jobs:
   wille-worklog:
-    name: Wille - Worklog Automation
-    runs-on: [linux-runner]
-    timeout-minutes: 15
-
-    steps:
-      - name: Run Wille Agent
-        uses: hedinbil/hedin-github-actions/agent-wille@main
-        with:
-          cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          agent-wille-client-secret: ${{ secrets.AGENT_WILLE_CLIENT_SECRET }}
-          otel-team: operations
+    uses: hedinbil/hedin-github-actions/.github/workflows/agent-wille.yml@main
+    secrets: inherit
+    with:
+      otel-team: operations
