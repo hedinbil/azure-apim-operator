@@ -15,7 +15,7 @@ permissions:
 jobs:
   wille-worklog:
     name: Wille - Worklog Automation
-    runs-on: ubuntu-latest
+    runs-on: [linux-runner]
     timeout-minutes: 15
 
     steps:
