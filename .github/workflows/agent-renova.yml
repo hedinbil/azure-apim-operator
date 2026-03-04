@@ -17,6 +17,13 @@ on:
   schedule:
     - cron: '0 */2 * * *'
 
+permissions:
+  contents: write
+  actions: write
+  id-token: write
+  pull-requests: read
+  issues: read
+
 jobs:
   cleanup:
     uses: hedinbil/hedin-github-actions-public/.github/workflows/agent-renova.yml@main
