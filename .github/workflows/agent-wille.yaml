@@ -15,6 +15,8 @@ permissions:
 jobs:
   wille-worklog:
     uses: hedinbil/hedin-github-actions/.github/workflows/agent-wille.yml@main
-    secrets: inherit
+    secrets:
+      openai-api-key: ${{ secrets.AGENT_OPENAI_KEY_230 }}
     with:
+      openai-base-url: 'https://oai-openai-prod-230.openai.azure.com/openai/'
       otel-team: operations
