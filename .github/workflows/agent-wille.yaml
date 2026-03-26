@@ -17,6 +17,7 @@ jobs:
     uses: hedinbil/hedin-github-actions/.github/workflows/agent-wille.yml@main
     secrets:
       openai-api-key: ${{ secrets.AGENT_OPENAI_KEY_230 }}
+      agent-wille-client-secret: ${{ secrets.AGENT_WILLE_CLIENT_SECRET }}
     with:
       openai-base-url: 'https://oai-openai-prod-230.openai.azure.com/openai/'
       otel-team: operations
