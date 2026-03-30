@@ -4,6 +4,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// APIMAPITarget defines how an APIMAPI maps to workloads in the cluster.
+// When Selector is omitted, the legacy behavior is used and the APIMAPI name
+// must match the ReplicaSet app.kubernetes.io/name label.
+type APIMAPITarget struct {
+	// Selector matches ReplicaSets whose readiness events should trigger this API import.
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+}
+
 // APIMAPISpec defines the desired state of APIMAPI.
 // This spec contains the configuration needed to import and manage an API in Azure API Management.
 type APIMAPISpec struct {
@@ -13,6 +21,10 @@ type APIMAPISpec struct {
 	RoutePrefix string `json:"routePrefix"`
 	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
 	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
+	// Target optionally selects which ReplicaSets should trigger imports for this API.
+	// If omitted, the operator falls back to matching metadata.name with the
+	// ReplicaSet app.kubernetes.io/name label.
+	Target *APIMAPITarget `json:"target,omitempty"`
 	// ProductIDs is a list of product IDs to associate this API with in APIM.
 	// Products are used to group APIs and require subscriptions.
 	ProductIDs []string `json:"productIds,omitempty"`

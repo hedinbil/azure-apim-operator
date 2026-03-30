@@ -4,7 +4,7 @@ This document describes how the Azure APIM Operator works internally, including 
 
 ## High-Level Overview
 
-The operator runs as a Kubernetes controller manager that watches custom resources and Kubernetes-native resources (ReplicaSets). When applications are deployed or updated, the operator automatically imports their OpenAPI specs into Azure API Management.
+The operator runs as a Kubernetes controller manager that watches custom resources and Kubernetes-native resources (ReplicaSets). When applications are deployed or updated, the operator automatically imports their OpenAPI specs into Azure API Management. ReplicaSets are matched to `APIMAPI` resources through an optional label selector, with a legacy fallback to name-based matching.
 
 ```mermaid
 flowchart LR
@@ -61,10 +61,10 @@ sequenceDiagram
     participant APIM as Azure APIM
 
     K8s->>RSW: ReplicaSet ReadyReplicas 0 -> N
-    RSW->>K8s: Look up APIMAPI by app label
-    RSW->>K8s: Look up APIMService
-    RSW->>K8s: Delete existing APIMAPIDeployment if any
-    RSW->>K8s: Create APIMAPIDeployment
+    RSW->>K8s: Match APIMAPI resources by selector or legacy app label
+    RSW->>K8s: Look up APIMService for each match
+    RSW->>K8s: Delete existing APIMAPIDeployment(s) if any
+    RSW->>K8s: Create APIMAPIDeployment(s)
 
     K8s->>ADR: APIMAPIDeployment created
     ADR->>App: GET OpenAPI spec (with retries)
@@ -91,12 +91,14 @@ It ignores ReplicaSets scaled to 0 replicas (old revisions during rolling update
 
 When triggered, it:
 
-1. Extracts the `app.kubernetes.io/name` label from the ReplicaSet
-2. Looks up an `APIMAPI` resource with a matching name in the same namespace
-3. If found, looks up the referenced `APIMService` in the operator namespace
-4. Deletes any existing `APIMAPIDeployment` for this app (to force a fresh import)
+1. Lists `APIMAPI` resources in the same namespace and matches any `spec.target.selector` entries against the ReplicaSet labels
+2. If `spec.target.selector` is omitted, falls back to the legacy rule: `APIMAPI.metadata.name == ReplicaSet.labels["app.kubernetes.io/name"]`
+3. For each matched `APIMAPI`, looks up the referenced `APIMService` in the operator namespace
+4. Deletes any existing `APIMAPIDeployment` for that API (to force a fresh import)
 5. Waits for at least one ready pod owned by the ReplicaSet
-6. Creates a new `APIMAPIDeployment` with all configuration from the `APIMAPI` and `APIMService`
+6. Creates a new `APIMAPIDeployment` per matched API, including an explicit `spec.apimApiName` back-reference to the source `APIMAPI`
+
+This allows one ReplicaSet to trigger zero, one, or many API imports.
 
 ### Step 2: API Deployment
 
@@ -179,6 +181,7 @@ flowchart TD
     ReplicaSet["ReplicaSet\n(Kubernetes native)"]
 
     APIMAPI -->|references| APIMService
+    APIMAPI -->|optionally selects| ReplicaSet
     APIMAPIDeployment -->|owned by| APIMAPI
     APIMAPIDeployment -->|reads config from| APIMService
     APIMProduct -->|references| APIMService
@@ -188,6 +191,6 @@ flowchart TD
 ```
 
 - `APIMService` is the central reference -- all other resources point to it to identify which APIM instance to target
-- `APIMAPI` declares that an API should be managed in APIM and holds the desired configuration
-- `APIMAPIDeployment` is a transient resource created by the ReplicaSet watcher and deleted after successful import
+- `APIMAPI` declares that an API should be managed in APIM, holds the desired configuration, and can optionally target workloads via `spec.target.selector`
+- `APIMAPIDeployment` is a transient resource created by the ReplicaSet watcher and deleted after successful import; it carries `spec.apimApiName` to identify the source `APIMAPI`
 - `APIMProduct`, `APIMTag`, and `APIMInboundPolicy` are independently managed supporting resources

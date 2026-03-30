@@ -45,6 +45,11 @@ spec:
               APIID:
                 description: APIID is the unique identifier for the API in Azure APIM.
                 type: string
+              apimApiName:
+                description: |-
+                  APIMAPIName is the name of the APIMAPI resource that produced this deployment.
+                  When omitted, legacy behavior falls back to using the deployment name.
+                type: string
               apimService:
                 description: APIMService is the name of the APIMService custom resource.
                 type: string

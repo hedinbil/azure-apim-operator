@@ -20,6 +20,9 @@ type APIMAPIDeploymentSpec struct {
 	TagIDs []string `json:"tagIds,omitempty"`
 	// APIMService is the name of the APIMService custom resource.
 	APIMService string `json:"apimService"`
+	// APIMAPIName is the name of the APIMAPI resource that produced this deployment.
+	// When omitted, legacy behavior falls back to using the deployment name.
+	APIMAPIName string `json:"apimApiName,omitempty"`
 	// Subscription is the Azure subscription ID where the APIM service is deployed.
 	Subscription string `json:"subscription"`
 	// ResourceGroup is the Azure resource group where the APIM service is located.

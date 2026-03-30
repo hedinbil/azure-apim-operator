@@ -17,7 +17,7 @@ This guide walks through installing the Azure APIM Operator and deploying your f
 
 ```bash
 helm install azure-apim-operator oci://ghcr.io/hedinit/azure-apim-operator/azure-apim-operator \
-  --version 0.23.0 \
+  --version 0.24.0 \
   --namespace azure-apim-operator-system \
   --create-namespace \
   --set serviceAccount.workloadIdentity.enabled=true \
@@ -68,14 +68,18 @@ The `APIMAPI` resource tells the operator which API to manage in APIM. Create it
 apiVersion: apim.operator.io/v1
 kind: APIMAPI
 metadata:
-  name: my-app                              # Must match app.kubernetes.io/name label on your Deployment
+  name: my-public-api
   namespace: my-namespace
 spec:
   APIID: my-api                             # Unique API identifier in APIM
   apimService: my-apim-instance             # References the APIMService CR
   routePrefix: /my-api                      # Base path in APIM
-  serviceUrl: http://my-app.my-namespace.svc.cluster.local
-  openApiDefinitionUrl: http://my-app.my-namespace.svc.cluster.local/swagger/v1/swagger.json
+  serviceUrl: https://my-app.internal.example.com
+  openApiDefinitionUrl: https://my-app.internal.example.com/swagger/v1/swagger.json
+  target:
+    selector:
+      matchLabels:
+        app.kubernetes.io/name: my-app
   subscriptionRequired: true
   productIds:                                # Optional
     - my-product
@@ -83,15 +87,20 @@ spec:
     - my-tag
 ```
 
-**Important:** The `metadata.name` must match the `app.kubernetes.io/name` label on your application's Deployment/ReplicaSet. This is how the operator connects a running application to its APIM configuration.
+`serviceUrl` and `openApiDefinitionUrl` remain explicit URLs. In many setups they point at an ingress or internal hostname rather than a Kubernetes Service DNS name.
+
+**Matching behavior:**
+
+- Preferred: set `spec.target.selector` to match the application's ReplicaSet labels.
+- Legacy fallback: if `spec.target.selector` is omitted, `metadata.name` must match the workload's `app.kubernetes.io/name` label.
 
 ### Step 2: Deploy your application
 
 When your application's ReplicaSet has ready pods, the operator automatically:
 
 1. Detects the ready ReplicaSet
-2. Matches it to the `APIMAPI` resource by the `app.kubernetes.io/name` label
-3. Creates a transient `APIMAPIDeployment` resource
+2. Matches it to one or more `APIMAPI` resources using `spec.target.selector`, or the legacy name-based fallback if no selector is set
+3. Creates a transient `APIMAPIDeployment` resource for each match
 4. Fetches the OpenAPI spec from `openApiDefinitionUrl`
 5. Imports it into Azure APIM
 6. Configures service URL, products, tags, and subscription settings
@@ -103,7 +112,7 @@ When your application's ReplicaSet has ready pods, the operator automatically:
 Check the APIMAPI status:
 
 ```bash
-kubectl get apimapi my-app -n my-namespace -o yaml
+kubectl get apimapi my-public-api -n my-namespace -o yaml
 ```
 
 Look for the `status` section:
@@ -121,6 +130,8 @@ You can also verify in the Azure portal by navigating to your APIM instance and 
 ## What Happens on Redeployment
 
 Every time your application is updated (a new ReplicaSet becomes ready), the operator re-imports the OpenAPI spec. This keeps APIM in sync with your latest API changes.
+
+You can have multiple `APIMAPI` resources point at the same application by using selectors, while still giving each API its own `APIID`, route prefix, and backend/OpenAPI URLs.
 
 For this to work reliably on repeated imports, your OpenAPI spec must include `operationId` on every operation. See [OpenAPI Spec Requirements](openapi-spec-requirements.md) for details.
 

@@ -21,7 +21,7 @@ flowchart TD
     APIMAPIDeployment -->|owned by| APIMAPI
 ```
 
-All resources reference an `APIMService` to identify which Azure APIM instance to target. `APIMAPIDeployment` is additionally owned by an `APIMAPI` resource.
+All resources reference an `APIMService` to identify which Azure APIM instance to target. `APIMAPI` can optionally select application ReplicaSets via `spec.target.selector`, and `APIMAPIDeployment` is additionally owned by an `APIMAPI` resource.
 
 ---
 
@@ -67,7 +67,11 @@ Declares an API that should be managed in Azure APIM. The operator uses this as 
 
 **Namespace:** Same namespace as the application Deployment.
 
-**Important:** The `metadata.name` must match the `app.kubernetes.io/name` label on the application's Deployment. This is how the operator connects deployments to APIM configurations.
+**Matching behavior:**
+
+- Preferred: set `spec.target.selector` to match the application's ReplicaSet labels.
+- Legacy fallback: if `spec.target.selector` is omitted, `metadata.name` must match the ReplicaSet `app.kubernetes.io/name` label.
+- `serviceUrl` and `openApiDefinitionUrl` remain explicit URLs. They often point to an ingress or internal host rather than a Kubernetes Service DNS name.
 
 ### Spec Fields
 
@@ -78,6 +82,7 @@ Declares an API that should be managed in Azure APIM. The operator uses this as 
 | `routePrefix` | string | Yes | | Base route path in APIM (e.g., `/my-api`) |
 | `serviceUrl` | string | Yes | | Backend service URL that APIM proxies to |
 | `openApiDefinitionUrl` | string | Yes | | URL to fetch the OpenAPI/Swagger spec |
+| `target.selector` | object | No | | Label selector used to match application ReplicaSets |
 | `subscriptionRequired` | bool | No | `true` | Whether a subscription key is required |
 | `productIds` | []string | No | | Product IDs to associate with this API |
 | `tagIds` | []string | No | | Tag IDs to apply to this API |
@@ -97,14 +102,18 @@ Declares an API that should be managed in Azure APIM. The operator uses this as 
 apiVersion: apim.operator.io/v1
 kind: APIMAPI
 metadata:
-  name: payment-service
+  name: payment-public
   namespace: integrations
 spec:
   APIID: payment-api
   apimService: my-apim
   routePrefix: /payments
-  serviceUrl: http://payment-service.integrations.svc.cluster.local
-  openApiDefinitionUrl: http://payment-service.integrations.svc.cluster.local/swagger/v1/swagger.json
+  serviceUrl: https://payments.internal.example.com
+  openApiDefinitionUrl: https://payments.internal.example.com/swagger/v1/swagger.json
+  target:
+    selector:
+      matchLabels:
+        app.kubernetes.io/name: payment-service
   subscriptionRequired: true
   productIds:
     - integrations-product
@@ -112,13 +121,15 @@ spec:
     - payments
 ```
 
+If you omit `target`, the legacy behavior still works: name the `APIMAPI` resource `payment-service` so it matches `app.kubernetes.io/name` on the workload.
+
 ---
 
 ## APIMAPIDeployment
 
 A transient resource that triggers the API import workflow. Created automatically by the `ReplicaSetWatcher` controller when an application ReplicaSet becomes ready. Deleted automatically after a successful import.
 
-You typically do not create this resource manually.
+You typically do not create this resource manually. The controller sets `spec.apimApiName` so the deployment can patch status back onto the source `APIMAPI` without relying on implicit name matching.
 
 **Namespace:** Same namespace as the application.
 
@@ -127,6 +138,7 @@ You typically do not create this resource manually.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `APIID` | string | Yes | | Unique identifier for the API in APIM |
+| `apimApiName` | string | No | | Source `APIMAPI` name; set automatically by the operator |
 | `apimService` | string | Yes | | Name of the `APIMService` CR |
 | `subscription` | string | Yes | | Azure subscription ID |
 | `resourceGroup` | string | Yes | | Azure resource group |
@@ -151,21 +163,22 @@ You typically do not create this resource manually.
 apiVersion: apim.operator.io/v1
 kind: APIMAPIDeployment
 metadata:
-  name: payment-service
+  name: payment-public
   namespace: integrations
   ownerReferences:
     - apiVersion: apim.operator.io/v1
       kind: APIMAPI
-      name: payment-service
+      name: payment-public
       controller: true
 spec:
   APIID: payment-api
+  apimApiName: payment-public
   apimService: my-apim
   subscription: 00000000-0000-0000-0000-000000000000
   resourceGroup: rg-apim-prod
   routePrefix: /payments
-  serviceUrl: http://payment-service.integrations.svc.cluster.local
-  openApiDefinitionUrl: http://payment-service.integrations.svc.cluster.local/swagger/v1/swagger.json
+  serviceUrl: https://payments.internal.example.com
+  openApiDefinitionUrl: https://payments.internal.example.com/swagger/v1/swagger.json
   subscriptionRequired: true
   productIds:
     - integrations-product

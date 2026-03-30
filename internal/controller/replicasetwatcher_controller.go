@@ -10,8 +10,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -57,77 +59,34 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	// Extract the application name from the ReplicaSet labels.
-	// The app.kubernetes.io/name label is used to match ReplicaSets with APIMAPI resources.
+	// Extract the legacy application name from the ReplicaSet labels.
+	// This is still used as a fallback when APIMAPI.spec.target.selector is not set.
 	appName := rs.Labels["app.kubernetes.io/name"]
-	if appName == "" {
-		logger.Info("⚠️ Missing app label on ReplicaSet; skipping APIM deployment",
-			"replicaSet", rs.Name, "namespace", rs.Namespace)
+
+	apimApis, err := r.findMatchingAPIMAPIs(ctx, &rs)
+	if err != nil {
+		logger.Error(err, "❌ Failed to resolve APIMAPI targets", "replicaSet", rs.Name, "namespace", rs.Namespace, "appName", appName)
+		return ctrl.Result{}, err
+	}
+	if len(apimApis) == 0 {
+		logger.Info("ℹ️ No matching APIMAPI resources for ReplicaSet; skipping deployment",
+			"replicaSet", rs.Name,
+			"namespace", rs.Namespace,
+			"appName", appName)
 		return ctrl.Result{}, nil
 	}
 
-	// Look up the associated APIMAPI resource for this application.
-	// The APIMAPI resource contains the configuration for deploying to APIM.
-	var apimApi apimv1.APIMAPI
-	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &apimApi); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// If no APIMAPI resource exists, there's nothing to deploy.
-			logger.Info("ℹ️ APIMAPI not found for ReplicaSet; skipping deployment",
-				"replicaSet", rs.Name, "namespace", rs.Namespace, "apiID", appName)
-			return ctrl.Result{}, nil
-		}
-		logger.Error(err, "❌ Failed to get APIMAPI", "name", appName)
-		return ctrl.Result{}, err
-	} else {
-		logger.Info("📋 APIMAPI details after successful fetch",
-			"name", apimApi.Name,
-			"namespace", apimApi.Namespace,
-			"generation", apimApi.Generation,
-			"resourceVersion", apimApi.ResourceVersion,
-			"apiID", apimApi.Spec.APIID,
-			"apimService", apimApi.Spec.APIMService,
-			"routePrefix", apimApi.Spec.RoutePrefix,
-			"serviceUrl", apimApi.Spec.ServiceURL,
-			"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
-			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
-			"productIds", apimApi.Spec.ProductIDs,
-			"tagIds", apimApi.Spec.TagIDs,
-			"apiHost", apimApi.Status.ApiHost,
-			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
-			"status", apimApi.Status.Status,
-			"importedAt", apimApi.Status.ImportedAt,
-		)
-	}
+	logger.Info("🎯 Matched APIMAPI resources for ReplicaSet",
+		"replicaSet", rs.Name,
+		"namespace", rs.Namespace,
+		"appName", appName,
+		"matchCount", len(apimApis),
+	)
 
 	operatorNamespace, err := getOperatorNamespace()
 	if err != nil {
-		logger.Error(err, "❌ Failed to get operator namespace", "apiID", apimApi.Spec.APIID)
+		logger.Error(err, "❌ Failed to get operator namespace", "replicaSet", rs.Name, "namespace", rs.Namespace)
 		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
-	}
-
-	var apimService apimv1.APIMService
-	if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService, "apiID", apimApi.Spec.APIID)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	logger.Info("🔗 Found APIMService", "name", apimService.Name, "apiID", apimApi.Spec.APIID)
-
-	// Check if an APIMAPIDeployment already exists. If it does, delete it first
-	// to ensure we get the latest version of the swagger when the pod becomes ready.
-	var existingRevision apimv1.APIMAPIDeployment
-	err = r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &existingRevision)
-	if err == nil {
-		logger.Info("♻️ APIMAPIDeployment already exists, deleting to get latest swagger", "name", appName, "apiID", apimApi.Spec.APIID)
-		if err := r.Delete(ctx, &existingRevision); err != nil {
-			logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", appName, "apiID", apimApi.Spec.APIID)
-			return ctrl.Result{}, err
-		}
-		// Wait briefly to avoid race condition with deletion
-		time.Sleep(2 * time.Second)
-	} else if !apierrors.IsNotFound(err) {
-		logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name, "apiID", apimApi.Spec.APIID)
-		return ctrl.Result{}, err
 	}
 
 	// Check if there's at least one ready pod owned by this ReplicaSet.
@@ -135,7 +94,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// to ensure the application is actually running and can serve requests.
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(rs.Namespace)); err != nil {
-		logger.Error(err, "❌ Failed listing Pods", "replicaSet", rs.Name, "apiID", apimApi.Spec.APIID)
+		logger.Error(err, "❌ Failed listing Pods", "replicaSet", rs.Name, "namespace", rs.Namespace)
 		return ctrl.Result{}, err
 	}
 
@@ -157,7 +116,7 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Use a longer interval to reduce log spam, and rely on ReplicaSet status updates
 	// to trigger reconciliation when pods become ready.
 	if ownerPod == nil {
-		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace, "apiID", apimApi.Spec.APIID, "readyReplicas", rs.Status.ReadyReplicas, "replicas", rs.Status.Replicas)
+		logger.Info("⏳ Waiting for Pod Ready", "replicaSet", rs.Name, "namespace", rs.Namespace, "readyReplicas", rs.Status.ReadyReplicas, "replicas", rs.Status.Replicas, "matchCount", len(apimApis))
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -186,50 +145,153 @@ func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// logger.Info("🌐 Found matching Ingress", "ingress", matchingIngress.Name)
 
-	logger.Info("🚀 Preparing APIM deployment",
-		"replicaSet", rs.Name,
-		"namespace", rs.Namespace,
-		"apiID", apimApi.Spec.APIID,
-		"routePrefix", apimApi.Spec.RoutePrefix,
-		"openApiUrl", apimApi.Spec.OpenAPIDefinitionURL,
-		"productCount", len(apimApi.Spec.ProductIDs),
-		"tagCount", len(apimApi.Spec.TagIDs),
-		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
-	)
+	var reconcileErrs []error
+	for _, apimApi := range apimApis {
+		var apimService apimv1.APIMService
+		if err := r.Get(ctx, client.ObjectKey{Name: apimApi.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
+			logger.Error(err, "❌ Failed to get APIMService", "name", apimApi.Spec.APIMService, "apiID", apimApi.Spec.APIID, "apimapi", apimApi.Name)
+			reconcileErrs = append(reconcileErrs, client.IgnoreNotFound(err))
+			continue
+		}
 
-	apiDeployment := &apimv1.APIMAPIDeployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName,
-			Namespace: rs.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
-					Group:   "apim.operator.io",
-					Version: "v1",
-					Kind:    "APIMAPI",
-				}),
+		logger.Info("🚀 Preparing APIM deployment",
+			"replicaSet", rs.Name,
+			"namespace", rs.Namespace,
+			"apimapi", apimApi.Name,
+			"apiID", apimApi.Spec.APIID,
+			"routePrefix", apimApi.Spec.RoutePrefix,
+			"openApiUrl", apimApi.Spec.OpenAPIDefinitionURL,
+			"productCount", len(apimApi.Spec.ProductIDs),
+			"tagCount", len(apimApi.Spec.TagIDs),
+			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+		)
+
+		var existingRevision apimv1.APIMAPIDeployment
+		err = r.Get(ctx, client.ObjectKey{Name: apimApi.Name, Namespace: rs.Namespace}, &existingRevision)
+		if err == nil {
+			logger.Info("♻️ APIMAPIDeployment already exists, deleting to get latest swagger", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
+			if err := r.Delete(ctx, &existingRevision); err != nil {
+				logger.Error(err, "❌ Failed to delete existing APIMAPIDeployment", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
+				reconcileErrs = append(reconcileErrs, err)
+				continue
+			}
+			// Wait briefly to avoid race condition with deletion
+			time.Sleep(2 * time.Second)
+		} else if !apierrors.IsNotFound(err) {
+			logger.Error(err, "❌ Failed checking APIMAPIDeployment", "replicaSet", rs.Name, "apiID", apimApi.Spec.APIID)
+			reconcileErrs = append(reconcileErrs, err)
+			continue
+		}
+
+		apiDeployment := &apimv1.APIMAPIDeployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      apimApi.Name,
+				Namespace: rs.Namespace,
+				OwnerReferences: []metav1.OwnerReference{
+					*metav1.NewControllerRef(&apimApi, schema.GroupVersionKind{
+						Group:   "apim.operator.io",
+						Version: "v1",
+						Kind:    "APIMAPI",
+					}),
+				},
 			},
-		},
-		Spec: apimv1.APIMAPIDeploymentSpec{
-			ServiceURL:           apimApi.Spec.ServiceURL,
-			RoutePrefix:          apimApi.Spec.RoutePrefix,
-			OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
-			APIMService:          apimApi.Spec.APIMService,
-			Subscription:         apimService.Spec.Subscription,
-			ResourceGroup:        apimService.Spec.ResourceGroup,
-			APIID:                apimApi.Spec.APIID,
-			ProductIDs:           apimApi.Spec.ProductIDs,
-			TagIDs:               apimApi.Spec.TagIDs,
-			SubscriptionRequired: apimApi.Spec.SubscriptionRequired,
-		},
+			Spec: apimv1.APIMAPIDeploymentSpec{
+				ServiceURL:           apimApi.Spec.ServiceURL,
+				RoutePrefix:          apimApi.Spec.RoutePrefix,
+				OpenAPIDefinitionURL: apimApi.Spec.OpenAPIDefinitionURL,
+				APIMService:          apimApi.Spec.APIMService,
+				APIMAPIName:          apimApi.Name,
+				Subscription:         apimService.Spec.Subscription,
+				ResourceGroup:        apimService.Spec.ResourceGroup,
+				APIID:                apimApi.Spec.APIID,
+				ProductIDs:           apimApi.Spec.ProductIDs,
+				TagIDs:               apimApi.Spec.TagIDs,
+				SubscriptionRequired: apimApi.Spec.SubscriptionRequired,
+			},
+		}
+
+		if err := r.Create(ctx, apiDeployment); err != nil {
+			logger.Error(err, "❌ Failed to create APIMAPIDeployment", "name", apiDeployment.Name, "apiID", apimApi.Spec.APIID)
+			reconcileErrs = append(reconcileErrs, err)
+			continue
+		}
+
+		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name, "apiID", apimApi.Spec.APIID, "apimApiName", apiDeployment.Spec.APIMAPIName)
 	}
 
-	if err := r.Create(ctx, apiDeployment); err != nil {
-		logger.Error(err, "❌ Failed to create APIMAPIDeployment", "apiID", apimApi.Spec.APIID)
-	} else {
-		logger.Info("📘 Created APIMAPIDeployment", "name", apiDeployment.Name, "apiID", apimApi.Spec.APIID)
+	if len(reconcileErrs) > 0 {
+		return ctrl.Result{}, utilerrors.NewAggregate(reconcileErrs)
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *ReplicaSetWatcherReconciler) findMatchingAPIMAPIs(ctx context.Context, rs *appsv1.ReplicaSet) ([]apimv1.APIMAPI, error) {
+	logger := ctrl.Log.WithName("replicasetwatcher_controller")
+	matches := make([]apimv1.APIMAPI, 0)
+
+	var apimApiList apimv1.APIMAPIList
+	if err := r.List(ctx, &apimApiList, client.InNamespace(rs.Namespace)); err != nil {
+		return nil, err
+	}
+
+	for _, apimApi := range apimApiList.Items {
+		if !hasAPIMAPITargetSelector(&apimApi) {
+			continue
+		}
+
+		matched, err := matchesAPIMAPITarget(&apimApi, rs.Labels)
+		if err != nil {
+			logger.Error(err, "❌ Invalid APIMAPI target selector; skipping", "apimapi", apimApi.Name, "namespace", apimApi.Namespace)
+			continue
+		}
+		if !matched {
+			continue
+		}
+
+		matches = appendUniqueAPIMAPI(matches, apimApi)
+	}
+
+	appName := rs.Labels["app.kubernetes.io/name"]
+	if appName == "" {
+		return matches, nil
+	}
+
+	var legacyAPIMAPI apimv1.APIMAPI
+	if err := r.Get(ctx, client.ObjectKey{Name: appName, Namespace: rs.Namespace}, &legacyAPIMAPI); err != nil {
+		if apierrors.IsNotFound(err) {
+			return matches, nil
+		}
+		return nil, err
+	}
+	if hasAPIMAPITargetSelector(&legacyAPIMAPI) {
+		return matches, nil
+	}
+
+	return appendUniqueAPIMAPI(matches, legacyAPIMAPI), nil
+}
+
+func hasAPIMAPITargetSelector(apimApi *apimv1.APIMAPI) bool {
+	return apimApi.Spec.Target != nil && apimApi.Spec.Target.Selector != nil
+}
+
+func matchesAPIMAPITarget(apimApi *apimv1.APIMAPI, rsLabels map[string]string) (bool, error) {
+	selector, err := metav1.LabelSelectorAsSelector(apimApi.Spec.Target.Selector)
+	if err != nil {
+		return false, fmt.Errorf("target selector for APIMAPI %s: %w", apimApi.Name, err)
+	}
+
+	return selector.Matches(labels.Set(rsLabels)), nil
+}
+
+func appendUniqueAPIMAPI(matches []apimv1.APIMAPI, apimApi apimv1.APIMAPI) []apimv1.APIMAPI {
+	for _, existing := range matches {
+		if existing.Name == apimApi.Name && existing.Namespace == apimApi.Namespace {
+			return matches
+		}
+	}
+
+	return append(matches, apimApi)
 }
 
 func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {

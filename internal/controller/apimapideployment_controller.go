@@ -74,6 +74,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	logger.Info("🧩 Loaded APIMAPIDeployment",
 		"name", deployment.Name,
 		"namespace", deployment.Namespace,
+		"apimApiName", deployment.Spec.APIMAPIName,
 		"apiID", deployment.Spec.APIID,
 		"revision", deployment.Spec.Revision,
 		"routePrefix", deployment.Spec.RoutePrefix,
@@ -82,16 +83,21 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	)
 
 	// Fetch the associated APIMAPI resource to update its status after deployment.
+	apimAPIName := deployment.Spec.APIMAPIName
+	if apimAPIName == "" {
+		apimAPIName = deployment.Name
+	}
+
 	var apimApi apimv1.APIMAPI
-	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Name, Namespace: req.Namespace}, &apimApi); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: apimAPIName, Namespace: req.Namespace}, &apimApi); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "apiID", deployment.Spec.APIID)
+			logger.Info("ℹ️ APIMAPI not found, skipping revision creation", "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "❌ Failed to get APIMAPI", "apiID", deployment.Spec.APIID)
+		logger.Error(err, "❌ Failed to get APIMAPI", "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
 		return ctrl.Result{}, err
 	}
-	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status, "apiID", deployment.Spec.APIID)
+	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status, "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
 
 	// Step 1: Fetch the OpenAPI definition from the specified URL.
 	// This uses retry logic to handle transient network failures.

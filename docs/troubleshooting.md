@@ -223,19 +223,24 @@ az role assignment create \
 
 **Common causes:**
 
-1. **Missing `app.kubernetes.io/name` label:** The operator matches ReplicaSets to `APIMAPI` resources using this label.
+1. **Missing labels for matching:** In legacy mode the operator relies on `app.kubernetes.io/name`. In selector mode the ReplicaSet still needs whatever labels the `APIMAPI.spec.target.selector` expects.
    ```bash
    kubectl get replicaset -n <namespace> --show-labels
    ```
 
-2. **No matching `APIMAPI` resource:** The `APIMAPI` resource name must match the `app.kubernetes.io/name` label value.
+2. **Selector mismatch:** If the `APIMAPI` uses `spec.target.selector`, the ReplicaSet labels must satisfy that selector.
+   ```bash
+   kubectl get apimapi <name> -n <namespace> -o jsonpath='{.spec.target.selector}'
+   ```
+
+3. **No matching `APIMAPI` resource:** In legacy mode, the `APIMAPI` resource name must match the `app.kubernetes.io/name` label value.
    ```bash
    kubectl get apimapi -n <namespace>
    ```
 
-3. **ReplicaSet scaled to 0:** The operator ignores ReplicaSets with `spec.replicas: 0` (old revisions during rolling updates).
+4. **ReplicaSet scaled to 0:** The operator ignores ReplicaSets with `spec.replicas: 0` (old revisions during rolling updates).
 
-4. **ReadyReplicas transition not detected:** The operator only triggers when `ReadyReplicas` transitions from 0 to > 0. If the ReplicaSet was already ready when the operator started watching, it may have been missed.
+5. **ReadyReplicas transition not detected:** The operator only triggers when `ReadyReplicas` transitions from 0 to > 0. If the ReplicaSet was already ready when the operator started watching, it may have been missed.
 
 **Workaround:** Restart the deployment to trigger a new ReplicaSet:
 
@@ -256,6 +261,9 @@ kubectl rollout restart deployment/<name> -n <namespace>
 ```bash
 # Check if the deployment resource exists
 kubectl get apimapideployment -n <namespace>
+
+# Check which APIMAPI created it
+kubectl get apimapideployment <name> -n <namespace> -o jsonpath='{.spec.apimApiName}'
 
 # Check operator logs for errors
 kubectl logs -n azure-apim-operator-system deployment/azure-apim-operator | grep "apimapideployment_controller"

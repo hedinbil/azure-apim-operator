@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -102,23 +104,19 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 	Context("When reconciling a resource", func() {
 		It("should handle missing Azure credentials gracefully", func() {
+			By("serving a local OpenAPI document")
+			server := newOpenAPIServer()
+			defer server.Close()
+
+			By("pointing the deployment at the local OpenAPI document")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			deployment.Spec.OpenAPIDefinitionURL = server.URL
+			Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+
 			By("ensuring Azure credentials are not set")
-			originalClientID := os.Getenv("AZURE_CLIENT_ID")
-			originalTenantID := os.Getenv("AZURE_TENANT_ID")
-			defer func() {
-				if originalClientID != "" {
-					_ = os.Setenv("AZURE_CLIENT_ID", originalClientID)
-				} else {
-					_ = os.Unsetenv("AZURE_CLIENT_ID")
-				}
-				if originalTenantID != "" {
-					_ = os.Setenv("AZURE_TENANT_ID", originalTenantID)
-				} else {
-					_ = os.Unsetenv("AZURE_TENANT_ID")
-				}
-			}()
-			_ = os.Unsetenv("AZURE_CLIENT_ID")
-			_ = os.Unsetenv("AZURE_TENANT_ID")
+			restoreIdentityEnv := unsetAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
@@ -195,5 +193,84 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.Requeue).To(BeFalse())
 		})
+
+		It("should resolve APIMAPI via explicit apimApiName reference", func() {
+			By("serving a local OpenAPI document")
+			server := newOpenAPIServer()
+			defer server.Close()
+
+			By("ensuring Azure credentials are not set")
+			restoreIdentityEnv := unsetAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			By("creating a deployment that references APIMAPI by spec.apimApiName")
+			referencedDeploymentName := types.NamespacedName{
+				Name:      "test-deployment-api-ref",
+				Namespace: "default",
+			}
+			referencedDeployment := &apimv1.APIMAPIDeployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      referencedDeploymentName.Name,
+					Namespace: referencedDeploymentName.Namespace,
+				},
+				Spec: apimv1.APIMAPIDeploymentSpec{
+					APIMAPIName:          resourceName,
+					APIID:                "test-api-id",
+					APIMService:          "test-apim-service",
+					Subscription:         "test-subscription-id",
+					ResourceGroup:        "test-rg",
+					RoutePrefix:          "/test-api",
+					ServiceURL:           "https://example.com/api",
+					OpenAPIDefinitionURL: server.URL,
+					SubscriptionRequired: true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, referencedDeployment)).To(Succeed())
+			defer func() {
+				_ = k8sClient.Delete(ctx, referencedDeployment)
+			}()
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: referencedDeploymentName,
+			})
+
+			By("verifying that the explicit APIMAPI reference was used")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
+			Expect(result.Requeue).To(BeFalse())
+		})
 	})
 })
+
+func newOpenAPIServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"openapi":"3.0.0","info":{"title":"test","version":"1.0.0"},"paths":{}}`))
+	}))
+}
+
+func unsetAzureIdentityEnvVars() func() {
+	originalClientID := os.Getenv("AZURE_CLIENT_ID")
+	originalTenantID := os.Getenv("AZURE_TENANT_ID")
+	_ = os.Unsetenv("AZURE_CLIENT_ID")
+	_ = os.Unsetenv("AZURE_TENANT_ID")
+
+	return func() {
+		if originalClientID != "" {
+			_ = os.Setenv("AZURE_CLIENT_ID", originalClientID)
+		} else {
+			_ = os.Unsetenv("AZURE_CLIENT_ID")
+		}
+		if originalTenantID != "" {
+			_ = os.Setenv("AZURE_TENANT_ID", originalTenantID)
+		} else {
+			_ = os.Unsetenv("AZURE_TENANT_ID")
+		}
+	}
+}
