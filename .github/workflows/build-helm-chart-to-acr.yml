@@ -74,7 +74,7 @@ jobs:
             INPUT_VERSION="${{ github.event.inputs.version }}"
             if [ -z "${INPUT_VERSION}" ]; then
               # Use default from variable if input is empty
-              INPUT_VERSION="${{ vars.DEFAULT_CHART_VERSION || '0.24.0' }}"
+              INPUT_VERSION="${{ vars.DEFAULT_CHART_VERSION || '0.25.0' }}"
             fi
             VERSION="${INPUT_VERSION}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then

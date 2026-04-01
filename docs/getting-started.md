@@ -17,7 +17,7 @@ This guide walks through installing the Azure APIM Operator and deploying your f
 
 ```bash
 helm install azure-apim-operator oci://ghcr.io/hedinit/azure-apim-operator/azure-apim-operator \
-  --version 0.24.0 \
+  --version 0.25.0 \
   --namespace azure-apim-operator-system \
   --create-namespace \
   --set serviceAccount.workloadIdentity.enabled=true \

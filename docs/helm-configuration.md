@@ -3,14 +3,14 @@
 The operator is distributed as a Helm chart. This document covers all configurable values.
 
 **Chart:** `oci://ghcr.io/hedinit/azure-apim-operator/azure-apim-operator`
-**Chart version:** `0.24.0`
-**App version:** `1.24.0`
+**Chart version:** `0.25.0`
+**App version:** `1.25.0`
 
 ## Installation
 
 ```bash
 helm install azure-apim-operator oci://ghcr.io/hedinit/azure-apim-operator/azure-apim-operator \
-  --version 0.24.0 \
+  --version 0.25.0 \
   --namespace azure-apim-operator-system \
   --create-namespace \
   -f values.yaml
@@ -23,7 +23,7 @@ helm install azure-apim-operator oci://ghcr.io/hedinit/azure-apim-operator/azure
 | Value | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image.repository` | string | `ghcr.io/hedinit/azure-apim-operator` | Container image repository |
-| `image.tag` | string | `v0.24.0-latest` | Image tag |
+| `image.tag` | string | `v0.25.0-latest` | Image tag |
 | `image.pullPolicy` | string | `IfNotPresent` | Image pull policy |
 | `imagePullSecrets` | list | `[]` | Secrets for private registries |
 
@@ -164,7 +164,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/hedinit/azure-apim-operator
-  tag: "v0.24.0-latest"
+  tag: "v0.25.0-latest"
 
 serviceAccount:
   create: true
