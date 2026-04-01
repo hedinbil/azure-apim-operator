@@ -109,9 +109,49 @@ spec:
               APIMAPIDeploymentStatus defines the observed state of APIMAPIDeployment.
               This status tracks the deployment progress and result.
             properties:
+              appliedHash:
+                description: AppliedHash is the desired hash that was last successfully
+                  reconciled in APIM.
+                type: string
+              desiredHash:
+                description: DesiredHash is the hash of the desired APIM state derived
+                  from the deployment inputs.
+                type: string
               importedAt:
                 description: ImportedAt is the timestamp when the API was successfully
                   imported into APIM.
+                type: string
+              lastAttemptAt:
+                description: LastAttemptAt is the timestamp of the most recent reconciliation
+                  attempt.
+                type: string
+              lastError:
+                description: LastError contains the most recent reconciliation error,
+                  if any.
+                type: string
+              matchedReplicaSets:
+                description: MatchedReplicaSets lists the ReplicaSets currently matched
+                  to the source APIMAPI.
+                items:
+                  type: string
+                type: array
+              message:
+                description: Message describes the current reconciliation state in
+                  a human-readable way.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the APIMAPI generation that this
+                  deployment status reflects.
+                format: int64
+                type: integer
+              openApiHash:
+                description: OpenAPIHash is the hash of the latest successfully fetched
+                  OpenAPI document.
+                type: string
+              phase:
+                description: |-
+                  Phase indicates the current reconciliation phase.
+                  Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, and Error.
                 type: string
               status:
                 description: Status indicates the current deployment status (e.g.,

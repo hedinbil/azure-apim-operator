@@ -41,6 +41,25 @@ type APIMAPIDeploymentSpec struct {
 // APIMAPIDeploymentStatus defines the observed state of APIMAPIDeployment.
 // This status tracks the deployment progress and result.
 type APIMAPIDeploymentStatus struct {
+	// Phase indicates the current reconciliation phase.
+	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, and Error.
+	Phase string `json:"phase,omitempty"`
+	// Message describes the current reconciliation state in a human-readable way.
+	Message string `json:"message,omitempty"`
+	// LastError contains the most recent reconciliation error, if any.
+	LastError string `json:"lastError,omitempty"`
+	// LastAttemptAt is the timestamp of the most recent reconciliation attempt.
+	LastAttemptAt string `json:"lastAttemptAt,omitempty"`
+	// ObservedGeneration is the APIMAPI generation that this deployment status reflects.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// MatchedReplicaSets lists the ReplicaSets currently matched to the source APIMAPI.
+	MatchedReplicaSets []string `json:"matchedReplicaSets,omitempty"`
+	// OpenAPIHash is the hash of the latest successfully fetched OpenAPI document.
+	OpenAPIHash string `json:"openApiHash,omitempty"`
+	// DesiredHash is the hash of the desired APIM state derived from the deployment inputs.
+	DesiredHash string `json:"desiredHash,omitempty"`
+	// AppliedHash is the desired hash that was last successfully reconciled in APIM.
+	AppliedHash string `json:"appliedHash,omitempty"`
 	// ImportedAt is the timestamp when the API was successfully imported into APIM.
 	ImportedAt string `json:"importedAt,omitempty"`
 	// Status indicates the current deployment status (e.g., "OK", "Error").

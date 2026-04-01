@@ -41,7 +41,6 @@ type APIMAPIReconciler struct {
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapis/finalizers,verbs=update
 
 func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// logger := log.FromContext(ctx)
 	var logger = ctrl.Log.WithName("apimapi_controller")
 
 	logger.Info("🔁 Reconciling APIMAPI", "name", req.Name, "namespace", req.Namespace)
@@ -54,6 +53,18 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logger.Info("🔍 Fetched APIMAPI resource", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
 
+	deployment, err := ensureAPIMAPIDeployment(ctx, r.Client, &apimApi)
+	if err != nil {
+		logger.Error(err, "❌ Failed to ensure APIMAPIDeployment", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
+		return ctrl.Result{}, err
+	}
+	logger.Info("🧱 Ensured APIMAPIDeployment",
+		"name", deployment.Name,
+		"namespace", deployment.Namespace,
+		"apiID", deployment.Spec.APIID,
+		"apimApiName", deployment.Spec.APIMAPIName,
+	)
+
 	// Initialize annotations map if it doesn't exist.
 	if apimApi.Annotations == nil {
 		apimApi.Annotations = map[string]string{}
@@ -63,33 +74,36 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Update the ArgoCD external link annotation with the API host URL.
 	// This allows ArgoCD to display a link to the API in its UI.
 	// Use Patch to update only annotations without touching spec or status fields.
-	annotationPatch := client.MergeFrom(apimApi.DeepCopy())
-	apimApi.Annotations["link.argocd.argoproj.io/external-link"] = apimApi.Status.ApiHost
+	desiredExternalLink := apimApi.Status.ApiHost
+	if apimApi.Annotations["link.argocd.argoproj.io/external-link"] != desiredExternalLink {
+		annotationPatch := client.MergeFrom(apimApi.DeepCopy())
+		apimApi.Annotations["link.argocd.argoproj.io/external-link"] = desiredExternalLink
 
-	if err := r.Patch(ctx, &apimApi, annotationPatch); err != nil {
-		logger.Error(err, "❌ Failed to patch APIMAPI with external link annotations", "apiID", apimApi.Spec.APIID)
-		return ctrl.Result{}, err
-	} else {
-		logger.Info("📋 APIMAPI details after successful update",
-			"name", apimApi.Name,
-			"namespace", apimApi.Namespace,
-			"generation", apimApi.Generation,
-			"resourceVersion", apimApi.ResourceVersion,
-			"apiID", apimApi.Spec.APIID,
-			"apimService", apimApi.Spec.APIMService,
-			"routePrefix", apimApi.Spec.RoutePrefix,
-			"serviceUrl", apimApi.Spec.ServiceURL,
-			"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
-			"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
-			"productIds", apimApi.Spec.ProductIDs,
-			"tagIds", apimApi.Spec.TagIDs,
-			"apiHost", apimApi.Status.ApiHost,
-			"developerPortalHost", apimApi.Status.DeveloperPortalHost,
-			"status", apimApi.Status.Status,
-			"importedAt", apimApi.Status.ImportedAt,
-			"externalLinkAnnotation", apimApi.Annotations["link.argocd.argoproj.io/external-link"],
-		)
+		if err := r.Patch(ctx, &apimApi, annotationPatch); err != nil {
+			logger.Error(err, "❌ Failed to patch APIMAPI with external link annotations", "apiID", apimApi.Spec.APIID)
+			return ctrl.Result{}, err
+		}
 	}
+
+	logger.Info("📋 APIMAPI details after successful update",
+		"name", apimApi.Name,
+		"namespace", apimApi.Namespace,
+		"generation", apimApi.Generation,
+		"resourceVersion", apimApi.ResourceVersion,
+		"apiID", apimApi.Spec.APIID,
+		"apimService", apimApi.Spec.APIMService,
+		"routePrefix", apimApi.Spec.RoutePrefix,
+		"serviceUrl", apimApi.Spec.ServiceURL,
+		"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
+		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
+		"productIds", apimApi.Spec.ProductIDs,
+		"tagIds", apimApi.Spec.TagIDs,
+		"apiHost", apimApi.Status.ApiHost,
+		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
+		"status", apimApi.Status.Status,
+		"importedAt", apimApi.Status.ImportedAt,
+		"externalLinkAnnotation", apimApi.Annotations["link.argocd.argoproj.io/external-link"],
+	)
 
 	logger.Info("✅ Successfully reconciled APIMAPI", "name", apimApi.Name, "apiID", apimApi.Spec.APIID)
 
@@ -101,7 +115,7 @@ func (r *APIMAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&apimv1.APIMAPI{}).
 		WithEventFilter(predicate.Funcs{
 			CreateFunc: func(e event.CreateEvent) bool {
-				return false
+				return true
 			},
 			UpdateFunc: func(e event.UpdateEvent) bool {
 				return true

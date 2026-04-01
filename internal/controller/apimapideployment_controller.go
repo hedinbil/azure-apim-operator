@@ -24,6 +24,7 @@ import (
 	"os"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,7 +44,7 @@ import (
 // 4. Setting subscription requirements
 // 5. Associating products and tags
 // 6. Updating the APIMAPI status with host information
-// 7. Cleaning up the deployment resource after successful completion
+// 7. Persisting deployment status so reconciliation progress is inspectable
 type APIMAPIDeploymentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -99,6 +100,124 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	logger.Info("🔗 Found APIMAPI for deployment", "apimapi", apimApi.Name, "status", apimApi.Status.Status, "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
 
+	attemptTime := time.Now().UTC().Format(time.RFC3339)
+	matchedReplicaSets, err := findMatchingReplicaSetsForAPIMAPI(ctx, r.Client, &apimApi)
+	if err != nil {
+		logger.Error(err, "❌ Failed to match ReplicaSets for APIMAPI", "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to resolve matching ReplicaSets"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = nil
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	matchedReplicaSetNames := matchedReplicaSetNames(matchedReplicaSets)
+	if len(matchedReplicaSets) == 0 {
+		message := fmt.Sprintf("Selector matched 0 ReplicaSets in namespace %s", deployment.Namespace)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = apimDeploymentPhaseWaitingForMatch
+			status.Status = apimDeploymentStatusPending
+			status.Message = message
+			status.LastError = ""
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = nil
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		logger.Info("⏳ Waiting for selector match", "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
+		return ctrl.Result{}, nil
+	}
+
+	readyPod, err := findReadyPodForReplicaSets(ctx, r.Client, matchedReplicaSets)
+	if err != nil {
+		logger.Error(err, "❌ Failed to inspect matched ReplicaSet pods", "apiID", deployment.Spec.APIID, "apimApiName", apimAPIName)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to inspect matched ReplicaSet pods"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	if readyPod == nil {
+		message := fmt.Sprintf("Matched ReplicaSets %v but no ready pods were found yet", matchedReplicaSetNames)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = apimDeploymentPhaseWaitingForReadyPod
+			status.Status = apimDeploymentStatusPending
+			status.Message = message
+			status.LastError = ""
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		logger.Info("⏳ Waiting for ready pod", "apiID", deployment.Spec.APIID, "matchedReplicaSets", matchedReplicaSetNames)
+		return ctrl.Result{}, nil
+	}
+
+	operatorNamespace, err := getOperatorNamespace()
+	if err != nil {
+		logger.Error(err, "❌ Failed to get operator namespace", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to resolve operator namespace"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	var apimService apimv1.APIMService
+	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
+		message := fmt.Sprintf("Referenced APIMService %q was not found in namespace %s", deployment.Spec.APIMService, operatorNamespace)
+		if !apierrors.IsNotFound(err) {
+			message = "Failed to fetch referenced APIMService"
+		}
+		logger.Error(err, "❌ Failed to get APIMService", "apiID", deployment.Spec.APIID, "apimService", deployment.Spec.APIMService)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = message
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
+	if deployment.Spec.Subscription != apimService.Spec.Subscription || deployment.Spec.ResourceGroup != apimService.Spec.ResourceGroup {
+		specPatch := client.MergeFrom(deployment.DeepCopy())
+		deployment.Spec.Subscription = apimService.Spec.Subscription
+		deployment.Spec.ResourceGroup = apimService.Spec.ResourceGroup
+		if err := r.Patch(ctx, &deployment, specPatch); err != nil {
+			logger.Error(err, "❌ Failed to sync APIM service location onto deployment", "apiID", deployment.Spec.APIID)
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Step 1: Fetch the OpenAPI definition from the specified URL.
 	// This uses retry logic to handle transient network failures.
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
@@ -120,7 +239,36 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	openApiContent, err := fetchOpenAPIDefinitionWithRetry(openApiURL, 5)
 	if err != nil {
 		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to fetch OpenAPI definition after retries"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+	openAPIHash := sha256Hex(openApiContent)
+	desiredHash, err := buildDesiredAPIMStateHash(&deployment.Spec, apimService.Spec.Subscription, apimService.Spec.ResourceGroup, openAPIHash)
+	if err != nil {
+		logger.Error(err, "❌ Failed to build desired APIM state hash", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to hash desired APIM state"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, err
 	}
 	logger.Info("📥 OpenAPI definition downloaded",
 		"bytes", len(openApiContent),
@@ -128,17 +276,75 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"apiID", deployment.Spec.APIID,
 	)
 
+	if deployment.Status.AppliedHash == desiredHash {
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = apimDeploymentPhaseSucceeded
+			status.Status = "OK"
+			status.Message = "No changes detected; APIM is already in sync"
+			status.LastError = ""
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		logger.Info("✅ APIM already in sync; skipping import", "apiID", deployment.Spec.APIID, "desiredHash", desiredHash)
+		return ctrl.Result{}, nil
+	}
+
+	if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+		status.Phase = apimDeploymentPhaseImporting
+		status.Status = apimDeploymentStatusPending
+		status.Message = "Reconciling desired API state in APIM"
+		status.LastError = ""
+		status.LastAttemptAt = attemptTime
+		status.ObservedGeneration = apimApi.Generation
+		status.MatchedReplicaSets = matchedReplicaSetNames
+		status.OpenAPIHash = openAPIHash
+		status.DesiredHash = desiredHash
+	}); statusErr != nil {
+		return ctrl.Result{}, statusErr
+	}
+
 	// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
 	// The token is obtained using workload identity credentials.
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
 		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{}, fmt.Errorf("missing AZURE_CLIENT_ID or AZURE_TENANT_ID")
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "AZURE_CLIENT_ID or AZURE_TENANT_ID not set"
+			status.LastError = "missing AZURE_CLIENT_ID or AZURE_TENANT_ID"
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = errMsgFailedToGetAzureToken
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	logger.Info("🔐 Obtained Azure AD token for APIM call", "apiID", deployment.Spec.APIID)
@@ -173,6 +379,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// This creates or updates the API in APIM with the provided specification.
 	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
 		logger.Error(err, "🚫 Failed to import API", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to import API into APIM"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
@@ -181,6 +400,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// This points the API to the correct backend service endpoint.
 	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to patch service URL in APIM"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
@@ -191,6 +423,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	subscriptionRequired := config.SubscriptionRequired
 	if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to patch subscription requirement in APIM"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 	logger.Info("✅ Subscription requirement patched in APIM", "apiID", deployment.Spec.APIID, "subscriptionRequired", subscriptionRequired)
@@ -200,6 +445,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if len(config.ProductIDs) > 0 {
 		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to products", "apiID", deployment.Spec.APIID, "productIDs", config.ProductIDs)
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = phaseError
+				status.Status = phaseError
+				status.Message = "Failed to assign API to products"
+				status.LastError = err.Error()
+				status.LastAttemptAt = attemptTime
+				status.ObservedGeneration = apimApi.Generation
+				status.MatchedReplicaSets = matchedReplicaSetNames
+				status.OpenAPIHash = openAPIHash
+				status.DesiredHash = desiredHash
+			}); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
 		logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
@@ -212,6 +470,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if len(config.TagIDs) > 0 {
 		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to tags", "apiID", deployment.Spec.APIID, "tagIDs", config.TagIDs)
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = phaseError
+				status.Status = phaseError
+				status.Message = "Failed to assign API to tags"
+				status.LastError = err.Error()
+				status.LastAttemptAt = attemptTime
+				status.ObservedGeneration = apimApi.Generation
+				status.MatchedReplicaSets = matchedReplicaSetNames
+				status.OpenAPIHash = openAPIHash
+				status.DesiredHash = desiredHash
+			}); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
 			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 		}
 		logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
@@ -224,6 +495,19 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
 		logger.Error(err, "⚠️ Failed to fetch APIM details", "apiID", deployment.Spec.APIID)
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = phaseError
+			status.Status = phaseError
+			status.Message = "Failed to fetch APIM service details"
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -239,6 +523,21 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "⚠️ Failed to patch APIMAPI status", "apiID", deployment.Spec.APIID)
 		return ctrl.Result{}, err
 	}
+	if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+		status.Phase = apimDeploymentPhaseSucceeded
+		status.Status = "OK"
+		status.Message = "Successfully reconciled API in APIM"
+		status.LastError = ""
+		status.LastAttemptAt = attemptTime
+		status.ObservedGeneration = apimApi.Generation
+		status.MatchedReplicaSets = matchedReplicaSetNames
+		status.OpenAPIHash = openAPIHash
+		status.DesiredHash = desiredHash
+		status.AppliedHash = desiredHash
+		status.ImportedAt = time.Now().UTC().Format(time.RFC3339)
+	}); statusErr != nil {
+		return ctrl.Result{}, statusErr
+	}
 	logger.Info("📝 APIMAPI status patched after import",
 		"name", apimApi.Name,
 		"apiID", deployment.Spec.APIID,
@@ -246,14 +545,6 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"developerPortalHost", apimApi.Status.DeveloperPortalHost,
 		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,
 	)
-
-	// Step 10: Clean up the deployment custom resource after successful completion.
-	// The APIMAPIDeployment is a transient resource that triggers the deployment workflow.
-	if err := r.Delete(ctx, &deployment); err != nil {
-		logger.Error(err, "⚠️ Failed to delete APIMAPIDeployment object", "apiID", deployment.Spec.APIID)
-		return ctrl.Result{}, err
-	}
-	logger.Info("🧹 APIMAPIDeployment deleted after successful import", "name", deployment.Name, "apiID", deployment.Spec.APIID)
 
 	return ctrl.Result{}, nil
 }
@@ -267,7 +558,7 @@ func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return true
 			},
 			UpdateFunc: func(e event.UpdateEvent) bool {
-				return false
+				return true
 			},
 			DeleteFunc: func(e event.DeleteEvent) bool {
 				return false

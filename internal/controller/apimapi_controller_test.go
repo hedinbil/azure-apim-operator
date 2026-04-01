@@ -32,6 +32,7 @@ import (
 
 var _ = Describe("APIMAPI Controller", func() {
 	const resourceName = "test-apim-api"
+	const apimServiceName = "test-apim-service"
 
 	ctx := context.Background()
 
@@ -41,9 +42,31 @@ var _ = Describe("APIMAPI Controller", func() {
 	}
 
 	BeforeEach(func() {
+		By("creating the APIMService dependency")
+		serviceNamespacedName := types.NamespacedName{
+			Name:      apimServiceName,
+			Namespace: "default",
+		}
+		apimService := &apimv1.APIMService{}
+		err := k8sClient.Get(ctx, serviceNamespacedName, apimService)
+		if err != nil && errors.IsNotFound(err) {
+			apimService = &apimv1.APIMService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      serviceNamespacedName.Name,
+					Namespace: serviceNamespacedName.Namespace,
+				},
+				Spec: apimv1.APIMServiceSpec{
+					Name:          "test-apim-service-instance",
+					ResourceGroup: "test-rg",
+					Subscription:  "test-subscription-id",
+				},
+			}
+			Expect(k8sClient.Create(ctx, apimService)).To(Succeed())
+		}
+
 		By("creating the APIMAPI resource")
 		apimAPI := &apimv1.APIMAPI{}
-		err := k8sClient.Get(ctx, typeNamespacedName, apimAPI)
+		err = k8sClient.Get(ctx, typeNamespacedName, apimAPI)
 		if err != nil && errors.IsNotFound(err) {
 			apimAPI = &apimv1.APIMAPI{
 				ObjectMeta: metav1.ObjectMeta{
@@ -72,11 +95,25 @@ var _ = Describe("APIMAPI Controller", func() {
 	})
 
 	AfterEach(func() {
+		By("cleaning up the APIMAPIDeployment resource")
+		deployment := &apimv1.APIMAPIDeployment{}
+		err := k8sClient.Get(ctx, typeNamespacedName, deployment)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, deployment)).To(Succeed())
+		}
+
 		By("cleaning up the APIMAPI resource")
 		resource := &apimv1.APIMAPI{}
-		err := k8sClient.Get(ctx, typeNamespacedName, resource)
+		err = k8sClient.Get(ctx, typeNamespacedName, resource)
 		if err == nil {
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		}
+
+		By("cleaning up the APIMService resource")
+		apimService := &apimv1.APIMService{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: apimServiceName, Namespace: "default"}, apimService)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, apimService)).To(Succeed())
 		}
 	})
 
@@ -101,6 +138,12 @@ var _ = Describe("APIMAPI Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, api)).To(Succeed())
 			Expect(api.Annotations).NotTo(BeNil())
 			Expect(api.Annotations["link.argocd.argoproj.io/external-link"]).To(Equal("https://test-apim.azure-api.net/test-api"))
+
+			By("verifying that APIMAPIDeployment is ensured")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			Expect(deployment.Spec.APIMAPIName).To(Equal(resourceName))
+			Expect(deployment.Spec.APIID).To(Equal("test-api-id"))
 		})
 
 		It("should initialize annotations map if nil", func() {
@@ -201,6 +244,51 @@ var _ = Describe("APIMAPI Controller", func() {
 			updatedAPI := &apimv1.APIMAPI{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedAPI)).To(Succeed())
 			Expect(updatedAPI.Annotations["link.argocd.argoproj.io/external-link"]).To(Equal("https://new-host.azure-api.net/test-api"))
+		})
+
+		It("should create APIMAPIDeployment when reconciling a new APIMAPI", func() {
+			By("creating a fresh APIMAPI")
+			freshAPIName := types.NamespacedName{Name: "test-apim-api-fresh", Namespace: "default"}
+			freshAPI := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      freshAPIName.Name,
+					Namespace: freshAPIName.Namespace,
+				},
+				Spec: apimv1.APIMAPISpec{
+					APIID:                "fresh-api-id",
+					APIMService:          apimServiceName,
+					RoutePrefix:          "/fresh-api",
+					ServiceURL:           "https://example.com/fresh-api",
+					OpenAPIDefinitionURL: "https://example.com/fresh-openapi.json",
+					SubscriptionRequired: true,
+				},
+			}
+			Expect(k8sClient.Create(ctx, freshAPI)).To(Succeed())
+			defer func() {
+				deployment := &apimv1.APIMAPIDeployment{}
+				if err := k8sClient.Get(ctx, freshAPIName, deployment); err == nil {
+					_ = k8sClient.Delete(ctx, deployment)
+				}
+				_ = k8sClient.Delete(ctx, freshAPI)
+			}()
+
+			By("reconciling the fresh APIMAPI")
+			controllerReconciler := &APIMAPIReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: freshAPIName})
+
+			By("verifying that the deployment was created")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse())
+
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, freshAPIName, deployment)).To(Succeed())
+			Expect(deployment.Spec.APIMAPIName).To(Equal(freshAPIName.Name))
+			Expect(deployment.Spec.APIID).To(Equal("fresh-api-id"))
+			Expect(deployment.Spec.RoutePrefix).To(Equal("/fresh-api"))
 		})
 	})
 })
