@@ -553,22 +553,45 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMAPIDeployment{}).
-		WithEventFilter(predicate.Funcs{
-			CreateFunc: func(e event.CreateEvent) bool {
-				return true
-			},
-			UpdateFunc: func(e event.UpdateEvent) bool {
-				return true
-			},
-			DeleteFunc: func(e event.DeleteEvent) bool {
-				return false
-			},
-			GenericFunc: func(e event.GenericEvent) bool {
-				return false
-			},
-		}).
+		WithEventFilter(apimAPIDeploymentPredicate()).
 		Named("apimapideployment").
 		Complete(r)
+}
+
+func apimAPIDeploymentPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return true
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+
+			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+				return true
+			}
+
+			oldAnnotations := e.ObjectOld.GetAnnotations()
+			newAnnotations := e.ObjectNew.GetAnnotations()
+
+			if oldAnnotations[apimDeploymentSignalAnnotation] != newAnnotations[apimDeploymentSignalAnnotation] {
+				return true
+			}
+
+			if oldAnnotations[apimDeploymentReplicaSetAnnotation] != newAnnotations[apimDeploymentReplicaSetAnnotation] {
+				return true
+			}
+
+			return false
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return false
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
 }
 
 // fetchOpenAPIDefinitionWithRetry fetches an OpenAPI definition from a URL with exponential backoff retry logic.
