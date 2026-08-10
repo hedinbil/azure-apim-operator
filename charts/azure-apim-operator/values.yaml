@@ -7,12 +7,15 @@ replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  # Default to a public registry - override with your own registry if needed
-  repository: ghcr.io/hedinit/azure-apim-operator
+  # Default to the public registry - override with your own registry if needed.
+  repository: ghcr.io/hedinbil/azure-apim-operator
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "v0.26.0-latest"
+  # Overrides the image tag. Empty defaults to the IMMUTABLE release tag
+  # v<appVersion> (pushed by CI when the matching git tag is built), so the
+  # deployed code is always traceable to one commit and ArgoCD rolls pods on
+  # sync. Do not point this at a rolling *-latest tag.
+  tag: ""
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []

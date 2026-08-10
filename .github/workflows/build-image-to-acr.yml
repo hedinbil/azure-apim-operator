@@ -35,6 +35,10 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # The environment makes the OIDC subject ref-independent
+    # (repo:hedinbil/azure-apim-operator:environment:acr), so the same federated
+    # identity credential covers main pushes AND vX.Y.Z tag builds.
+    environment: acr
 
     steps:
       - name: Checkout code
@@ -88,10 +92,12 @@ jobs:
           #   - Example tags: v0.26.0-12345678, latest, v0.26.0-latest
           #   - Note: Pull requests build but don't push images
           #
-          # All scenarios create three tags:
+          # All scenarios create three rolling tags:
           #   1. {base-version}-{8-char-commit-hash} - Specific commit identifier
           #   2. latest - Always points to the most recent build
           #   3. {base-version}-latest - Latest build for that version line
+          # Git-tag builds additionally push the IMMUTABLE {base-version} tag
+          # (see the "Compute image tags" step below).
           #
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Scenario 1: Manual workflow dispatch
@@ -114,16 +120,34 @@ jobs:
             echo "🔖 Base version: ${DEFAULT_VERSION}"
           fi
 
+      # Git-tag builds (vX.Y.Z) additionally push the EXACT immutable tag: this
+      # is the tag charts and app-state pin, so a deployed image is always
+      # traceable to one commit and ArgoCD rolls pods on sync (no manual
+      # rollout restart needed).
+      - name: Compute image tags
+        id: tags
+        run: |
+          TAGS="${ACR_REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}
+          ${ACR_REGISTRY}/${IMAGE_NAME}:latest
+          ${ACR_REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.version }}-latest"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAGS="${TAGS}
+          ${ACR_REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.version }}"
+            echo "🔖 Release build: also pushing immutable tag ${{ steps.version.outputs.version }}"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}
-            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-latest
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

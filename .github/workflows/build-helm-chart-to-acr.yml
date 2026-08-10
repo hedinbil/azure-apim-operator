@@ -41,6 +41,10 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # The environment makes the OIDC subject ref-independent
+    # (repo:hedinbil/azure-apim-operator:environment:acr), so the same federated
+    # identity credential covers main pushes AND vX.Y.Z tag builds.
+    environment: acr
 
     steps:
       - name: Checkout code

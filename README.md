@@ -732,6 +732,38 @@ resources:
 
 ---
 
+## 🚢 Releases
+
+CI publishes to **two registries** on every build (same flow as
+`k8m8-operator` / `nova-operator` / `helmut-operator`):
+
+- **ACR** (internal deploys, via Azure OIDC login):
+  - `.github/workflows/build-image-to-acr.yml` → `hedinit.azurecr.io/azure-apim-operator`
+  - `.github/workflows/build-helm-chart-to-acr.yml` → `oci://hedinit.azurecr.io/helm-charts/azure-apim-operator`
+- **GHCR** (public consumers, via `GITHUB_TOKEN`):
+  - `.github/workflows/build-image-to-ghcr.yml` → `ghcr.io/hedinbil/azure-apim-operator`
+  - `.github/workflows/build-helm-chart-to-ghcr.yml` → `oci://ghcr.io/hedinbil/charts/azure-apim-operator`
+
+Releases are cut by pushing a semver git tag:
+
+1. Bump `version` and `appVersion` in `charts/azure-apim-operator/Chart.yaml` (kept equal).
+2. Merge to `main`, then tag the commit `vX.Y.Z` and push the tag.
+3. The tag build pushes the **immutable** image tag `vX.Y.Z` (besides the
+   rolling `latest` / `vX.Y.Z-<sha>` / `vX.Y.Z-latest` tags) to both registries
+   and the chart version `X.Y.Z`. The deployment defaults its image to
+   `v<appVersion>`, so the chart pin alone determines the exact code deployed
+   and ArgoCD rolls pods on sync.
+
+ArgoCD deploys the chart from ACR (see `hedin-applications-state`:
+`libs/helm-charts/azure-apim-operator/<version>/` for chart values and
+`clusters/<env>/<cluster>/azure-apim-operator/` for per-cluster overrides).
+The ACR workflows run in the GitHub environment `acr`, whose ref-independent
+OIDC subject (`repo:hedinbil/azure-apim-operator:environment:acr`) covers both
+`main` pushes and tag builds (federated credential in the
+`hedin-infrastructure-state` prod landing-zone).
+
+---
+
 ## 🛡️ RBAC Permissions
 
 The operator requires specific RBAC permissions to function. These are automatically created by the Helm chart.

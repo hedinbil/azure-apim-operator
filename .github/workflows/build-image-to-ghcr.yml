@@ -92,16 +92,34 @@ jobs:
             echo "🔖 Base version: ${DEFAULT_VERSION}"
           fi
 
+      # Git-tag builds (vX.Y.Z) additionally push the EXACT immutable tag, so
+      # GHCR and ACR carry the same set of release tags and the deployed image
+      # is always traceable to one commit.
+      - name: Compute image tags
+        id: tags
+        run: |
+          IMAGE_REPO="${REGISTRY}/${{ github.repository_owner }}/${IMAGE_NAME}"
+          TAGS="${IMAGE_REPO}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}
+          ${IMAGE_REPO}:latest
+          ${IMAGE_REPO}:${{ steps.version.outputs.version }}-latest"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAGS="${TAGS}
+          ${IMAGE_REPO}:${{ steps.version.outputs.version }}"
+            echo "🔖 Release build: also pushing immutable tag ${{ steps.version.outputs.version }}"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ steps.sha.outputs.short_sha }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-latest
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
