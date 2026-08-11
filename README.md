@@ -732,6 +732,22 @@ resources:
 
 ---
 
+## 🔢 Versioning
+
+One number describes a whole release - chart, app, git tag and image always match:
+
+- `charts/azure-apim-operator/Chart.yaml` is the single source of truth:
+  `version` and `appVersion` are kept equal (e.g. `0.26.2`).
+- The git tag is the same number with a `v` prefix (`v0.26.2`), and the tag
+  build pushes the **immutable** image tag `v0.26.2` plus chart `0.26.2` to
+  both ACR (internal deploys) and GHCR (public consumers).
+- The chart defaults its image to `v<appVersion>`, and clusters pin only the
+  chart version (`params.libsonnet` in `hedin-applications-state`), so bumping
+  that one pin is the whole rollout.
+
+So: same number everywhere, and if you know the chart version you know the
+exact commit that is running.
+
 ## 🚢 Releases
 
 CI publishes to **two registries** on every build (same flow as
