@@ -31,7 +31,7 @@ env:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: linux-runner-arc
 
     steps:
       - name: Checkout code

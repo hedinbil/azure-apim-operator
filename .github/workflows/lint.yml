@@ -7,7 +7,7 @@ on:
 jobs:
   lint:
     name: Run on Ubuntu
-    runs-on: ubuntu-latest
+    runs-on: linux-runner-arc
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
