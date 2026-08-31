@@ -1,0 +1,32 @@
+# Builds the azure-apim-operator image via the shared operator release
+# contract: PRs and main pushes build without publishing; a vX.Y.Z tag
+# (matching Chart.yaml) pushes the single immutable tag
+# azure-apim-operator:vX.Y.Z to ACR and, as a secondary target, to
+# ghcr.io/hedinbil (the chart's default image repository), replacing the
+# former build-image-to-ghcr.yml.
+name: Publish Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    uses: hedinbil/hedin-github-actions/.github/workflows/publish-operator-image.yml@main
+    with:
+      image-name: azure-apim-operator
+      azure-client-id: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
+      azure-subscription-id: ${{ vars.OPERATIONS_AKS_PROD_AZURE_SUBSCRIPTION_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      publish-to-ghcr: true
