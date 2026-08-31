@@ -23,7 +23,9 @@ permissions:
 
 jobs:
   image:
-    uses: hedinbil/hedin-github-actions/.github/workflows/publish-operator-image.yml@main
+    # This repo is public, so it uses the public copy of the shared workflow;
+    # the internal hedin-github-actions repo is not accessible from public repos.
+    uses: hedinbil/hedin-github-actions-public/.github/workflows/publish-operator-image.yml@main
     with:
       image-name: azure-apim-operator
       azure-client-id: ${{ vars.OPERATIONS_AKS_PROD_AZURE_CLIENT_ID }}
