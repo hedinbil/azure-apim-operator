@@ -291,7 +291,7 @@ metadata:
 spec:
   name: test-apim
   resourceGroup: test-rg
-  subscription: test-subscription-id
+  subscription: 00000000-0000-0000-0000-000000000001
 `, apimServiceName, testNamespace)
 
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
@@ -330,7 +330,7 @@ metadata:
 spec:
   name: test-apim
   resourceGroup: test-rg
-  subscription: test-subscription-id
+  subscription: 00000000-0000-0000-0000-000000000001
 `, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
@@ -439,7 +439,7 @@ metadata:
 spec:
   name: test-apim
   resourceGroup: test-rg
-  subscription: test-subscription-id
+  subscription: 00000000-0000-0000-0000-000000000001
 `, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
@@ -564,7 +564,7 @@ metadata:
 spec:
   name: test-apim
   resourceGroup: test-rg
-  subscription: test-subscription-id
+  subscription: 00000000-0000-0000-0000-000000000001
 `, apimServiceName, namespace)
 
 			cmd = exec.Command("kubectl", "apply", "-f", "-")
