@@ -241,10 +241,7 @@ func matchedReplicaSetNames(replicaSets []appsv1.ReplicaSet) []string {
 }
 
 func resolveAPIMServiceLocation(ctx context.Context, c client.Client, apimServiceName string, currentSubscription string, currentResourceGroup string) (string, string, error) {
-	operatorNamespace, err := getOperatorNamespace()
-	if err != nil {
-		return currentSubscription, currentResourceGroup, err
-	}
+	operatorNamespace := getOperatorNamespace()
 
 	var apimService apimv1.APIMService
 	if err := c.Get(ctx, client.ObjectKey{Name: apimServiceName, Namespace: operatorNamespace}, &apimService); err != nil {

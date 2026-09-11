@@ -62,7 +62,9 @@ type APIMAPIDeploymentReconciler struct {
 // the user.
 //
 // For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
+//
+//nolint:gocyclo // one long state machine; splitting it by phase is tracked in the operator review roadmap
 func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("apimapideployment_controller")
 
@@ -170,22 +172,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, nil
 	}
 
-	operatorNamespace, err := getOperatorNamespace()
-	if err != nil {
-		logger.Error(err, "❌ Failed to get operator namespace", "apiID", deployment.Spec.APIID)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = "Failed to resolve operator namespace"
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		return ctrl.Result{}, err
-	}
+	operatorNamespace := getOperatorNamespace()
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
@@ -318,7 +305,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			status.Phase = phaseError
 			status.Status = phaseError
 			status.Message = "AZURE_CLIENT_ID or AZURE_TENANT_ID not set"
-			status.LastError = "missing AZURE_CLIENT_ID or AZURE_TENANT_ID"
+			status.LastError = errMsgMissingAzureIdentity
 			status.LastAttemptAt = attemptTime
 			status.ObservedGeneration = apimApi.Generation
 			status.MatchedReplicaSets = matchedReplicaSetNames

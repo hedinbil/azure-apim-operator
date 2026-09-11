@@ -176,7 +176,7 @@ var _ = Describe("APIMInboundPolicy Controller", func() {
 
 			By("verifying that the error is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should update status when Azure token retrieval fails", func() {
@@ -185,19 +185,18 @@ var _ = Describe("APIMInboundPolicy Controller", func() {
 			originalTenantID := os.Getenv("AZURE_TENANT_ID")
 			defer func() {
 				if originalClientID != "" {
-					os.Setenv("AZURE_CLIENT_ID", originalClientID)
+					Expect(os.Setenv("AZURE_CLIENT_ID", originalClientID)).To(Succeed())
 				} else {
-					os.Unsetenv("AZURE_CLIENT_ID")
+					Expect(os.Unsetenv("AZURE_CLIENT_ID")).To(Succeed())
 				}
 				if originalTenantID != "" {
-					os.Setenv("AZURE_TENANT_ID", originalTenantID)
+					Expect(os.Setenv("AZURE_TENANT_ID", originalTenantID)).To(Succeed())
 				} else {
-					os.Unsetenv("AZURE_TENANT_ID")
+					Expect(os.Unsetenv("AZURE_TENANT_ID")).To(Succeed())
 				}
 			}()
-			os.Setenv("AZURE_CLIENT_ID", "invalid-client-id")
-			os.Setenv("AZURE_TENANT_ID", "invalid-tenant-id")
-
+			Expect(os.Setenv("AZURE_CLIENT_ID", "invalid-client-id")).To(Succeed())
+			Expect(os.Setenv("AZURE_TENANT_ID", "invalid-tenant-id")).To(Succeed())
 			By("reconciling the resource")
 			controllerReconciler := &APIMInboundPolicyReconciler{
 				Client: k8sClient,
@@ -237,7 +236,7 @@ var _ = Describe("APIMInboundPolicy Controller", func() {
 
 			By("verifying that deletion is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 	})
 })

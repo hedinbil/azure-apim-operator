@@ -21,3 +21,21 @@ jobs:
         run: |
           go mod tidy
           make test
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Track the newest 1.26 patch, which is what the golang:1.26 builder
+          # image ships, so standard-library findings match the released binary.
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Scan for reachable vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

@@ -131,7 +131,7 @@ var _ = Describe("APIMAPI Controller", func() {
 
 			By("verifying reconciliation succeeds")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			By("verifying ArgoCD annotation is set")
 			api := &apimv1.APIMAPI{}
@@ -186,7 +186,7 @@ var _ = Describe("APIMAPI Controller", func() {
 
 			By("verifying reconciliation succeeds")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			By("verifying annotations map is initialized")
 			updatedAPI := &apimv1.APIMAPI{}
@@ -213,7 +213,7 @@ var _ = Describe("APIMAPI Controller", func() {
 
 			By("verifying that deletion is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should update annotation when ApiHost changes", func() {
@@ -282,7 +282,7 @@ var _ = Describe("APIMAPI Controller", func() {
 
 			By("verifying that the deployment was created")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			deployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, freshAPIName, deployment)).To(Succeed())

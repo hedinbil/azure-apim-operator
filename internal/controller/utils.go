@@ -30,25 +30,26 @@ const (
 // Error message constants shared across controllers.
 const (
 	errMsgFailedToGetAzureToken = "Failed to get Azure token"
+	errMsgMissingAzureIdentity  = "missing AZURE_CLIENT_ID or AZURE_TENANT_ID"
 )
 
 // getOperatorNamespace returns the namespace where the operator is running.
 // It first tries to read from the service account namespace file (production),
 // then falls back to the OPERATOR_NAMESPACE environment variable (for testing),
 // and finally defaults to "default" if neither is available.
-func getOperatorNamespace() (string, error) {
+func getOperatorNamespace() string {
 	// First, try to read from the service account namespace file (production)
 	nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err == nil {
-		return strings.TrimSpace(string(nsBytes)), nil
+		return strings.TrimSpace(string(nsBytes))
 	}
 
 	// Fall back to environment variable (useful for testing)
 	if ns := os.Getenv("OPERATOR_NAMESPACE"); ns != "" {
-		return ns, nil
+		return ns
 	}
 
 	// Default to "default" namespace if neither is available
 	// This allows tests to work without setting up the service account file
-	return "default", nil
+	return "default"
 }

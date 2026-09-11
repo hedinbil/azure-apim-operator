@@ -67,11 +67,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	operatorNamespace, err := getOperatorNamespace()
-	if err != nil {
-		logger.Error(err, "❌ Failed to get operator namespace", "apiID", policy.Spec.APIID)
-		return ctrl.Result{}, fmt.Errorf("get operator namespace: %w", err)
-	}
+	operatorNamespace := getOperatorNamespace()
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: policy.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
@@ -86,7 +82,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Use Patch to update only status without touching spec fields.
 		statusPatch := client.MergeFrom(policy.DeepCopy())
 		policy.Status.Phase = phaseError
-		policy.Status.Message = "missing AZURE_CLIENT_ID or AZURE_TENANT_ID"
+		policy.Status.Message = errMsgMissingAzureIdentity
 		_ = r.Status().Patch(ctx, &policy, statusPatch)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}

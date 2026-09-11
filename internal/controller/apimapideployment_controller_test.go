@@ -167,7 +167,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("verifying the deployment remains and reports WaitingForMatch")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			deployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
@@ -182,7 +182,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			defer server.Close()
 
 			By("creating a matching ready ReplicaSet")
-			rs := createReplicaSet(ctx, "test-deployment-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName}, 1)
+			rs := createReplicaSet(ctx, "test-deployment-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
 			createReadyPodForReplicaSet(ctx, rs, "test-deployment-pod")
 
 			By("pointing the deployment at the local OpenAPI document")
@@ -253,7 +253,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("verifying that the error is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should handle deleted resource gracefully", func() {
@@ -274,7 +274,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("verifying that deletion is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should resolve APIMAPI via explicit apimApiName reference", func() {
@@ -283,7 +283,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			defer server.Close()
 
 			By("creating a matching ready ReplicaSet for the referenced APIMAPI")
-			rs := createReplicaSet(ctx, "test-referenced-api-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName}, 1)
+			rs := createReplicaSet(ctx, "test-referenced-api-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
 			createReadyPodForReplicaSet(ctx, rs, "test-referenced-api-pod")
 
 			By("ensuring Azure credentials are not set")
@@ -343,7 +343,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			defer server.Close()
 
 			By("creating a matching ready ReplicaSet")
-			rs := createReplicaSet(ctx, "test-hash-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName}, 1)
+			rs := createReplicaSet(ctx, "test-hash-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
 			createReadyPodForReplicaSet(ctx, rs, "test-hash-pod")
 
 			By("configuring the deployment to point at the local OpenAPI document")
@@ -379,7 +379,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("verifying that APIM import is skipped")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			updatedDeployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedDeployment)).To(Succeed())

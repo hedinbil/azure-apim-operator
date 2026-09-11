@@ -178,7 +178,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that reconciliation skips gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should skip ReplicaSet scaled down to 0", func() {
@@ -231,7 +231,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that reconciliation skips gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should handle missing APIMAPI gracefully", func() {
@@ -284,7 +284,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that missing APIMAPI is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should handle deleted ReplicaSet gracefully", func() {
@@ -337,7 +337,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that deletion is handled gracefully")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 		})
 
 		It("should create APIMAPIDeployment for selector-based APIMAPI without app label", func() {
@@ -362,7 +362,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 			Expect(k8sClient.Create(ctx, selectorAPI)).To(Succeed())
 
 			By("creating a ready ReplicaSet without the legacy app label")
-			rs := createReplicaSet(ctx, "test-replicaset-selector", map[string]string{"team": "platform"}, map[string]string{"team": "platform"}, 1)
+			rs := createReplicaSet(ctx, "test-replicaset-selector", map[string]string{"team": "platform"}, map[string]string{"team": "platform"})
 			createReadyPodForReplicaSet(ctx, rs, "test-pod-selector")
 
 			By("reconciling the resource")
@@ -380,7 +380,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that a deployment was created for the selector-based APIMAPI")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			deployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: selectorAPIName, Namespace: "default"}, deployment)).To(Succeed())
@@ -410,7 +410,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 			Expect(k8sClient.Create(ctx, selectorAPI)).To(Succeed())
 
 			By("creating a ready ReplicaSet that matches both APIs")
-			rs := createReplicaSet(ctx, "test-replicaset-multi-match", map[string]string{"app.kubernetes.io/name": appName}, map[string]string{"app": appName}, 1)
+			rs := createReplicaSet(ctx, "test-replicaset-multi-match", map[string]string{"app.kubernetes.io/name": appName}, map[string]string{"app": appName})
 			createReadyPodForReplicaSet(ctx, rs, "test-pod-multi-match")
 
 			By("reconciling the resource")
@@ -428,7 +428,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 
 			By("verifying that deployments were created for both matches")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result).To(BeZero())
 
 			legacyDeployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: appName, Namespace: "default"}, legacyDeployment)).To(Succeed())
@@ -447,7 +447,7 @@ func int32Ptr(i int32) *int32 {
 	return &i
 }
 
-func createReplicaSet(ctx context.Context, name string, replicaSetLabels map[string]string, podLabels map[string]string, replicas int32) *appsv1.ReplicaSet {
+func createReplicaSet(ctx context.Context, name string, replicaSetLabels map[string]string, podLabels map[string]string) *appsv1.ReplicaSet {
 	rs := &appsv1.ReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -455,7 +455,7 @@ func createReplicaSet(ctx context.Context, name string, replicaSetLabels map[str
 			Labels:    replicaSetLabels,
 		},
 		Spec: appsv1.ReplicaSetSpec{
-			Replicas: int32Ptr(replicas),
+			Replicas: int32Ptr(1),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: podLabels,
 			},

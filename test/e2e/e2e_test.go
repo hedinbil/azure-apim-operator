@@ -493,7 +493,7 @@ spec:
 			By("verifying status is updated")
 			verifyStatusUpdated := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "apimproduct", apimProductName,
-				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).NotTo(BeEmpty())
@@ -530,7 +530,7 @@ spec:
 
 			By("deleting the APIMProduct resource")
 			cmd = exec.Command("kubectl", "delete", "apimproduct",
-			fmt.Sprintf("%s-delete", apimProductName), "-n", testNamespace)
+				fmt.Sprintf("%s-delete", apimProductName), "-n", testNamespace)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to delete APIMProduct")
 
@@ -621,7 +621,7 @@ spec:
 			By("verifying status is updated")
 			verifyStatusUpdated := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "apiminboundpolicy", apimPolicyName,
-				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+					"-n", testNamespace, "-o", "jsonpath={.status.phase}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).NotTo(BeEmpty())
@@ -656,7 +656,7 @@ spec:
 			By("verifying the resource exists")
 			verifyResourceExists := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "apiminboundpolicy",
-				fmt.Sprintf("%s-operation", apimPolicyName), "-n", testNamespace)
+					fmt.Sprintf("%s-operation", apimPolicyName), "-n", testNamespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(ContainSubstring(apimPolicyName))
