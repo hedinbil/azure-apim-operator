@@ -157,8 +157,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 		It("should keep deployment and report waiting for a selector match", func() {
 			By("reconciling the resource without any matching ReplicaSet")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -197,8 +198,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -243,8 +245,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -264,8 +267,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("reconciling the deleted resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -319,8 +323,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -335,6 +340,70 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			Expect(k8sClient.Get(ctx, referencedDeploymentName, updatedDeployment)).To(Succeed())
 			Expect(updatedDeployment.Status.Phase).To(Equal(phaseError))
 			Expect(updatedDeployment.Status.LastError).To(ContainSubstring("missing AZURE_CLIENT_ID or AZURE_TENANT_ID"))
+		})
+
+		It("should record a failed OpenAPI fetch and retry later", func() {
+			By("serving an error instead of an OpenAPI document")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			defer server.Close()
+
+			By("creating a matching ready ReplicaSet")
+			rs := createReplicaSet(ctx, "test-fetch-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
+			createReadyPodForReplicaSet(ctx, rs, "test-fetch-pod")
+
+			By("pointing the deployment at the failing endpoint")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			deployment.Spec.OpenAPIDefinitionURL = server.URL
+			Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
+			}
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+
+			By("verifying that the failure is recorded and retried through the workqueue")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(requeueFetchFailure))
+			updatedDeployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedDeployment)).To(Succeed())
+			Expect(updatedDeployment.Status.Phase).To(Equal(phaseError))
+			Expect(updatedDeployment.Status.Message).To(Equal("Failed to fetch OpenAPI definition"))
+			Expect(updatedDeployment.Status.LastError).To(ContainSubstring("502"))
+		})
+
+		It("should refuse an OpenAPI URL that points at a blocked address", func() {
+			By("serving a document on loopback, which production must not reach")
+			server := newOpenAPIServer()
+			defer server.Close()
+
+			By("creating a matching ready ReplicaSet")
+			rs := createReplicaSet(ctx, "test-blocked-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
+			createReadyPodForReplicaSet(ctx, rs, "test-blocked-pod")
+
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			deployment.Spec.OpenAPIDefinitionURL = server.URL
+			Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+
+			By("reconciling with the production fetcher")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(requeueFetchFailure))
+			updatedDeployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedDeployment)).To(Succeed())
+			Expect(updatedDeployment.Status.Phase).To(Equal(phaseError))
+			Expect(updatedDeployment.Status.LastError).To(ContainSubstring("not allowed for OpenAPI fetches"))
 		})
 
 		It("should skip APIM import when the desired hash is already applied", func() {
@@ -369,8 +438,9 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMAPIDeploymentReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

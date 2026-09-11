@@ -19,8 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -48,6 +46,16 @@ import (
 type APIMAPIDeploymentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// fetcher downloads tenant OpenAPI documents; nil selects the guarded default.
+	fetcher *openAPIFetcher
+}
+
+func (r *APIMAPIDeploymentReconciler) openAPI() *openAPIFetcher {
+	if r.fetcher != nil {
+		return r.fetcher
+	}
+	return defaultOpenAPIFetcher
 }
 
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
@@ -205,31 +213,17 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	// Step 1: Fetch the OpenAPI definition from the specified URL.
-	// This uses retry logic to handle transient network failures.
+	// Step 1: Fetch the OpenAPI definition from the URL the tenant declared. One bounded
+	// attempt per reconcile; a failure comes back through the workqueue after a pause.
 	openApiURL := deployment.Spec.OpenAPIDefinitionURL
 	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "apiID", deployment.Spec.APIID)
-	// resp, err := http.Get(openApiURL)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to fetch OpenAPI definition")
-	// 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	// }
-	// defer resp.Body.Close()
-
-	// openApiContent, err := io.ReadAll(resp.Body)
-	// if err != nil {
-	// 	logger.Error(err, "❌ Failed to read OpenAPI definition body")
-	// 	return ctrl.Result{}, err
-	// }
-
-	// Fetch the OpenAPI definition with retry logic to handle transient failures.
-	openApiContent, err := fetchOpenAPIDefinitionWithRetry(openApiURL, 5)
+	openApiContent, err := r.openAPI().Fetch(ctx, openApiURL)
 	if err != nil {
-		logger.Error(err, "❌ Failed to fetch OpenAPI definition after retries", "apiID", deployment.Spec.APIID)
+		logger.Error(err, "❌ Failed to fetch OpenAPI definition", "apiID", deployment.Spec.APIID)
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
 			status.Phase = phaseError
 			status.Status = phaseError
-			status.Message = "Failed to fetch OpenAPI definition after retries"
+			status.Message = "Failed to fetch OpenAPI definition"
 			status.LastError = err.Error()
 			status.LastAttemptAt = attemptTime
 			status.ObservedGeneration = apimApi.Generation
@@ -237,7 +231,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}); statusErr != nil {
 			return ctrl.Result{}, statusErr
 		}
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: requeueFetchFailure}, nil
 	}
 	openAPIHash := sha256Hex(openApiContent)
 	desiredHash, err := buildDesiredAPIMStateHash(&deployment.Spec, apimService.Spec.Subscription, apimService.Spec.ResourceGroup, openAPIHash)
@@ -579,42 +573,4 @@ func apimAPIDeploymentPredicate() predicate.Predicate {
 			return false
 		},
 	}
-}
-
-// fetchOpenAPIDefinitionWithRetry fetches an OpenAPI definition from a URL with exponential backoff retry logic.
-// It attempts to fetch the definition up to maxRetries times, with increasing delays between attempts
-// (2s, 4s, 8s, 16s, 32s) to handle transient network failures or temporary service unavailability.
-func fetchOpenAPIDefinitionWithRetry(url string, maxRetries int) ([]byte, error) {
-	var lastErr error
-
-	for i := 0; i < maxRetries; i++ {
-		resp, err := http.Get(url)
-		if err != nil {
-			lastErr = fmt.Errorf("GET error: %w", err)
-		} else {
-			body, readErr := io.ReadAll(resp.Body)
-			closeErr := resp.Body.Close()
-
-			if readErr != nil {
-				lastErr = fmt.Errorf("read body error: %w", readErr)
-			} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if closeErr != nil {
-					return nil, fmt.Errorf("close response body: %w", closeErr)
-				}
-				return body, nil
-			} else {
-				if closeErr != nil {
-					lastErr = fmt.Errorf("unexpected status: %s\nbody: %s (close error: %v)", resp.Status, string(body), closeErr)
-				} else {
-					lastErr = fmt.Errorf("unexpected status: %s\nbody: %s", resp.Status, string(body))
-				}
-			}
-		}
-
-		// Exponential backoff: wait 2^attempt seconds before retrying.
-		// This gives transient failures time to resolve while avoiding excessive retries.
-		time.Sleep(time.Duration(2<<i) * time.Second) // 2s, 4s, 8s, 16s, 32s
-	}
-
-	return nil, fmt.Errorf("openapi fetch failed after %d attempts: %w", maxRetries, lastErr)
 }

@@ -151,7 +151,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		"contentType", "application/vnd.oai.openapi+json",
 	)
 
-	logger.Info("📄 Swagger content", "apiID", apimParams.APIID, "content", strings.TrimSpace(string(openApiContent)))
+	logger.Info("📄 OpenAPI document ready for import", "apiID", apimParams.APIID, "bytes", len(openApiContent))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
