@@ -7,8 +7,9 @@ replicaCount: 1
 
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
-  # Default to the public registry - override with your own registry if needed.
-  repository: ghcr.io/hedinbil/azure-apim-operator
+  # The release workflow publishes images to the Hedin ACR; ghcr.io no longer
+  # receives new versions. Override for another registry if needed.
+  repository: hedinit.azurecr.io/azure-apim-operator
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag. Empty defaults to the IMMUTABLE release tag
