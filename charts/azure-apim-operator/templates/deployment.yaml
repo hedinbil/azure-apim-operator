@@ -16,6 +16,10 @@ spec:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- if and .Values.metrics.enabled .Values.metrics.datadog.enabled }}
+        ad.datadoghq.com/{{ .Chart.Name }}.checks: |
+          {"openmetrics":{"init_config":{},"instances":[{"openmetrics_endpoint":"http://%%host%%:{{ .Values.metrics.port }}/metrics","namespace":"azure_apim_operator","metrics":{{ .Values.metrics.datadog.metrics | toJson }}}]}}
+        {{- end }}
       labels:
         {{- include "azure-apim-operator.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
@@ -49,11 +53,21 @@ spec:
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address=:8081
+            {{- if .Values.metrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.metrics.port }}
+            - --metrics-secure=false
+            {{- end }}
           env:
             - name: SWAGGER_ANNOTATION_KEY
               value: "{{ .Values.swagger.annotationKey }}"
             - name: SWAGGER_DEFAULT_PATH
               value: "{{ .Values.swagger.defaultPath }}"
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}

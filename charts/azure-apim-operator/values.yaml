@@ -27,6 +27,27 @@ serviceAccount:
     clientID: <replace-with-default-or-empty>
     tenantID: <replace-with-default-or-empty>
 
+# The manager's Prometheus endpoint (controller-runtime reconcile, workqueue and
+# rest-client series). Served as plain HTTP on a container port; the chart ships
+# no Service, so only node-local scrapers such as the Datadog agent reach it.
+metrics:
+  enabled: true
+  port: 8080
+  datadog:
+    # Renders the openmetrics autodiscovery annotation for the container, so the
+    # node's Datadog agent scrapes the pod directly.
+    enabled: true
+    # Metric families to collect. Keep this list short: Datadog bills per custom
+    # metric and controller-runtime exposes several hundred series.
+    metrics:
+      - controller_runtime_reconcile_total
+      - controller_runtime_reconcile_errors_total
+      - controller_runtime_reconcile_time_seconds
+      - controller_runtime_active_workers
+      - workqueue_depth
+      - workqueue_unfinished_work_seconds
+      - rest_client_requests_total
+
 # Leader election flag passed to the manager.
 leaderElect: true
 
