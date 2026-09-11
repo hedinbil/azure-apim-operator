@@ -45,15 +45,24 @@ spec:
             properties:
               APIID:
                 description: APIID is the unique identifier for the API in Azure APIM.
+                maxLength: 80
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
               apimService:
                 description: |-
                   APIMService is the name of the APIMService custom resource that references
                   the Azure API Management service instance.
+                maxLength: 50
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               openApiDefinitionUrl:
                 description: OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger
                   definition can be fetched.
+                maxLength: 2048
+                minLength: 1
+                pattern: ^https?://
                 type: string
               productIds:
                 description: |-
@@ -64,10 +73,16 @@ spec:
                 type: array
               routePrefix:
                 description: RoutePrefix is the base route path in APIM (e.g., "/myapi").
+                maxLength: 400
+                minLength: 1
+                pattern: ^[a-zA-Z0-9._~/-]*$
                 type: string
               serviceUrl:
                 description: ServiceURL is the backend service URL that APIM will
                   proxy requests to.
+                maxLength: 2048
+                minLength: 1
+                pattern: ^https?://
                 type: string
               subscriptionRequired:
                 default: true

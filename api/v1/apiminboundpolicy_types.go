@@ -29,18 +29,28 @@ type APIMInboundPolicySpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// APIMService is the name of the APIMService custom resource
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=50
 	APIMService string `json:"apimService"`
 
 	// APIID is the unique identifier for the API in APIM where the policy will be applied
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
 	APIID string `json:"apiId"`
 
 	// OperationID is the unique identifier for the operation (endpoint) within the API.
 	// If specified, the policy will be applied to this specific operation.
 	// If not specified, the policy will be applied to the entire API.
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
 	OperationID string `json:"operationId,omitempty"`
 
 	// PolicyContent is the XML content of the policy to be applied.
 	// This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=131072
 	PolicyContent string `json:"policyContent"`
 }
 

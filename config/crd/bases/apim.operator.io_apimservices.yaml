@@ -45,14 +45,22 @@ spec:
               name:
                 description: Name is the name of the Azure API Management service
                   instance in Azure.
+                maxLength: 50
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               resourceGroup:
                 description: ResourceGroup is the Azure resource group where the APIM
                   service is located.
+                maxLength: 90
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._()-]{0,88}[a-zA-Z0-9_()-]$
                 type: string
               subscription:
                 description: Subscription is the Azure subscription ID where the APIM
                   service is deployed.
+                minLength: 1
+                pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
                 type: string
             required:
             - name

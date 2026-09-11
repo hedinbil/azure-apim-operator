@@ -61,6 +61,10 @@ func (r *APIMAPIDeploymentReconciler) openAPI() *openAPIFetcher {
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments/finalizers,verbs=update
+// APIMService has no controller of its own; it is a configuration record that
+// this controller and the product, tag and policy controllers read to locate
+// the APIM instance. Read-only: nothing writes it (APIM-17).
+// +kubebuilder:rbac:groups=apim.operator.io,resources=apimservices,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

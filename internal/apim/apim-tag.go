@@ -15,13 +15,8 @@ import (
 // Tags are used to categorize and organize APIs for easier management and discovery.
 // If the tag already exists, it will be updated with the new display name.
 func UpsertTag(ctx context.Context, config APIMTagConfig) error {
-	tagURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/tags/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.TagID,
-	)
+	tagURL := serviceURL(
+		config, "tags", config.TagID)
 
 	tagBody := map[string]interface{}{
 		"properties": map[string]interface{}{
@@ -87,14 +82,8 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 
 	// Assign each tag to the API.
 	for _, tagID := range config.TagIDs {
-		tagAssignURL := fmt.Sprintf(
-			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/tags/%s?api-version=2021-08-01",
-			config.SubscriptionID,
-			config.ResourceGroup,
-			config.ServiceName,
-			config.APIID,
-			tagID,
-		)
+		tagAssignURL := serviceURL(
+			config, "apis", config.APIID, "tags", tagID)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut, tagAssignURL, nil)
 		if err != nil {

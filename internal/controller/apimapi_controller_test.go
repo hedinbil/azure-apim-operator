@@ -58,7 +58,7 @@ var _ = Describe("APIMAPI Controller", func() {
 				Spec: apimv1.APIMServiceSpec{
 					Name:          "test-apim-service-instance",
 					ResourceGroup: "test-rg",
-					Subscription:  "test-subscription-id",
+					Subscription:  "00000000-0000-0000-0000-000000000001",
 				},
 			}
 			Expect(k8sClient.Create(ctx, apimService)).To(Succeed())
@@ -159,8 +159,11 @@ var _ = Describe("APIMAPI Controller", func() {
 					Annotations: nil, // Explicitly nil
 				},
 				Spec: apimv1.APIMAPISpec{
-					APIID:       "test-api-id-2",
-					APIMService: "test-apim-service",
+					ServiceURL:           "https://example.com/api",
+					RoutePrefix:          "/test-api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					APIID:                "test-api-id-2",
+					APIMService:          "test-apim-service",
 				},
 			}
 			Expect(k8sClient.Create(ctx, api)).To(Succeed())

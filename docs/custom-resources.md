@@ -349,3 +349,27 @@ spec:
 ```
 
 **Note:** The `operationId` value must match the `operationId` in the imported OpenAPI spec. See [OpenAPI Spec Requirements](openapi-spec-requirements.md) for how to set operationId values in your API.
+
+## Field validation
+
+Every identifier, name and URL in these resources is validated by the CRD
+schema, and the operator percent-escapes each one again when it builds an Azure
+Resource Manager URL. Before 0.28.0 the only validation marker in the API
+package was a single default, and ids were interpolated into ARM paths with
+`fmt.Sprintf`, so a value containing `/`, `?`, `#` or `..` changed which
+resource a request targeted (APIM-16).
+
+| Field | Rule |
+|-------|------|
+| `APIID`, `apiId`, `apiID`, `productId`, `tagId`, `operationId` | 1-80 chars, starts and ends alphanumeric, otherwise letters, digits, `.`, `_`, `-` |
+| `apimService`, `name` | 1-50 chars, starts and ends alphanumeric, otherwise letters, digits, `-` |
+| `subscription` | a GUID |
+| `resourceGroup` | 1-90 chars, Azure resource-group characters |
+| `serviceUrl`, `openApiDefinitionUrl` | must start `http://` or `https://`, max 2048 chars |
+| `routePrefix` | letters, digits, `.`, `_`, `~`, `/`, `-`; max 400 chars |
+| `revision` | digits only |
+| `displayName` | 1-300 chars |
+| `policyContent` | 1-131072 chars |
+
+A rejected resource fails at `kubectl apply` or at ArgoCD sync time with the
+pattern in the message, rather than reaching Azure.

@@ -30,11 +30,15 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"go.uber.org/zap/zapcore"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -102,14 +106,6 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-
-	// ctx := context.Background()
-	// shutdown := logger.InitTracer(ctx)
-	// defer func() {
-	// 	if err := shutdown(ctx); err != nil {
-	// 		setupLog.Error(err, "❌ Failed to shutdown tracer provider")
-	// 	}
-	// }()
 
 	// Initialize the logger with zap configuration
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
@@ -205,6 +201,7 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOptions(),
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
@@ -252,15 +249,6 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "APIMAPIDeployment")
-		os.Exit(1)
-	}
-	// Register the APIMService controller to manage APIMService custom resources.
-	// This controller provides information about Azure API Management service instances.
-	if err = (&controller.APIMServiceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "APIMService")
 		os.Exit(1)
 	}
 	// Register the APIMProduct controller to manage products in Azure APIM.
@@ -326,4 +314,59 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// cacheOptions trims what the shared informer cache keeps for Pods and
+// ReplicaSets.
+//
+// The deployment controller lists every Pod in a namespace and every
+// ReplicaSet to decide which replica set is serving, which makes
+// controller-runtime start cluster-wide informers for both. A Pod's spec
+// (containers, env, volumes, tolerations) and its last-applied-configuration
+// annotation are the bulk of the object, and a ReplicaSet's pod template is a
+// whole Pod spec again. None of it is read: the controllers use identity,
+// labels, owner references, a Pod's phase and conditions, and a ReplicaSet's
+// replica counts. On a cluster with thousands of pods the untrimmed cache
+// alone exceeded the operator's memory limit (APIM-15).
+//
+// Anything added later that needs a stripped field must either read it with an
+// uncached client or be added to the kept set here.
+func cacheOptions() cache.Options {
+	return cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Pod{}:        {Transform: stripPod},
+			&appsv1.ReplicaSet{}: {Transform: stripReplicaSet},
+		},
+	}
+}
+
+// stripPod keeps a cached Pod's identity, owner references, phase and
+// conditions, and drops everything else.
+func stripPod(obj any) (any, error) {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return obj, nil
+	}
+	pod.Spec = corev1.PodSpec{}
+	pod.Status = corev1.PodStatus{
+		Phase:      pod.Status.Phase,
+		Conditions: pod.Status.Conditions,
+	}
+	pod.Annotations = nil
+	pod.ManagedFields = nil
+	return pod, nil
+}
+
+// stripReplicaSet keeps a cached ReplicaSet's identity, labels, desired
+// replicas and ready replicas, and drops the pod template.
+func stripReplicaSet(obj any) (any, error) {
+	replicaSet, ok := obj.(*appsv1.ReplicaSet)
+	if !ok {
+		return obj, nil
+	}
+	replicaSet.Spec = appsv1.ReplicaSetSpec{Replicas: replicaSet.Spec.Replicas}
+	replicaSet.Status = appsv1.ReplicaSetStatus{ReadyReplicas: replicaSet.Status.ReadyReplicas}
+	replicaSet.Annotations = nil
+	replicaSet.ManagedFields = nil
+	return replicaSet, nil
 }

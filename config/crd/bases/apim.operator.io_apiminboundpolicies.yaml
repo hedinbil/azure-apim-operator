@@ -42,20 +42,30 @@ spec:
               apiId:
                 description: APIID is the unique identifier for the API in APIM where
                   the policy will be applied
+                maxLength: 80
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
               apimService:
                 description: APIMService is the name of the APIMService custom resource
+                maxLength: 50
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               operationId:
                 description: |-
                   OperationID is the unique identifier for the operation (endpoint) within the API.
                   If specified, the policy will be applied to this specific operation.
                   If not specified, the policy will be applied to the entire API.
+                maxLength: 80
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
               policyContent:
                 description: |-
                   PolicyContent is the XML content of the policy to be applied.
                   This should be a complete policy XML document including all sections (inbound, backend, outbound, on-error).
+                maxLength: 131072
+                minLength: 1
                 type: string
             required:
             - apiId

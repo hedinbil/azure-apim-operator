@@ -22,13 +22,7 @@ var logger = ctrl.Log.WithName("apim")
 // GetAPI retrieves an existing API from Azure APIM to get its etag.
 // This is used to properly update existing APIs with the correct If-Match header.
 func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exists bool, err error) {
-	url := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.APIID,
-	)
+	url := serviceURL(config, "apis", config.APIID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -78,12 +72,6 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 // The function uses the Azure Management API to perform the import operation.
 // For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
 func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
-	// Construct the API ID, including revision if specified.
-	// APIM uses the format "apiId;rev=revisionNumber" for revisions.
-	apiID := apimParams.APIID
-	if apimParams.Revision != "" {
-		apiID = fmt.Sprintf("%s;rev=%s", apimParams.APIID, apimParams.Revision)
-	}
 
 	// Check if API exists and get etag for proper update handling
 	// For updates, we use the actual etag; for creates, we use "*"
@@ -114,14 +102,9 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
 	}
 
-	// Build the Azure Management API URL for importing the API.
-	importURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
-		apimParams.SubscriptionID,
-		apimParams.ResourceGroup,
-		apimParams.ServiceName,
-		apiID,
-	)
+	// Build the Azure Management API URL for importing the API. APIM addresses
+	// a revision as "apiId;rev=n".
+	importURL := revisionURL(apimParams, apimParams.APIID, apimParams.Revision)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(openApiContent))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
@@ -288,15 +271,16 @@ func extractAsyncStatus(body []byte) string {
 // AssignServiceUrlToApi updates the backend service URL for an existing API in Azure APIM.
 // This is used to point an API to a different backend service without re-importing the OpenAPI definition.
 func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) error {
-	patchURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.APIID,
-	)
+	patchURL := serviceURL(config, "apis", config.APIID)
 
-	body := fmt.Sprintf(`{"properties":{"serviceUrl":"%s"}}`, config.ServiceURL)
+	// Marshalled, not formatted: a quote or backslash in serviceUrl used to
+	// break out of the string and change the request body (APIM-16).
+	body, err := json.Marshal(map[string]any{
+		"properties": map[string]any{"serviceUrl": config.ServiceURL},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal serviceUrl patch body: %w", err)
+	}
 
 	// Log what we're about to do
 	logger.Info("🔧 Patching APIM service URL",
@@ -306,7 +290,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 		"serviceUrl", config.ServiceURL,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building PATCH request: %w", err)
 	}
@@ -352,16 +336,15 @@ func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) e
 		"subscriptionRequired", config.SubscriptionRequired,
 	)
 
-	patchURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.APIID,
-	)
+	patchURL := serviceURL(config, "apis", config.APIID)
 
-	// Build the JSON body with the subscriptionRequired property
-	body := fmt.Sprintf(`{"properties":{"subscriptionRequired":%t}}`, config.SubscriptionRequired)
+	// Build the JSON body with the subscriptionRequired property.
+	body, err := json.Marshal(map[string]any{
+		"properties": map[string]any{"subscriptionRequired": config.SubscriptionRequired},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal subscriptionRequired patch body: %w", err)
+	}
 
 	// Log what we're about to do
 	logger.Info("🔧 Patching APIM subscription requirement",
@@ -371,7 +354,7 @@ func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) e
 		"subscriptionRequired", config.SubscriptionRequired,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, patchURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building PATCH request: %w", err)
 	}
@@ -409,76 +392,11 @@ func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) e
 	return nil
 }
 
-// GetAPIRevisions retrieves all revisions for an API from Azure APIM.
-// API revisions allow you to version APIs and test changes before making them current.
-func GetAPIRevisions(ctx context.Context, config APIMDeploymentConfig) ([]APIRevision, error) {
-	url := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/revisions?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.APIID,
-	)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		logger.Error(err, "❌ Failed to build request for API revisions", "apiID", config.APIID)
-		return nil, fmt.Errorf("failed to build request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-
-	logger.Info("🔎 Requesting API revisions from APIM",
-		"apiID", config.APIID,
-		"url", url,
-	)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		logger.Error(err, "❌ Failed to request API revisions", "apiID", config.APIID)
-		return nil, fmt.Errorf("failed to call APIM API: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
-		}
-	}()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to get API revisions",
-			"apiID", config.APIID,
-			"status", resp.Status,
-			"body", string(body),
-		)
-		return nil, fmt.Errorf("failed to get API revisions: %s\n%s", resp.Status, string(body))
-	}
-
-	var result APIRevisionListResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		logger.Error(err, "❌ Failed to parse API revisions response", "apiID", config.APIID)
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	logger.Info("✅ Successfully retrieved API revisions",
-		"apiID", config.APIID,
-		"revisionCount", len(result.Value),
-	)
-
-	return result.Value, nil
-}
-
 // GetAPIMServiceDetails retrieves hostname information for an Azure APIM service instance.
 // It returns the API gateway hostname (Proxy) and the developer portal hostname.
 // This information is used to construct full URLs for accessing APIs through APIM.
 func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (apiHost, developerPortalHost string, err error) {
-	url := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-	)
+	url := serviceURL(config)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -530,26 +448,6 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 	return apiHost, developerPortalHost, nil
 }
 
-// APIRevision represents a single API revision in Azure APIM.
-// Revisions allow versioning of APIs and testing changes before making them current.
-type APIRevision struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Properties struct {
-		// ApiRevision is the revision number (e.g., "1", "2").
-		ApiRevision string `json:"apiRevision"`
-		// IsCurrent indicates whether this revision is the current active revision.
-		IsCurrent bool `json:"isCurrent"`
-	} `json:"properties"`
-}
-
-// APIRevisionListResponse is the response structure from the Azure Management API
-// when querying for API revisions.
-type APIRevisionListResponse struct {
-	// Value contains the list of API revisions.
-	Value []APIRevision `json:"value"`
-}
-
 // APIMDeploymentConfig contains all the configuration needed to deploy an API to Azure APIM.
 // This includes Azure subscription information, API details, and optional associations.
 type APIMDeploymentConfig struct {
@@ -563,8 +461,6 @@ type APIMDeploymentConfig struct {
 	APIID string
 	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
 	RoutePrefix string
-	// Product is a legacy field for a single product association (deprecated, use ProductIDs).
-	Product string
 	// ServiceURL is the backend service URL that APIM will proxy requests to.
 	ServiceURL string
 	// BearerToken is the Azure AD authentication token for the APIM management API.

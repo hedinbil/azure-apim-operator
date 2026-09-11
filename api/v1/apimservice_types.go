@@ -28,10 +28,18 @@ import (
 // to identify and connect to an Azure API Management service instance.
 type APIMServiceSpec struct {
 	// Name is the name of the Azure API Management service instance in Azure.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=50
 	Name string `json:"name"`
 	// ResourceGroup is the Azure resource group where the APIM service is located.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._()-]{0,88}[a-zA-Z0-9_()-]$`
+	// +kubebuilder:validation:MaxLength=90
 	ResourceGroup string `json:"resourceGroup"`
 	// Subscription is the Azure subscription ID where the APIM service is deployed.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
 	Subscription string `json:"subscription"`
 }
 

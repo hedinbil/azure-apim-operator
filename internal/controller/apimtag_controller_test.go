@@ -60,7 +60,7 @@ var _ = Describe("APIMTag Controller", func() {
 				Spec: apimv1.APIMServiceSpec{
 					Name:          "test-apim",
 					ResourceGroup: "test-rg",
-					Subscription:  "test-subscription-id",
+					Subscription:  "00000000-0000-0000-0000-000000000001",
 				},
 			}
 			Expect(k8sClient.Create(ctx, apimService)).To(Succeed())

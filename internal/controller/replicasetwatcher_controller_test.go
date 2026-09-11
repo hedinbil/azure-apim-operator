@@ -64,7 +64,7 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 				Spec: apimv1.APIMServiceSpec{
 					Name:          "test-apim",
 					ResourceGroup: "test-rg",
-					Subscription:  "test-subscription-id",
+					Subscription:  "00000000-0000-0000-0000-000000000001",
 				},
 			}
 			Expect(k8sClient.Create(ctx, apimService)).To(Succeed())
@@ -80,8 +80,11 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 					Namespace: "default",
 				},
 				Spec: apimv1.APIMAPISpec{
-					APIID:       "test-api-id",
-					APIMService: apimServiceName,
+					ServiceURL:           "https://example.com/api",
+					RoutePrefix:          "/test-api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					APIID:                "test-api-id",
+					APIMService:          apimServiceName,
 				},
 			}
 			Expect(k8sClient.Create(ctx, apimAPI)).To(Succeed())
@@ -350,8 +353,11 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 					Namespace: "default",
 				},
 				Spec: apimv1.APIMAPISpec{
-					APIID:       "selector-api-id",
-					APIMService: apimServiceName,
+					ServiceURL:           "https://example.com/api",
+					RoutePrefix:          "/test-api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					APIID:                "selector-api-id",
+					APIMService:          apimServiceName,
 					Target: &apimv1.APIMAPITarget{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{"team": "platform"},
@@ -398,8 +404,11 @@ var _ = Describe("ReplicaSetWatcher Controller", func() {
 					Namespace: "default",
 				},
 				Spec: apimv1.APIMAPISpec{
-					APIID:       "selector-api-id",
-					APIMService: apimServiceName,
+					ServiceURL:           "https://example.com/api",
+					RoutePrefix:          "/test-api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+					APIID:                "selector-api-id",
+					APIMService:          apimServiceName,
 					Target: &apimv1.APIMAPITarget{
 						Selector: &metav1.LabelSelector{
 							MatchLabels: map[string]string{"app.kubernetes.io/name": appName},

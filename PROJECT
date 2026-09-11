@@ -14,15 +14,6 @@ resources:
   controller: true
   domain: operator.io
   group: apim
-  kind: IngressWatcher
-  path: github.com/hedinit/azure-apim-operator/api/v1
-  version: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: operator.io
-  group: apim
   kind: APIMAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
@@ -47,33 +38,6 @@ resources:
   domain: operator.io
   group: apim
   kind: APIMService
-  path: github.com/hedinit/azure-apim-operator/api/v1
-  version: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: operator.io
-  group: apim
-  kind: PatchAPI
-  path: github.com/hedinit/azure-apim-operator/api/v1
-  version: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: operator.io
-  group: apim
-  kind: ImportAPI
-  path: github.com/hedinit/azure-apim-operator/api/v1
-  version: v1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: operator.io
-  group: apim
-  kind: DeployAPI
   path: github.com/hedinit/azure-apim-operator/api/v1
   version: v1
 - api:

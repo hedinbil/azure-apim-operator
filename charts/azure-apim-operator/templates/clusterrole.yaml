@@ -33,15 +33,11 @@ rules:
   - apiGroups: ["apim.operator.io"]
     resources: ["apimapideployments/finalizers"]
     verbs: ["update"]
+  # APIMService is a configuration record the other controllers read to locate
+  # the APIM instance; nothing writes it, so read-only (APIM-17).
   - apiGroups: ["apim.operator.io"]
     resources: ["apimservices"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]   
-  - apiGroups: ["apim.operator.io"]
-    resources: ["apimservices/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["apim.operator.io"]
-    resources: ["apimservices/finalizers"]
-    verbs: ["update"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apim.operator.io"]
     resources: ["apimproducts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

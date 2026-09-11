@@ -57,11 +57,6 @@ spec:
             - --metrics-bind-address=:{{ .Values.metrics.port }}
             - --metrics-secure=false
             {{- end }}
-          env:
-            - name: SWAGGER_ANNOTATION_KEY
-              value: "{{ .Values.swagger.annotationKey }}"
-            - name: SWAGGER_DEFAULT_PATH
-              value: "{{ .Values.swagger.defaultPath }}"
           {{- if .Values.metrics.enabled }}
           ports:
             - name: metrics

@@ -99,9 +99,3 @@ affinity: {}
 #     resourceGroup: rg-example
 #     subscription: 00000000-0000-0000-0000-000000000000
 apimServices: []
-
-swagger:
-  # Annotation on a Deployment or ReplicaSet that names the OpenAPI export path.
-  annotationKey: "operator.io/openapi-export"
-  # Path used when the annotation is absent.
-  defaultPath: "/swagger.yaml"

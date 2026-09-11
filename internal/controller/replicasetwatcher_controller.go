@@ -250,16 +250,3 @@ func isPodReady(pod *corev1.Pod) bool {
 	}
 	return false
 }
-
-// func getLoggerWithTrace(ctx context.Context) *zap.Logger {
-// 	base := zap.New(zap.UseDevMode(true)) // or zap.NewProduction() for prod
-// 	span := trace.SpanFromContext(ctx)
-// 	sc := span.SpanContext()
-// 	if sc.IsValid() {
-// 		return base.With(
-// 			zap.String("trace_id", sc.TraceID().String()),
-// 			zap.String("span_id", sc.SpanID().String()),
-// 		)
-// 	}
-// 	return base
-// }

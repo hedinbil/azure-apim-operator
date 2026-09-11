@@ -1,16 +1,21 @@
 # Authentication
 
-The operator authenticates to Azure using Azure AD tokens to call the Azure Management REST API. This document covers the supported authentication methods and how to configure them.
+The operator authenticates to Azure using Azure AD tokens to call the Azure Management REST API. This document covers the supported authentication method and how to configure it.
 
-## Authentication Methods
+## Authentication Method
 
-The operator supports three authentication methods, tried in this order:
+The operator authenticates one way: **Azure Workload Identity with explicit
+credentials**.
 
-1. **Workload Identity with explicit credentials** (primary, recommended for production)
-2. **Workload Identity with ServiceAccount discovery** (alternative)
-3. **DefaultAzureCredential** (fallback, useful for local development)
+Earlier versions of this document described two further methods, discovering
+the client id from the pod's ServiceAccount and falling back to the SDK's
+`DefaultAzureCredential`. Both helpers existed in `internal/identity` but were
+never called from anywhere, so there was no fallback chain in the running
+operator. They were removed in 0.28.0 (APIM-17) rather than left as
+documentation for behaviour that did not exist. If a fallback is wanted, it
+needs to be built and wired into the controllers first.
 
-### Method 1: Workload Identity (Primary)
+### Workload Identity
 
 This is the recommended method for production Kubernetes environments. The operator reads `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` from environment variables and exchanges a Kubernetes ServiceAccount token for an Azure AD token.
 
@@ -23,22 +28,6 @@ This is the recommended method for production Kubernetes environments. The opera
 **Token file path:** `/var/run/secrets/azure/tokens/azure-identity-token`
 
 **Token scope:** `https://management.azure.com/.default`
-
-### Method 2: Workload Identity with ServiceAccount Discovery
-
-An alternative that discovers the client ID from the ServiceAccount annotation `azure.workload.identity/client-id` instead of requiring it as an environment variable. This method reads the pod's ServiceAccount dynamically via the Kubernetes API.
-
-This is useful when the client ID varies per namespace or per ServiceAccount.
-
-### Method 3: DefaultAzureCredential (Fallback)
-
-Uses the Azure SDK's `DefaultAzureCredential` which tries multiple authentication methods in order:
-
-1. Environment variables (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`)
-2. Managed Identity (when running on Azure VMs or App Service)
-3. Azure CLI (`az login`)
-
-This is primarily useful for **local development** when running the operator outside of Kubernetes.
 
 ## Azure RBAC Permissions
 

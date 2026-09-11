@@ -41,12 +41,20 @@ spec:
             properties:
               apimService:
                 description: APIMService is the name of the APIMService custom resource
+                maxLength: 50
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               displayName:
                 description: DisplayName is the name shown in the APIM UI
+                maxLength: 300
+                minLength: 1
                 type: string
               tagId:
                 description: TagID is the unique identifier for the tag in APIM
+                maxLength: 80
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
             required:
             - apimService

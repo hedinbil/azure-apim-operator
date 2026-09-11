@@ -35,23 +35,12 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 	var policyURL string
 	if config.OperationID != "" {
 		// Operation-level policy: /apis/{apiId}/operations/{operationId}/policies/policy
-		policyURL = fmt.Sprintf(
-			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/operations/%s/policies/policy?api-version=2021-08-01",
-			config.SubscriptionID,
-			config.ResourceGroup,
-			config.ServiceName,
-			config.APIID,
-			config.OperationID,
-		)
+		policyURL = serviceURL(
+			config, "apis", config.APIID, "operations", config.OperationID, "policies", "policy")
 	} else {
 		// API-level policy: /apis/{apiId}/policies/policy
-		policyURL = fmt.Sprintf(
-			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/apis/%s/policies/policy?api-version=2021-08-01",
-			config.SubscriptionID,
-			config.ResourceGroup,
-			config.ServiceName,
-			config.APIID,
-		)
+		policyURL = serviceURL(
+			config, "apis", config.APIID, "policies", "policy")
 	}
 
 	// Construct the request body with the policy XML.

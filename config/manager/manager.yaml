@@ -88,7 +88,11 @@ spec:
         resources:
           limits:
             cpu: 500m
-            memory: 128Mi
+            # Matches the Helm chart. The cache transforms in cmd/main.go keep
+            # the cluster-wide Pod and ReplicaSet informers small, but 128Mi was
+            # below what the untrimmed cache needed on a large cluster and the
+            # chart is what production actually runs (APIM-15).
+            memory: 256Mi
           requests:
             cpu: 10m
             memory: 64Mi

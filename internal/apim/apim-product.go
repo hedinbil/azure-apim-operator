@@ -21,13 +21,8 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 		return nil
 	}
 
-	productURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.ProductID,
-	)
+	productURL := serviceURL(
+		config, "products", config.ProductID)
 
 	// Determine the product state based on the Published flag.
 	// Published products are visible in the developer portal and can be subscribed to.
@@ -103,13 +98,8 @@ func DeleteProduct(ctx context.Context, config APIMProductConfig) error {
 		return nil
 	}
 
-	productURL := fmt.Sprintf(
-		"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s?api-version=2021-08-01",
-		config.SubscriptionID,
-		config.ResourceGroup,
-		config.ServiceName,
-		config.ProductID,
-	)
+	productURL := serviceURL(
+		config, "products", config.ProductID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, productURL, nil)
 	if err != nil {
@@ -170,14 +160,8 @@ func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error
 
 	// Assign the API to each product in the list.
 	for _, productID := range config.ProductIDs {
-		productAssignURL := fmt.Sprintf(
-			"https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ApiManagement/service/%s/products/%s/apis/%s?api-version=2021-08-01",
-			config.SubscriptionID,
-			config.ResourceGroup,
-			config.ServiceName,
-			productID,
-			config.APIID,
-		)
+		productAssignURL := serviceURL(
+			config, "products", productID, "apis", config.APIID)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut, productAssignURL, nil)
 		if err != nil {

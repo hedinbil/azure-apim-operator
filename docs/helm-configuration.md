@@ -141,21 +141,13 @@ apimServices:
 | `volumes` | list | `[]` | Additional volumes |
 | `volumeMounts` | list | `[]` | Additional volume mounts |
 
-### Telemetry (Optional)
+### Telemetry
 
-Telemetry is disabled by default. To enable OpenTelemetry tracing, set the following environment variables:
-
-```yaml
-env:
-  - name: OTEL_EXPORTER_OTLP_ENDPOINT
-    value: "opentelemetry-collector.otel.svc.cluster.local:4317"
-  - name: OTEL_TRACES_EXPORTER
-    value: "otlp"
-  - name: OTEL_EXPORTER_OTLP_PROTOCOL
-    value: "grpc"
-```
-
-If `OTEL_EXPORTER_OTLP_ENDPOINT` is not set, telemetry is completely disabled.
+The operator exposes Prometheus metrics; see the `metrics` values block. There
+is no tracing: the OpenTelemetry initialiser this section used to document was
+never called, and the `env:` block it described was never rendered by the
+deployment template, so both were removed in 0.28.0 (APIM-17). The `metrics`
+block is the supported observability surface.
 
 ## Minimal Production Example
 

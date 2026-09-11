@@ -40,8 +40,13 @@ spec:
             description: APIMProductSpec defines the desired state
             properties:
               apiID:
+                maxLength: 80
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
               apimService:
+                maxLength: 50
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               deletionPolicy:
                 default: Delete
@@ -55,8 +60,13 @@ spec:
               description:
                 type: string
               displayName:
+                maxLength: 300
+                minLength: 1
                 type: string
               productId:
+                maxLength: 80
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$
                 type: string
               published:
                 type: boolean

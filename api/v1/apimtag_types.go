@@ -26,12 +26,20 @@ import (
 // APIMTagSpec defines the desired state of APIMTag.
 type APIMTagSpec struct {
 	// APIMService is the name of the APIMService custom resource
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=50
 	APIMService string `json:"apimService"`
 
 	// TagID is the unique identifier for the tag in APIM
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
 	TagID string `json:"tagId"`
 
 	// DisplayName is the name shown in the APIM UI
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=300
 	DisplayName string `json:"displayName"`
 }
 

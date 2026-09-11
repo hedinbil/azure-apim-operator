@@ -42,10 +42,14 @@ The operator registers seven controllers with the controller manager. Each contr
 | `ReplicaSetWatcherReconciler` | `apps/v1 ReplicaSet` | Detects application deployments and creates `APIMAPIDeployment` resources |
 | `APIMAPIDeploymentReconciler` | `APIMAPIDeployment` | Fetches OpenAPI specs and imports them into APIM |
 | `APIMAPIReconciler` | `APIMAPI` | Manages annotations (e.g., ArgoCD external links) |
-| `APIMServiceReconciler` | `APIMService` | Placeholder (currently a no-op) |
 | `APIMProductReconciler` | `APIMProduct` | Creates, updates, and deletes APIM products |
 | `APIMTagReconciler` | `APIMTag` | Creates and updates APIM tags |
 | `APIMInboundPolicyReconciler` | `APIMInboundPolicy` | Creates and updates inbound policies (API-level or operation-level) |
+
+`APIMService` has no controller. It is a plain configuration record: the other
+controllers read its `subscription` and `resourceGroup` to locate the APIM
+instance. The no-op reconciler that used to watch it was removed in 0.28.0
+along with the rest of the dead code (APIM-17).
 
 ## Core Flow: Automatic API Import
 

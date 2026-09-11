@@ -17,12 +17,22 @@ const (
 
 // APIMProductSpec defines the desired state
 type APIMProductSpec struct {
-	ProductID   string `json:"productId"`             // Required unique product ID in APIM
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
+	ProductID string `json:"productId"` // Required unique product ID in APIM
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=300
 	DisplayName string `json:"displayName"`           // Friendly display name
 	Description string `json:"description,omitempty"` // Optional description
 	Published   bool   `json:"published,omitempty"`   // Whether the product should be published
-	APIMService string `json:"apimService"`           // API Management service name
-	APIID       string `json:"apiID,omitempty"`       // Optional API to associate with the product
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=50
+	APIMService string `json:"apimService"` // API Management service name
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
+	APIID string `json:"apiID,omitempty"` // Optional API to associate with the product
 	// DeletionPolicy decides whether deleting this resource also deletes the product in APIM.
 	// Delete (the default) removes it; Retain leaves it in place.
 	// +kubebuilder:default=Delete

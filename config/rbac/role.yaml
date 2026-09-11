@@ -11,7 +11,6 @@ rules:
   - apimapis
   - apiminboundpolicies
   - apimproducts
-  - apimservices
   - apimtags
   - replicasetwatchers
   verbs:
@@ -29,7 +28,6 @@ rules:
   - apimapis/finalizers
   - apiminboundpolicies/finalizers
   - apimproducts/finalizers
-  - apimservices/finalizers
   - apimtags/finalizers
   - replicasetwatchers/finalizers
   verbs:
@@ -41,13 +39,20 @@ rules:
   - apimapis/status
   - apiminboundpolicies/status
   - apimproducts/status
-  - apimservices/status
   - apimtags/status
   - replicasetwatchers/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - apim.operator.io
+  resources:
+  - apimservices
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - apps
   resources:

@@ -16,10 +16,19 @@ type APIMAPITarget struct {
 // This spec contains the configuration needed to import and manage an API in Azure API Management.
 type APIMAPISpec struct {
 	// ServiceURL is the backend service URL that APIM will proxy requests to.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^https?://`
+	// +kubebuilder:validation:MaxLength=2048
 	ServiceURL string `json:"serviceUrl"`
 	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._~/-]*$`
+	// +kubebuilder:validation:MaxLength=400
 	RoutePrefix string `json:"routePrefix"`
 	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^https?://`
+	// +kubebuilder:validation:MaxLength=2048
 	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
 	// Target optionally selects which ReplicaSets should trigger imports for this API.
 	// If omitted, the operator falls back to matching metadata.name with the
@@ -33,8 +42,14 @@ type APIMAPISpec struct {
 	TagIDs []string `json:"tagIds,omitempty"`
 	// APIMService is the name of the APIMService custom resource that references
 	// the Azure API Management service instance.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=50
 	APIMService string `json:"apimService"`
 	// APIID is the unique identifier for the API in Azure APIM.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,78}[a-zA-Z0-9]$|^[a-zA-Z0-9]$`
+	// +kubebuilder:validation:MaxLength=80
 	APIID string `json:"APIID"`
 	// SubscriptionRequired controls whether a subscription key is required to access the API.
 	// If set to false, the API can be accessed without a subscription key.
