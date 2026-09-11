@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -25,11 +26,14 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
+	"github.com/hedinit/azure-apim-operator/internal/apim"
 )
 
 var _ = Describe("APIMProduct Controller", func() {
@@ -89,15 +93,11 @@ var _ = Describe("APIMProduct Controller", func() {
 
 	AfterEach(func() {
 		By("cleaning up the APIMProduct resource")
-		resource := &apimv1.APIMProduct{}
-		err := k8sClient.Get(ctx, typeNamespacedName, resource)
-		if err == nil {
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		}
+		forceDeleteProduct(ctx, typeNamespacedName)
 
 		By("cleaning up the APIMService resource")
 		apimService := &apimv1.APIMService{}
-		err = k8sClient.Get(ctx, apimServiceNamespacedName, apimService)
+		err := k8sClient.Get(ctx, apimServiceNamespacedName, apimService)
 		if err == nil {
 			Expect(k8sClient.Delete(ctx, apimService)).To(Succeed())
 		}
@@ -161,9 +161,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, invalidProduct)).To(Succeed())
-			defer func() {
-				Expect(k8sClient.Delete(ctx, invalidProduct)).To(Succeed())
-			}()
+			defer forceDeleteProduct(ctx, invalidProductName)
 
 			By("reconciling the resource")
 			controllerReconciler := &APIMProductReconciler{
@@ -175,9 +173,180 @@ var _ = Describe("APIMProduct Controller", func() {
 				NamespacedName: invalidProductName,
 			})
 
-			By("verifying that the error is handled gracefully")
+			By("verifying that the missing dependency is reported and retried")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(requeueMissingAPIMService))
+			Expect(k8sClient.Get(ctx, invalidProductName, invalidProduct)).To(Succeed())
+			Expect(invalidProduct.Status.Phase).To(Equal(phaseError))
+			Expect(invalidProduct.Status.Message).To(Equal(`APIMService "non-existent-service" not found in namespace default`))
+			Expect(controllerutil.ContainsFinalizer(invalidProduct, productFinalizer)).To(BeTrue())
+		})
+
+		It("should add the finalizer and create the product in APIM", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			var upserted []apim.APIMProductConfig
+			controllerReconciler := &APIMProductReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				getToken: func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(_ context.Context, cfg apim.APIMProductConfig) error {
+					upserted = append(upserted, cfg)
+					return nil
+				},
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(BeZero())
+			Expect(upserted).To(HaveLen(1))
+			Expect(upserted[0].ProductID).To(Equal("test-product-id"))
+			Expect(upserted[0].ServiceName).To(Equal(apimServiceName))
+			Expect(upserted[0].SubscriptionID).To(Equal("test-subscription-id"))
+			Expect(upserted[0].ResourceGroup).To(Equal("test-rg"))
+			Expect(upserted[0].BearerToken).To(Equal("token"))
+
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
+			Expect(product.Status.Phase).To(Equal(phaseCreated))
+			Expect(product.Spec.DeletionPolicy).To(Equal(apimv1.DeletionPolicyDelete), "the API server should default deletionPolicy")
+		})
+
+		It("should delete the product in APIM before letting the resource go", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			var deleted []apim.APIMProductConfig
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(_ context.Context, cfg apim.APIMProductConfig) error {
+					deleted = append(deleted, cfg)
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+
+			By("reconciling once so the finalizer is in place")
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("deleting the resource")
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed(), "the finalizer keeps the resource until APIM is cleaned up")
+			Expect(product.DeletionTimestamp.IsZero()).To(BeFalse())
+
+			By("reconciling the deletion")
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(deleted).To(HaveLen(1))
+			Expect(deleted[0].ProductID).To(Equal("test-product-id"))
+			Expect(deleted[0].ServiceName).To(Equal(apimServiceName))
+			Expect(deleted[0].BearerToken).To(Equal("token"))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
+		It("should keep the resource when the product cannot be deleted in APIM", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					return fmt.Errorf("failed to delete product: 400 Bad Request: product has active subscriptions")
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed(), "the resource must stay until APIM is cleaned up")
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
+			Expect(product.Status.Phase).To(Equal(phaseError))
+			Expect(product.Status.Message).To(ContainSubstring("active subscriptions"))
+		})
+
+		It("should keep the product in APIM when deletionPolicy is Retain", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					Fail("deleteProduct must not be called with deletionPolicy Retain")
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+
+			By("marking the product as retained")
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			product.Spec.DeletionPolicy = apimv1.DeletionPolicyRetain
+			Expect(k8sClient.Update(ctx, product)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("deleting the resource and reconciling")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
+		It("should release the finalizer when the APIMService is gone", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					Fail("deleteProduct must not be called without an APIMService")
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("removing the APIMService and then the product")
+			apimService := &apimv1.APIMService{}
+			Expect(k8sClient.Get(ctx, apimServiceNamespacedName, apimService)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, apimService)).To(Succeed())
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
 		})
 
 		It("should update status when Azure token retrieval fails", func() {
@@ -241,3 +410,30 @@ var _ = Describe("APIMProduct Controller", func() {
 		})
 	})
 })
+
+// stubAzureIdentityEnv sets placeholder identity variables and returns a restore func.
+func stubAzureIdentityEnv() func() {
+	restore := unsetAzureIdentityEnvVars()
+	_ = os.Setenv("AZURE_CLIENT_ID", "test-client-id")
+	_ = os.Setenv("AZURE_TENANT_ID", "test-tenant-id")
+	return restore
+}
+
+// forceDeleteProduct deletes a product and strips the finalizer, which no controller
+// would otherwise release in envtest.
+func forceDeleteProduct(ctx context.Context, key types.NamespacedName) {
+	product := &apimv1.APIMProduct{}
+	if err := k8sClient.Get(ctx, key, product); err != nil {
+		return
+	}
+	_ = k8sClient.Delete(ctx, product)
+	if err := k8sClient.Get(ctx, key, product); err != nil {
+		return
+	}
+	if controllerutil.RemoveFinalizer(product, productFinalizer) {
+		Expect(client.IgnoreNotFound(k8sClient.Update(ctx, product))).To(Succeed())
+	}
+	Eventually(func() bool {
+		return errors.IsNotFound(k8sClient.Get(ctx, key, &apimv1.APIMProduct{}))
+	}).Should(BeTrue())
+}

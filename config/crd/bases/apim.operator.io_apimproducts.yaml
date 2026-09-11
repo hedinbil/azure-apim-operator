@@ -43,6 +43,15 @@ spec:
                 type: string
               apimService:
                 type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy decides whether deleting this resource also deletes the product in APIM.
+                  Delete (the default) removes it; Retain leaves it in place.
+                enum:
+                - Delete
+                - Retain
+                type: string
               description:
                 type: string
               displayName:

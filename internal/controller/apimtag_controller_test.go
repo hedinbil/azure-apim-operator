@@ -174,9 +174,12 @@ var _ = Describe("APIMTag Controller", func() {
 				NamespacedName: invalidTagName,
 			})
 
-			By("verifying that the error is handled gracefully")
+			By("verifying that the missing dependency is reported and retried")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(BeZero())
+			Expect(result.RequeueAfter).To(Equal(requeueMissingAPIMService))
+			Expect(k8sClient.Get(ctx, invalidTagName, invalidTag)).To(Succeed())
+			Expect(invalidTag.Status.Phase).To(Equal(phaseError))
+			Expect(invalidTag.Status.Message).To(Equal(`APIMService "non-existent-service" not found in namespace default`))
 		})
 
 		It("should update status when Azure token retrieval fails", func() {

@@ -26,9 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
@@ -42,21 +41,22 @@ import (
 type APIMProductReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// Seams for tests. When nil the real Azure calls are used.
+	getToken      func(ctx context.Context, clientID, tenantID string) (string, error)
+	upsertProduct func(ctx context.Context, cfg apim.APIMProductConfig) error
+	deleteProduct func(ctx context.Context, cfg apim.APIMProductConfig) error
 }
+
+// productFinalizer keeps an APIMProduct around until its product is removed from APIM.
+const productFinalizer = "apim.operator.io/product"
 
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimproducts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimproducts/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimproducts/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the APIMProduct object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
+// Reconcile creates or updates the product in APIM and, when the resource is deleted,
+// removes it again unless spec.deletionPolicy is Retain.
 func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -70,41 +70,62 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	deleting := !product.DeletionTimestamp.IsZero()
+	hasFinalizer := controllerutil.ContainsFinalizer(&product, productFinalizer)
+	switch {
+	case deleting && !hasFinalizer:
+		// Nothing of ours is left in APIM to clean up.
+		return ctrl.Result{}, nil
+	case !deleting && !hasFinalizer:
+		// Take the finalizer before the product exists in APIM so a delete can never orphan it.
+		controllerutil.AddFinalizer(&product, productFinalizer)
+		if err := r.Update(ctx, &product); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if deleting && product.Spec.DeletionPolicy == apimv1.DeletionPolicyRetain {
+		logger.Info("🗑️ APIMProduct deleted with deletionPolicy Retain; the product stays in APIM",
+			"name", req.NamespacedName, "productId", product.Spec.ProductID)
+		return r.releaseFinalizer(ctx, &product)
+	}
+
 	operatorNamespace := getOperatorNamespace()
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: product.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", product.Spec.APIMService)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !errors.IsNotFound(err) {
+			logger.Error(err, "❌ Failed to get APIMService", "name", product.Spec.APIMService)
+			return ctrl.Result{}, err
+		}
+		if deleting {
+			logger.Info("⚠️ APIMService is gone, cannot remove the product from APIM; releasing the finalizer",
+				"name", req.NamespacedName, "apimService", product.Spec.APIMService, "productId", product.Spec.ProductID)
+			return r.releaseFinalizer(ctx, &product)
+		}
+		message := missingAPIMServiceMessage(product.Spec.APIMService, operatorNamespace)
+		logger.Info("⏳ "+message+"; retrying", "name", req.NamespacedName)
+		r.setError(ctx, &product, message)
+		return ctrl.Result{RequeueAfter: requeueMissingAPIMService}, nil
 	}
 
 	logger.Info("🔗 Found APIMService", "name", apimService.Name)
 
-	// 🔐 Fetch token from environment and identity helper
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
 		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
-		// Use Patch to update only status without touching spec fields.
-		statusPatch := client.MergeFrom(product.DeepCopy())
-		product.Status.Phase = phaseError
-		product.Status.Message = errMsgMissingAzureIdentity
-		_ = r.Status().Patch(ctx, &product, statusPatch)
+		r.setError(ctx, &product, errMsgMissingAzureIdentity)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
+	token, err := r.token(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
-		// Use Patch to update only status without touching spec fields.
-		statusPatch := client.MergeFrom(product.DeepCopy())
-		product.Status.Phase = phaseError
-		product.Status.Message = errMsgFailedToGetAzureToken
-		_ = r.Status().Patch(ctx, &product, statusPatch)
+		r.setError(ctx, &product, errMsgFailedToGetAzureToken)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	// 📦 Construct product config
 	cfg := apim.APIMProductConfig{
 		SubscriptionID: apimService.Spec.Subscription,
 		ResourceGroup:  apimService.Spec.ResourceGroup,
@@ -116,58 +137,80 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		BearerToken:    token,
 	}
 
-	// Check if the product is being deleted
-	if !product.DeletionTimestamp.IsZero() {
+	if deleting {
 		logger.Info("🗑️ APIMProduct is being deleted", "name", req.NamespacedName, "productId", cfg.ProductID)
-		if err := apim.DeleteProduct(ctx, cfg); err != nil {
+		if err := r.remove(ctx, cfg); err != nil {
 			logger.Error(err, "❌ Failed to delete product in APIM", "productId", cfg.ProductID)
-			// Use Patch to update only status without touching spec fields.
-			statusPatch := client.MergeFrom(product.DeepCopy())
-			product.Status.Phase = phaseError
-			product.Status.Message = err.Error()
-			if updateErr := r.Status().Patch(ctx, &product, statusPatch); updateErr != nil {
-				logger.Error(updateErr, "❌ Failed to patch APIMProduct status")
-			}
+			r.setError(ctx, &product, err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		logger.Info("✅ Successfully deleted APIM product", "productId", cfg.ProductID)
-		return ctrl.Result{}, nil
-	} else {
-		// Handle creation/update
-		if err := apim.UpsertProduct(ctx, cfg); err != nil {
-			logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
-			// Use Patch to update only status without touching spec fields.
-			statusPatch := client.MergeFrom(product.DeepCopy())
-			product.Status.Phase = phaseError
-			product.Status.Message = err.Error()
-			if updateErr := r.Status().Patch(ctx, &product, statusPatch); updateErr != nil {
-				logger.Error(updateErr, "❌ Failed to patch APIMProduct status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-		logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
-		// Use Patch to update only status without touching spec fields.
-		statusPatch := client.MergeFrom(product.DeepCopy())
-		product.Status.Phase = phaseCreated
-		product.Status.Message = "Product created successfully"
-		if err := r.Status().Patch(ctx, &product, statusPatch); err != nil {
-			logger.Error(err, "❌ Failed to patch APIMProduct status")
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.releaseFinalizer(ctx, &product)
 	}
+
+	if err := r.upsert(ctx, cfg); err != nil {
+		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
+		r.setError(ctx, &product, err.Error())
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
+	if err := r.status(ctx, &product, phaseCreated, "Product created successfully"); err != nil {
+		logger.Error(err, "❌ Failed to patch APIMProduct status")
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// status patches only the status subresource so spec and metadata stay untouched.
+func (r *APIMProductReconciler) status(ctx context.Context, product *apimv1.APIMProduct, phase, message string) error {
+	patch := client.MergeFrom(product.DeepCopy())
+	product.Status.Phase = phase
+	product.Status.Message = message
+	return r.Status().Patch(ctx, product, patch)
+}
+
+// setError records a failure; a failing patch is logged rather than returned.
+func (r *APIMProductReconciler) setError(ctx context.Context, product *apimv1.APIMProduct, message string) {
+	if err := r.status(ctx, product, phaseError, message); err != nil {
+		log.FromContext(ctx).Error(err, "❌ Failed to patch APIMProduct status")
+	}
+}
+
+// releaseFinalizer lets the API server finish the delete.
+func (r *APIMProductReconciler) releaseFinalizer(ctx context.Context, product *apimv1.APIMProduct) (ctrl.Result, error) {
+	controllerutil.RemoveFinalizer(product, productFinalizer)
+	if err := r.Update(ctx, product); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *APIMProductReconciler) token(ctx context.Context, clientID, tenantID string) (string, error) {
+	if r.getToken != nil {
+		return r.getToken(ctx, clientID, tenantID)
+	}
+	return identity.GetManagementToken(ctx, clientID, tenantID)
+}
+
+func (r *APIMProductReconciler) upsert(ctx context.Context, cfg apim.APIMProductConfig) error {
+	if r.upsertProduct != nil {
+		return r.upsertProduct(ctx, cfg)
+	}
+	return apim.UpsertProduct(ctx, cfg)
+}
+
+func (r *APIMProductReconciler) remove(ctx context.Context, cfg apim.APIMProductConfig) error {
+	if r.deleteProduct != nil {
+		return r.deleteProduct(ctx, cfg)
+	}
+	return apim.DeleteProduct(ctx, cfg)
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *APIMProductReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMProduct{}).
-		WithEventFilter(predicate.Funcs{
-			CreateFunc:  func(e event.CreateEvent) bool { return true },
-			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
-			DeleteFunc:  func(e event.DeleteEvent) bool { return true },
-			GenericFunc: func(e event.GenericEvent) bool { return false },
-		}).
+		WithEventFilter(specOrDeletionChanged()).
 		Named("apimproduct").
 		Complete(r)
 }

@@ -71,8 +71,19 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: policy.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", policy.Spec.APIMService, "apiID", policy.Spec.APIID)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !errors.IsNotFound(err) {
+			logger.Error(err, "❌ Failed to get APIMService", "name", policy.Spec.APIMService, "apiID", policy.Spec.APIID)
+			return ctrl.Result{}, err
+		}
+		message := missingAPIMServiceMessage(policy.Spec.APIMService, operatorNamespace)
+		logger.Info("⏳ "+message+"; retrying", "name", req.NamespacedName, "apiID", policy.Spec.APIID)
+		statusPatch := client.MergeFrom(policy.DeepCopy())
+		policy.Status.Phase = phaseError
+		policy.Status.Message = message
+		if patchErr := r.Status().Patch(ctx, &policy, statusPatch); patchErr != nil {
+			logger.Error(patchErr, "❌ Failed to patch APIMInboundPolicy status")
+		}
+		return ctrl.Result{RequeueAfter: requeueMissingAPIMService}, nil
 	}
 
 	clientID := os.Getenv("AZURE_CLIENT_ID")

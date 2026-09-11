@@ -17,8 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // Phase constants for status tracking across controllers.
@@ -52,4 +57,28 @@ func getOperatorNamespace() string {
 	// Default to "default" namespace if neither is available
 	// This allows tests to work without setting up the service account file
 	return "default"
+}
+
+// requeueMissingAPIMService is how long a resource waits for its APIMService to appear.
+const requeueMissingAPIMService = 60 * time.Second
+
+// missingAPIMServiceMessage is the status message for a resource whose APIMService does not exist.
+func missingAPIMServiceMessage(name, namespace string) string {
+	return fmt.Sprintf("APIMService %q not found in namespace %s", name, namespace)
+}
+
+// specOrDeletionChanged reconciles on create, on spec changes (which bump the generation)
+// and when a deletion starts; status-only updates are ignored.
+func specOrDeletionChanged() predicate.Predicate {
+	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero()
+		},
+	})
 }

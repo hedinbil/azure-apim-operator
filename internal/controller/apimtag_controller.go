@@ -26,9 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
@@ -74,8 +72,19 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	var apimService apimv1.APIMService
 	if err := r.Get(ctx, client.ObjectKey{Name: tag.Spec.APIMService, Namespace: operatorNamespace}, &apimService); err != nil {
-		logger.Error(err, "❌ Failed to get APIMService", "name", tag.Spec.APIMService)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !errors.IsNotFound(err) {
+			logger.Error(err, "❌ Failed to get APIMService", "name", tag.Spec.APIMService)
+			return ctrl.Result{}, err
+		}
+		message := missingAPIMServiceMessage(tag.Spec.APIMService, operatorNamespace)
+		logger.Info("⏳ "+message+"; retrying", "name", req.NamespacedName)
+		statusPatch := client.MergeFrom(tag.DeepCopy())
+		tag.Status.Phase = phaseError
+		tag.Status.Message = message
+		if patchErr := r.Status().Patch(ctx, &tag, statusPatch); patchErr != nil {
+			logger.Error(patchErr, "❌ Failed to patch APIMTag status")
+		}
+		return ctrl.Result{RequeueAfter: requeueMissingAPIMService}, nil
 	}
 
 	clientID := os.Getenv("AZURE_CLIENT_ID")
@@ -134,12 +143,7 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *APIMTagReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMTag{}).
-		WithEventFilter(predicate.Funcs{
-			CreateFunc:  func(e event.CreateEvent) bool { return true },
-			UpdateFunc:  func(e event.UpdateEvent) bool { return false },
-			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
-			GenericFunc: func(e event.GenericEvent) bool { return false },
-		}).
+		WithEventFilter(specOrDeletionChanged()).
 		Named("apimtag").
 		Complete(r)
 }
