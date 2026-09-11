@@ -317,6 +317,37 @@ var _ = Describe("APIMProduct Controller", func() {
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
 		})
 
+		It("should release the finalizer on deletion when no Azure identity is configured", func() {
+			restore := unsetAzureIdentityEnvVars()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					Fail("deleteProduct must not be called without an identity")
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+
+			By("reconciling once: the finalizer is taken and the missing identity is reported")
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
+			Expect(product.Status.Message).To(Equal(errMsgMissingAzureIdentity))
+
+			By("deleting the resource: the delete must not wedge on the finalizer")
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+			result, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
 		It("should release the finalizer when the APIMService is gone", func() {
 			restore := stubAzureIdentityEnv()
 			defer restore()

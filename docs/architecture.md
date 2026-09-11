@@ -125,7 +125,7 @@ Each controller uses Kubernetes predicates to filter which events trigger reconc
 | ReplicaSetWatcher | Only if `ReadyReplicas > 0` | Only when `ReadyReplicas` goes from 0 to > 0 | No | Ignores scaled-to-0 ReplicaSets |
 | APIMAPIDeployment | Yes | No | No | One-shot: processes on creation only |
 | APIMAPI | No | Yes | No | Only processes updates (for annotations) |
-| APIMProduct | Yes | Yes, on spec changes | Yes, unless `spec.deletionPolicy: Retain` | A finalizer removes the product from APIM before the resource goes away |
+| APIMProduct | Yes | Yes, on spec changes | Yes, unless `spec.deletionPolicy: Retain` | A finalizer removes the product from APIM before the resource goes away; without an APIMService or a configured Azure identity nothing could have been created, so the finalizer is released |
 | APIMTag | Yes | Yes, on spec changes | No | Tags stay in APIM when the resource is deleted |
 | APIMInboundPolicy | Yes | Only if spec fields changed | No | Compares `apimService`, `apiId`, `operationId`, `policyContent` |
 

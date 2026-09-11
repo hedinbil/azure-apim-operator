@@ -114,6 +114,13 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	clientID := os.Getenv("AZURE_CLIENT_ID")
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
+		if deleting {
+			// Without an identity this operator can never have created the product, so
+			// there is nothing to remove; holding the resource would only wedge deletes.
+			logger.Info("⚠️ No Azure identity configured, releasing the finalizer without touching APIM",
+				"name", req.NamespacedName, "productId", product.Spec.ProductID)
+			return r.releaseFinalizer(ctx, &product)
+		}
 		logger.Error(fmt.Errorf("missing identity env vars"), "❌ AZURE_CLIENT_ID or AZURE_TENANT_ID not set")
 		r.setError(ctx, &product, errMsgMissingAzureIdentity)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
