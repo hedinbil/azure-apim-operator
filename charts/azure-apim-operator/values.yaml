@@ -1,185 +1,86 @@
 # Default values for azure-apim-operator.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
 
-# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
 replicaCount: 1
 
-# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
   # The release workflow publishes images to the Hedin ACR; ghcr.io no longer
   # receives new versions. Override for another registry if needed.
   repository: hedinit.azurecr.io/azure-apim-operator
-  # This sets the pull policy for images.
   pullPolicy: IfNotPresent
-  # Overrides the image tag. Empty defaults to the IMMUTABLE release tag
-  # v<appVersion> (pushed by CI when the matching git tag is built), so the
-  # deployed code is always traceable to one commit and ArgoCD rolls pods on
-  # sync. Do not point this at a rolling *-latest tag.
+  # Defaults to v<appVersion>: the release contract keeps chart version,
+  # appVersion, git tag and image tag equal.
   tag: ""
 
-# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
-# This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
 
-# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
 serviceAccount:
-  # Specifies whether a service account should be created
   create: true
-  # Automatically mount a ServiceAccount's API credentials?
   automount: true
-  # Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
-  name: ""
-
-# This is for setting Kubernetes Annotations to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
-podAnnotations: {}
-# This is for setting Kubernetes Labels to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
-
-podLabels: {}
-
-podSecurityContext: {}
-  # fsGroup: 2000
-
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
-
-# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
-service:
-  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
-  type: ClusterIP
-  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
-  port: 80
-
-# This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-    # kubernetes.io/ingress.class: nginx
-    # kubernetes.io/tls-acme: "true"
-  hosts:
-    - host: chart-example.local
-      paths:
-        - path: /
-          pathType: ImplementationSpecific
-  tls: []
-  #  - secretName: chart-example-tls
-  #    hosts:
-  #      - chart-example.local
-
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
-
-# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
-livenessProbe:
-  httpGet:
-    path: /
-    port: http
-readinessProbe:
-  httpGet:
-    path: /
-    port: http
-
-# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
-
-# Additional volumes on the output Deployment definition.
-volumes: []
-# - name: foo
-#   secret:
-#     secretName: mysecret
-#     optional: false
-
-# Additional volumeMounts on the output Deployment definition.
-volumeMounts: []
-# - name: foo
-#   mountPath: "/etc/foo"
-#   readOnly: true
-
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
-
-serviceAccount:
-  # Specifies whether a Kubernetes ServiceAccount should be created.
-  # Set to true to let the chart create a dedicated ServiceAccount.
-  create: true
-
-  # Automatically mount the ServiceAccount's token into the container.
-  automount: true
-
-  # The name of the ServiceAccount to use.
-  # If not set and `create` is true, the chart will generate one based on the release name.
   name: azure-apim-operator
-
+  # Azure Workload Identity: the webhook injects AZURE_CLIENT_ID and
+  # AZURE_TENANT_ID from these values.
   workloadIdentity:
-    # Enables Azure Workload Identity integration for this ServiceAccount.
-    # This allows pods to authenticate with Azure using federated identity
-    # without secrets or node-managed identity binding.
     enabled: true
-
-    # The Client ID of the Azure user-assigned managed identity (UAMI).
-    # Must match the identity federated with this ServiceAccount.
     clientID: <replace-with-default-or-empty>
-
-    # The Tenant ID of the Azure Active Directory (AAD) tenant containing the UAMI.
-    # Required for workload identity federation to Azure.
     tenantID: <replace-with-default-or-empty>
 
+# Leader election flag passed to the manager.
+leaderElect: true
 
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - "ALL"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 20m
+    memory: 64Mi
+
+# The manager serves its probes on 8081. There is no Service: nothing else
+# listens.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8081
+  initialDelaySeconds: 15
+  periodSeconds: 20
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+volumes: []
+volumeMounts: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# APIM instances the operator may manage, rendered as APIMService resources:
+#   - name: apim-example
+#     resourceGroup: rg-example
+#     subscription: 00000000-0000-0000-0000-000000000000
 apimServices: []
-  # List of Azure API Management service configurations the operator will target.
-  # Each item should define:
-  # - `name`: The name of the APIM instance (must match the resource name in Azure).
-  # - `resourceGroup`: The resource group where the APIM instance is located.
-  # - `subscription`: The Azure subscription ID containing the APIM instance.
-  #
-  # Example:
-  # - name: <replace-with-default-or-empty>
-  #   resourceGroup: <replace-with-default-or-empty>
-  #   subscription: <replace-with-default-or-empty>
-  
 
 swagger:
+  # Annotation on a Deployment or ReplicaSet that names the OpenAPI export path.
   annotationKey: "operator.io/openapi-export"
+  # Path used when the annotation is absent.
   defaultPath: "/swagger.yaml"
-
-# env:
-#   - name: OTEL_EXPORTER_OTLP_ENDPOINT
-#     value: "opentelemetry-collector.opentelemetry-collector.svc.cluster.local:4317"
-#   - name: OTEL_TRACES_EXPORTER
-#     value: "otlp"
-#   - name: OTEL_EXPORTER_OTLP_PROTOCOL
-#     value: "grpc"
-#   - name: DD_ENV
-#     value: "prod"
-#   - name: DD_VERSION
-#     value: "1.0.0"  
