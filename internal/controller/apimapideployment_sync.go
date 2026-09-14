@@ -29,17 +29,21 @@ const (
 )
 
 type apimDeploymentHashInput struct {
-	APIID                string   `json:"apiID"`
-	APIMService          string   `json:"apimService"`
-	Subscription         string   `json:"subscription"`
-	ResourceGroup        string   `json:"resourceGroup"`
-	RoutePrefix          string   `json:"routePrefix"`
-	ServiceURL           string   `json:"serviceUrl"`
-	Revision             string   `json:"revision"`
-	SubscriptionRequired bool     `json:"subscriptionRequired"`
-	ProductIDs           []string `json:"productIds,omitempty"`
-	TagIDs               []string `json:"tagIds,omitempty"`
-	OpenAPIHash          string   `json:"openApiHash"`
+	// Type is left empty for http APIs so every resource that predates the field keeps
+	// the hash it already has applied; otherwise the upgrade would re-import all of them.
+	Type                 string                   `json:"type,omitempty"`
+	WebSocket            *apimv1.APIMAPIWebSocket `json:"websocket,omitempty"`
+	APIID                string                   `json:"apiID"`
+	APIMService          string                   `json:"apimService"`
+	Subscription         string                   `json:"subscription"`
+	ResourceGroup        string                   `json:"resourceGroup"`
+	RoutePrefix          string                   `json:"routePrefix"`
+	ServiceURL           string                   `json:"serviceUrl"`
+	Revision             string                   `json:"revision"`
+	SubscriptionRequired bool                     `json:"subscriptionRequired"`
+	ProductIDs           []string                 `json:"productIds,omitempty"`
+	TagIDs               []string                 `json:"tagIds,omitempty"`
+	OpenAPIHash          string                   `json:"openApiHash"`
 }
 
 func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apimv1.APIMAPI) (*apimv1.APIMAPIDeployment, error) {
@@ -56,6 +60,8 @@ func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apim
 	}
 
 	desiredSpec := apimv1.APIMAPIDeploymentSpec{
+		Type:                 apimAPI.Spec.Type,
+		WebSocket:            apimAPI.Spec.WebSocket.DeepCopy(),
 		ServiceURL:           apimAPI.Spec.ServiceURL,
 		RoutePrefix:          apimAPI.Spec.RoutePrefix,
 		OpenAPIDefinitionURL: apimAPI.Spec.OpenAPIDefinitionURL,
@@ -147,6 +153,14 @@ func buildDesiredAPIMStateHash(spec *apimv1.APIMAPIDeploymentSpec, subscription 
 		ProductIDs:           productIDs,
 		TagIDs:               tagIDs,
 		OpenAPIHash:          openAPIHash,
+	}
+
+	if spec.Type == apimv1.APITypeWebSocket {
+		payload.Type = spec.Type
+		payload.WebSocket = spec.WebSocket.DeepCopy()
+		if payload.WebSocket != nil {
+			sort.Strings(payload.WebSocket.Protocols)
+		}
 	}
 
 	encoded, err := json.Marshal(payload)

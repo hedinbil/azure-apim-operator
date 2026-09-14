@@ -411,6 +411,47 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			Expect(updatedDeployment.Status.LastError).To(ContainSubstring("not allowed for OpenAPI fetches"))
 		})
 
+		It("should not fetch an OpenAPI document for a websocket API", func() {
+			By("serving an error so any fetch attempt would fail loudly")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			defer server.Close()
+
+			By("creating a matching ready ReplicaSet")
+			rs := createReplicaSet(ctx, "test-websocket-replicaset", map[string]string{"app.kubernetes.io/name": resourceName}, map[string]string{"app": resourceName})
+			createReadyPodForReplicaSet(ctx, rs, "test-websocket-pod")
+
+			By("turning the deployment into a websocket API that still names the failing URL")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			deployment.Spec.Type = apimv1.APITypeWebSocket
+			deployment.Spec.ServiceURL = "wss://example.com/hub"
+			deployment.Spec.OpenAPIDefinitionURL = server.URL
+			Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+
+			By("ensuring Azure credentials are not set, so the run stops right after the fetch step")
+			restoreIdentityEnv := unsetAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			By("reconciling the resource")
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				fetcher: testOpenAPIFetcher(),
+			}
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+
+			By("verifying it got past the fetch and failed on credentials instead")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			updatedDeployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedDeployment)).To(Succeed())
+			Expect(updatedDeployment.Status.Message).To(ContainSubstring("AZURE_CLIENT_ID or AZURE_TENANT_ID not set"))
+			Expect(updatedDeployment.Status.OpenAPIHash).To(BeEmpty())
+			Expect(updatedDeployment.Status.DesiredHash).NotTo(BeEmpty())
+		})
+
 		It("should skip APIM import when the desired hash is already applied", func() {
 			By("serving a local OpenAPI document")
 			server := newOpenAPIServer()

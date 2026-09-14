@@ -93,6 +93,7 @@ func (r *APIMAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		"apiID", apimApi.Spec.APIID,
 		"apimService", apimApi.Spec.APIMService,
 		"routePrefix", apimApi.Spec.RoutePrefix,
+		"type", apimApi.Spec.Type,
 		"serviceUrl", apimApi.Spec.ServiceURL,
 		"openApiDefinitionUrl", apimApi.Spec.OpenAPIDefinitionURL,
 		"subscriptionRequired", apimApi.Spec.SubscriptionRequired,

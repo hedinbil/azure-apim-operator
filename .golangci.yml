@@ -26,7 +26,7 @@ linters:
       # Wire-format keys (JSON and HCL attribute names) read better inline
       # than behind a named constant.
       ignore-string-values:
-        - '^(body|sha|source|version|properties)$'
+        - '^(body|sha|source|version|properties|displayName|subscriptionRequired)$'
     revive:
       rules:
         - name: comment-spacings

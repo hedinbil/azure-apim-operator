@@ -249,6 +249,125 @@ var _ = Describe("APIMAPI Controller", func() {
 			Expect(updatedAPI.Annotations["link.argocd.argoproj.io/external-link"]).To(Equal("https://new-host.azure-api.net/test-api"))
 		})
 
+		It("should carry a websocket API's type, display name and protocols onto its deployment", func() {
+			By("creating a websocket APIMAPI without an OpenAPI URL")
+			wsName := types.NamespacedName{Name: "test-apim-api-websocket", Namespace: "default"}
+			wsAPI := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: wsName.Name, Namespace: wsName.Namespace},
+				Spec: apimv1.APIMAPISpec{
+					Type: apimv1.APITypeWebSocket,
+					WebSocket: &apimv1.APIMAPIWebSocket{
+						DisplayName: "Orders hub",
+						Protocols:   []string{"ws", "wss"},
+					},
+					APIID:       "orders-hub",
+					APIMService: apimServiceName,
+					RoutePrefix: "/orders/hub",
+					ServiceURL:  "wss://orders.example.com/hub",
+				},
+			}
+			Expect(k8sClient.Create(ctx, wsAPI)).To(Succeed())
+			defer func() {
+				deployment := &apimv1.APIMAPIDeployment{}
+				if err := k8sClient.Get(ctx, wsName, deployment); err == nil {
+					_ = k8sClient.Delete(ctx, deployment)
+				}
+				_ = k8sClient.Delete(ctx, wsAPI)
+			}()
+
+			By("reconciling it")
+			controllerReconciler := &APIMAPIReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: wsName})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the deployment spec")
+			deployment := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, wsName, deployment)).To(Succeed())
+			Expect(deployment.Spec.Type).To(Equal(apimv1.APITypeWebSocket))
+			Expect(deployment.Spec.WebSocket).NotTo(BeNil())
+			Expect(deployment.Spec.WebSocket.DisplayName).To(Equal("Orders hub"))
+			Expect(deployment.Spec.WebSocket.Protocols).To(Equal([]string{"ws", "wss"}))
+			Expect(deployment.Spec.ServiceURL).To(Equal("wss://orders.example.com/hub"))
+			Expect(deployment.Spec.OpenAPIDefinitionURL).To(BeEmpty())
+		})
+
+		It("should default the type to http and reject specs that mix the two kinds", func() {
+			By("defaulting type when it is omitted")
+			plain := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-apim-api-default-type", Namespace: "default"},
+				Spec: apimv1.APIMAPISpec{
+					APIID:                "default-type",
+					APIMService:          apimServiceName,
+					RoutePrefix:          "/default-type",
+					ServiceURL:           "https://example.com/api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+				},
+			}
+			Expect(k8sClient.Create(ctx, plain)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, plain) }()
+			Expect(plain.Spec.Type).To(Equal(apimv1.APITypeHTTP))
+
+			By("rejecting an http API without an OpenAPI URL")
+			noOpenAPI := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-apim-api-no-openapi", Namespace: "default"},
+				Spec: apimv1.APIMAPISpec{
+					APIID:       "no-openapi",
+					APIMService: apimServiceName,
+					RoutePrefix: "/no-openapi",
+					ServiceURL:  "https://example.com/api",
+				},
+			}
+			err := k8sClient.Create(ctx, noOpenAPI)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("openApiDefinitionUrl is required unless type is websocket"))
+
+			By("rejecting a websocket API with an https backend")
+			wrongScheme := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-apim-api-ws-https", Namespace: "default"},
+				Spec: apimv1.APIMAPISpec{
+					Type:        apimv1.APITypeWebSocket,
+					APIID:       "ws-https",
+					APIMService: apimServiceName,
+					RoutePrefix: "/ws-https",
+					ServiceURL:  "https://example.com/hub",
+				},
+			}
+			err = k8sClient.Create(ctx, wrongScheme)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ws:// or wss:// serviceUrl"))
+
+			By("rejecting an http API with a wss backend")
+			httpWss := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-apim-api-http-wss", Namespace: "default"},
+				Spec: apimv1.APIMAPISpec{
+					APIID:                "http-wss",
+					APIMService:          apimServiceName,
+					RoutePrefix:          "/http-wss",
+					ServiceURL:           "wss://example.com/hub",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+				},
+			}
+			err = k8sClient.Create(ctx, httpWss)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("http:// or https:// serviceUrl"))
+
+			By("rejecting an http API that sets the websocket block")
+			httpWithBlock := &apimv1.APIMAPI{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-apim-api-http-ws-block", Namespace: "default"},
+				Spec: apimv1.APIMAPISpec{
+					WebSocket:            &apimv1.APIMAPIWebSocket{DisplayName: "Ignored"},
+					APIID:                "http-ws-block",
+					APIMService:          apimServiceName,
+					RoutePrefix:          "/http-ws-block",
+					ServiceURL:           "https://example.com/api",
+					OpenAPIDefinitionURL: "https://example.com/openapi.json",
+				},
+			}
+			err = k8sClient.Create(ctx, httpWithBlock)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("websocket block is only allowed when type is websocket"))
+		})
+
 		It("should create APIMAPIDeployment when reconciling a new APIMAPI", func() {
 			By("creating a fresh APIMAPI")
 			freshAPIName := types.NamespacedName{Name: "test-apim-api-fresh", Namespace: "default"}

@@ -32,6 +32,7 @@ The **Azure APIM Operator** is a Kubernetes operator built with **Kubebuilder** 
 
 - **Automatic API Registration** - Detects new deployments and automatically registers them in Azure APIM
 - **OpenAPI/Swagger Integration** - Fetches OpenAPI definitions from your deployed services
+- **WebSocket APIs** - Declares `type: websocket` APIs (SignalR hubs, socket servers) that have no OpenAPI document
 - **Product Management** - Automatically assigns APIs to APIM Products
 - **Tag Management** - Organize APIs with tags for better categorization
 - **Service URL Updates** - Automatically updates backend service URLs in APIM
@@ -570,6 +571,29 @@ spec:
   tagIds:                             # Optional: Tag IDs to assign
     - backend
     - v1
+```
+
+A WebSocket API has no OpenAPI document. Set `type: websocket`, give it a
+`ws://` or `wss://` backend and skip `openApiDefinitionUrl`; APIM adds the
+`onHandshake` operation itself:
+
+```yaml
+apiVersion: apim.operator.io/v1
+kind: APIMAPI
+metadata:
+  name: orders-hub
+  namespace: default
+spec:
+  APIID: orders-hub
+  type: websocket
+  websocket:                            # Optional block, only allowed for type: websocket
+    displayName: Orders - SignalR hub   # Defaults to APIID
+    protocols: [wss]                    # Defaults to [wss]
+  serviceUrl: wss://orders.internal.example.com/hub
+  routePrefix: /orders/hub
+  apimService: my-apim-service
+  productIds:
+    - my-product
 ```
 
 ### APIMProduct

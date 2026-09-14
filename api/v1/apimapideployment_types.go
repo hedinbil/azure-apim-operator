@@ -8,9 +8,16 @@ import (
 // This spec contains all the information needed to deploy an API to Azure API Management,
 // including the OpenAPI definition, service URL, route configuration, and associations.
 type APIMAPIDeploymentSpec struct {
+	// Type is the kind of API to create in APIM: "http" (default) or "websocket".
+	// Copied from the APIMAPI.
+	// +kubebuilder:validation:Enum=http;websocket
+	// +kubebuilder:default=http
+	Type string `json:"type,omitempty"`
+	// WebSocket holds websocket-only settings. Copied from the APIMAPI.
+	WebSocket *APIMAPIWebSocket `json:"websocket,omitempty"`
 	// ServiceURL is the backend service URL that APIM will proxy requests to.
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^https?://`
+	// +kubebuilder:validation:Pattern=`^(https?|wss?)://`
 	// +kubebuilder:validation:MaxLength=2048
 	ServiceURL string `json:"serviceUrl"`
 	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
@@ -19,10 +26,10 @@ type APIMAPIDeploymentSpec struct {
 	// +kubebuilder:validation:MaxLength=400
 	RoutePrefix string `json:"routePrefix"`
 	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
-	// +kubebuilder:validation:MinLength=1
+	// Empty for websocket APIs.
 	// +kubebuilder:validation:Pattern=`^https?://`
 	// +kubebuilder:validation:MaxLength=2048
-	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
+	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl,omitempty"`
 	// ProductIDs is a list of product IDs to associate this API with in APIM.
 	ProductIDs []string `json:"productIds,omitempty"`
 	// TagIDs is a list of tag IDs to apply to this API in APIM.

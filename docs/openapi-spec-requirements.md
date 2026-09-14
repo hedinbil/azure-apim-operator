@@ -4,6 +4,8 @@ This document explains what Azure API Management expects from your OpenAPI speci
 
 ## How the Operator Imports Specs
 
+This page is about `type: http` APIs, the default. A `type: websocket` API has no OpenAPI document at all: the operator creates it from `serviceUrl` and `routePrefix` and APIM adds the `onHandshake` operation itself (see [custom-resources.md](custom-resources.md#apimapi)).
+
 The operator fetches your application's OpenAPI/Swagger JSON and sends it **as-is** to the Azure APIM Management REST API. There is no parsing, validation, or transformation. Whatever your application produces is exactly what APIM receives.
 
 This means **your application is responsible for producing a complete, APIM-compatible OpenAPI spec**. If the spec is missing required fields, APIM may silently generate defaults on first import but fail on subsequent imports.

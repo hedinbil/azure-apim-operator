@@ -4,6 +4,31 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// API types an APIMAPI can declare. They map to the "type" property of an
+// API in Azure API Management.
+const (
+	// APITypeHTTP is an HTTP API whose operations are imported from an OpenAPI document.
+	APITypeHTTP = "http"
+	// APITypeWebSocket is a WebSocket API. APIM models it as its own API type with a
+	// single onHandshake operation and no OpenAPI document, which is what SignalR and
+	// other socket servers need.
+	APITypeWebSocket = "websocket"
+)
+
+// APIMAPIWebSocket holds the settings that only a websocket API has. It sits under
+// spec.websocket and is only allowed when spec.type is "websocket", so an http API
+// cannot set fields that would be silently ignored.
+type APIMAPIWebSocket struct {
+	// DisplayName is the name shown for the API in the Azure portal and developer portal.
+	// An http API takes its name from the OpenAPI document instead. Defaults to APIID.
+	// +kubebuilder:validation:MaxLength=300
+	DisplayName string `json:"displayName,omitempty"`
+	// Protocols lists the protocols the API is exposed on in APIM. Defaults to ["wss"].
+	// +kubebuilder:validation:MaxItems=2
+	// +kubebuilder:validation:items:Enum=ws;wss
+	Protocols []string `json:"protocols,omitempty"`
+}
+
 // APIMAPITarget defines how an APIMAPI maps to workloads in the cluster.
 // When Selector is omitted, the legacy behavior is used and the APIMAPI name
 // must match the ReplicaSet app.kubernetes.io/name label.
@@ -14,10 +39,25 @@ type APIMAPITarget struct {
 
 // APIMAPISpec defines the desired state of APIMAPI.
 // This spec contains the configuration needed to import and manage an API in Azure API Management.
+// +kubebuilder:validation:XValidation:rule="(has(self.type) && self.type == 'websocket') || (has(self.openApiDefinitionUrl) && size(self.openApiDefinitionUrl) > 0)",message="openApiDefinitionUrl is required unless type is websocket"
+// +kubebuilder:validation:XValidation:rule="!(has(self.type) && self.type == 'websocket') || self.serviceUrl.startsWith('ws://') || self.serviceUrl.startsWith('wss://')",message="a websocket API needs a ws:// or wss:// serviceUrl"
+// +kubebuilder:validation:XValidation:rule="(has(self.type) && self.type == 'websocket') || self.serviceUrl.startsWith('http://') || self.serviceUrl.startsWith('https://')",message="an http API needs an http:// or https:// serviceUrl"
+// +kubebuilder:validation:XValidation:rule="(has(self.type) && self.type == 'websocket') || !has(self.websocket)",message="the websocket block is only allowed when type is websocket"
 type APIMAPISpec struct {
+	// Type selects the kind of API to create in APIM. "http" (the default) imports the
+	// OpenAPI document at OpenAPIDefinitionURL. "websocket" creates a WebSocket API from
+	// ServiceURL alone; APIM adds the onHandshake operation itself and no OpenAPI document
+	// is fetched. Settings that only apply to one type live in a block named after it.
+	// +kubebuilder:validation:Enum=http;websocket
+	// +kubebuilder:default=http
+	Type string `json:"type,omitempty"`
+	// WebSocket holds websocket-only settings. Optional even for websocket APIs; only
+	// allowed when Type is "websocket".
+	WebSocket *APIMAPIWebSocket `json:"websocket,omitempty"`
 	// ServiceURL is the backend service URL that APIM will proxy requests to.
+	// http(s) for HTTP APIs, ws(s) for websocket APIs.
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^https?://`
+	// +kubebuilder:validation:Pattern=`^(https?|wss?)://`
 	// +kubebuilder:validation:MaxLength=2048
 	ServiceURL string `json:"serviceUrl"`
 	// RoutePrefix is the base route path in APIM (e.g., "/myapi").
@@ -26,10 +66,10 @@ type APIMAPISpec struct {
 	// +kubebuilder:validation:MaxLength=400
 	RoutePrefix string `json:"routePrefix"`
 	// OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
-	// +kubebuilder:validation:MinLength=1
+	// Required for HTTP APIs, ignored for websocket APIs.
 	// +kubebuilder:validation:Pattern=`^https?://`
 	// +kubebuilder:validation:MaxLength=2048
-	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl"`
+	OpenAPIDefinitionURL string `json:"openApiDefinitionUrl,omitempty"`
 	// Target optionally selects which ReplicaSets should trigger imports for this API.
 	// If omitted, the operator falls back to matching metadata.name with the
 	// ReplicaSet app.kubernetes.io/name label.

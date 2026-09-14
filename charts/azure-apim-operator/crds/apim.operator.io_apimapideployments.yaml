@@ -60,10 +60,10 @@ spec:
                 pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               openApiDefinitionUrl:
-                description: OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger
-                  definition can be fetched.
+                description: |-
+                  OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
+                  Empty for websocket APIs.
                 maxLength: 2048
-                minLength: 1
                 pattern: ^https?://
                 type: string
               productIds:
@@ -95,7 +95,7 @@ spec:
                   proxy requests to.
                 maxLength: 2048
                 minLength: 1
-                pattern: ^https?://
+                pattern: ^(https?|wss?)://
                 type: string
               subscription:
                 description: Subscription is the Azure subscription ID where the APIM
@@ -115,10 +115,39 @@ spec:
                 items:
                   type: string
                 type: array
+              type:
+                default: http
+                description: |-
+                  Type is the kind of API to create in APIM: "http" (default) or "websocket".
+                  Copied from the APIMAPI.
+                enum:
+                - http
+                - websocket
+                type: string
+              websocket:
+                description: WebSocket holds websocket-only settings. Copied from
+                  the APIMAPI.
+                properties:
+                  displayName:
+                    description: |-
+                      DisplayName is the name shown for the API in the Azure portal and developer portal.
+                      An http API takes its name from the OpenAPI document instead. Defaults to APIID.
+                    maxLength: 300
+                    type: string
+                  protocols:
+                    description: Protocols lists the protocols the API is exposed
+                      on in APIM. Defaults to ["wss"].
+                    items:
+                      enum:
+                      - ws
+                      - wss
+                      type: string
+                    maxItems: 2
+                    type: array
+                type: object
             required:
             - APIID
             - apimService
-            - openApiDefinitionUrl
             - resourceGroup
             - routePrefix
             - serviceUrl

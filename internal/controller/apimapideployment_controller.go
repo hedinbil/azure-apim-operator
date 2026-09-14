@@ -93,6 +93,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		"apiID", deployment.Spec.APIID,
 		"revision", deployment.Spec.Revision,
 		"routePrefix", deployment.Spec.RoutePrefix,
+		"type", deployment.Spec.Type,
 		"openApiUrl", deployment.Spec.OpenAPIDefinitionURL,
 		"subscriptionRequired", deployment.Spec.SubscriptionRequired,
 	)
@@ -219,25 +220,39 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Step 1: Fetch the OpenAPI definition from the URL the tenant declared. One bounded
 	// attempt per reconcile; a failure comes back through the workqueue after a pause.
-	openApiURL := deployment.Spec.OpenAPIDefinitionURL
-	logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "apiID", deployment.Spec.APIID)
-	openApiContent, err := r.openAPI().Fetch(ctx, openApiURL)
-	if err != nil {
-		logger.Error(err, "❌ Failed to fetch OpenAPI definition", "apiID", deployment.Spec.APIID)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = "Failed to fetch OpenAPI definition"
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
+	// A websocket API has no OpenAPI document: APIM creates it from the spec alone, so
+	// the fetch is skipped and the hash input for it stays empty.
+	isWebSocket := deployment.Spec.Type == apimv1.APITypeWebSocket
+	var openApiContent []byte
+	openAPIHash := ""
+	if isWebSocket {
+		logger.Info("🔌 WebSocket API; skipping OpenAPI fetch", "apiID", deployment.Spec.APIID)
+	} else {
+		openApiURL := deployment.Spec.OpenAPIDefinitionURL
+		logger.Info("📡 Fetching OpenAPI definition", "url", openApiURL, "apiID", deployment.Spec.APIID)
+		openApiContent, err = r.openAPI().Fetch(ctx, openApiURL)
+		if err != nil {
+			logger.Error(err, "❌ Failed to fetch OpenAPI definition", "apiID", deployment.Spec.APIID)
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = phaseError
+				status.Status = phaseError
+				status.Message = "Failed to fetch OpenAPI definition"
+				status.LastError = err.Error()
+				status.LastAttemptAt = attemptTime
+				status.ObservedGeneration = apimApi.Generation
+				status.MatchedReplicaSets = matchedReplicaSetNames
+			}); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+			return ctrl.Result{RequeueAfter: requeueFetchFailure}, nil
 		}
-		return ctrl.Result{RequeueAfter: requeueFetchFailure}, nil
+		openAPIHash = sha256Hex(openApiContent)
+		logger.Info("📥 OpenAPI definition downloaded",
+			"bytes", len(openApiContent),
+			"url", openApiURL,
+			"apiID", deployment.Spec.APIID,
+		)
 	}
-	openAPIHash := sha256Hex(openApiContent)
 	desiredHash, err := buildDesiredAPIMStateHash(&deployment.Spec, apimService.Spec.Subscription, apimService.Spec.ResourceGroup, openAPIHash)
 	if err != nil {
 		logger.Error(err, "❌ Failed to build desired APIM state hash", "apiID", deployment.Spec.APIID)
@@ -255,11 +270,6 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{}, err
 	}
-	logger.Info("📥 OpenAPI definition downloaded",
-		"bytes", len(openApiContent),
-		"url", openApiURL,
-		"apiID", deployment.Spec.APIID,
-	)
 
 	if deployment.Status.AppliedHash == desiredHash {
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
@@ -336,6 +346,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Step 3: Build the APIM deployment configuration with all necessary parameters.
 	config := apim.APIMDeploymentConfig{
+		Type:                 deployment.Spec.Type,
 		SubscriptionID:       deployment.Spec.Subscription,
 		ResourceGroup:        deployment.Spec.ResourceGroup,
 		ServiceName:          deployment.Spec.APIMService,
@@ -348,26 +359,38 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		TagIDs:               deployment.Spec.TagIDs,
 		SubscriptionRequired: deployment.Spec.SubscriptionRequired,
 	}
+	if ws := deployment.Spec.WebSocket; ws != nil {
+		config.DisplayName = ws.DisplayName
+		config.Protocols = ws.Protocols
+	}
 	logger.Info("🛠️ Built APIM deployment config",
 		"apiID", config.APIID,
 		"subscription", config.SubscriptionID,
 		"resourceGroup", config.ResourceGroup,
 		"serviceName", config.ServiceName,
 		"routePrefix", config.RoutePrefix,
+		"type", config.Type,
 		"revision", config.Revision,
 		"productCount", len(config.ProductIDs),
 		"tagCount", len(config.TagIDs),
 		"subscriptionRequired", config.SubscriptionRequired,
 	)
 
-	// Step 4: Import the OpenAPI definition into Azure APIM.
-	// This creates or updates the API in APIM with the provided specification.
-	if err := apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent); err != nil {
-		logger.Error(err, "🚫 Failed to import API", "apiID", deployment.Spec.APIID)
+	// Step 4: Create or update the API in Azure APIM. An HTTP API is imported from the
+	// OpenAPI document; a websocket API is created from the spec alone.
+	upsertMessage := "Failed to import API into APIM"
+	if isWebSocket {
+		upsertMessage = "Failed to create WebSocket API in APIM"
+		err = apim.UpsertWebSocketAPI(ctx, config)
+	} else {
+		err = apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent)
+	}
+	if err != nil {
+		logger.Error(err, "🚫 Failed to create or update API", "apiID", deployment.Spec.APIID, "type", config.Type)
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
 			status.Phase = phaseError
 			status.Status = phaseError
-			status.Message = "Failed to import API into APIM"
+			status.Message = upsertMessage
 			status.LastError = err.Error()
 			status.LastAttemptAt = attemptTime
 			status.ObservedGeneration = apimApi.Generation
@@ -379,7 +402,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
-	logger.Info("✅ API imported to APIM", "apiID", deployment.Spec.APIID)
+	logger.Info("✅ API created or updated in APIM", "apiID", deployment.Spec.APIID, "type", config.Type)
 
 	// Step 5: Update the backend service URL for the API.
 	// This points the API to the correct backend service endpoint.
@@ -501,7 +524,11 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusPatch := client.MergeFrom(apimApi.DeepCopy())
 	apimApi.Status.ImportedAt = time.Now().Format(time.RFC3339)
 	apimApi.Status.Status = "OK"
-	apimApi.Status.ApiHost = fmt.Sprintf("https://%s%s", apiHost, deployment.Spec.RoutePrefix)
+	apiScheme := "https"
+	if isWebSocket {
+		apiScheme = "wss"
+	}
+	apimApi.Status.ApiHost = fmt.Sprintf("%s://%s%s", apiScheme, apiHost, deployment.Spec.RoutePrefix)
 	apimApi.Status.DeveloperPortalHost = fmt.Sprintf("https://%s", developerPortalHost)
 
 	if err := r.Status().Patch(ctx, &apimApi, statusPatch); err != nil {

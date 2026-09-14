@@ -72,35 +72,7 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 // The function uses the Azure Management API to perform the import operation.
 // For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
 func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
-
-	// Check if API exists and get etag for proper update handling
-	// For updates, we use the actual etag; for creates, we use "*"
-	var etag string
-	if apimParams.Revision == "" {
-		existingEtag, exists, err := GetAPI(ctx, apimParams)
-		if err != nil {
-			logger.Error(err, "⚠️ Failed to check if API exists, will use If-Match: *", "apiID", apimParams.APIID)
-			etag = "*"
-		} else if exists {
-			if existingEtag != "" {
-				// Use the actual etag for conditional update
-				etag = existingEtag
-				logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", etag)
-			} else {
-				// Fallback to unconditional update if no etag
-				etag = "*"
-				logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
-			}
-		} else {
-			// API doesn't exist, use "*" for create
-			etag = "*"
-			logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
-		}
-	} else {
-		// Revisions are always new, use "*"
-		etag = "*"
-		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
-	}
+	etag := ifMatchForUpsert(ctx, apimParams)
 
 	// Build the Azure Management API URL for importing the API. APIM addresses
 	// a revision as "apiId;rev=n".
@@ -136,6 +108,46 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 
 	logger.Info("📄 OpenAPI document ready for import", "apiID", apimParams.APIID, "bytes", len(openApiContent))
 
+	return doAPIUpsert(ctx, apimParams, req, "imported API into")
+}
+
+// ifMatchForUpsert picks the If-Match header for a PUT on an API: the current
+// etag when the API exists (a conditional update), "*" when it does not or
+// when a new revision is being created.
+func ifMatchForUpsert(ctx context.Context, apimParams APIMDeploymentConfig) string {
+	var etag string
+	if apimParams.Revision == "" {
+		existingEtag, exists, err := GetAPI(ctx, apimParams)
+		if err != nil {
+			logger.Error(err, "⚠️ Failed to check if API exists, will use If-Match: *", "apiID", apimParams.APIID)
+			etag = "*"
+		} else if exists {
+			if existingEtag != "" {
+				// Use the actual etag for conditional update
+				etag = existingEtag
+				logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", etag)
+			} else {
+				// Fallback to unconditional update if no etag
+				etag = "*"
+				logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
+			}
+		} else {
+			// API doesn't exist, use "*" for create
+			etag = "*"
+			logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
+		}
+	} else {
+		// Revisions are always new, use "*"
+		etag = "*"
+		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
+	}
+	return etag
+}
+
+// doAPIUpsert sends a prepared PUT for an API and waits for APIM to finish
+// it, including the asynchronous (202) case. verb is what the success log
+// says was done, e.g. "imported API into".
+func doAPIUpsert(ctx context.Context, apimParams APIMDeploymentConfig, req *http.Request, verb string) error {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		logger.Error(err, "❌ Failed to send request to APIM", "apiID", apimParams.APIID)
@@ -163,7 +175,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		}
 	}
 
-	logger.Info("✅ Successfully imported API into APIM",
+	logger.Info("✅ Successfully "+verb+" APIM",
 		"apiID", apimParams.APIID,
 		"status", resp.Status,
 		"statusCode", resp.StatusCode,
@@ -451,6 +463,12 @@ func GetAPIMServiceDetails(ctx context.Context, config APIMDeploymentConfig) (ap
 // APIMDeploymentConfig contains all the configuration needed to deploy an API to Azure APIM.
 // This includes Azure subscription information, API details, and optional associations.
 type APIMDeploymentConfig struct {
+	// Type is the APIM API type, "http" or "websocket". Empty means http.
+	Type string
+	// DisplayName is the display name for a websocket API. Empty means APIID.
+	DisplayName string
+	// Protocols are the gateway protocols for a websocket API. Empty means ["wss"].
+	Protocols []string
 	// SubscriptionID is the Azure subscription ID where the APIM service is located.
 	SubscriptionID string
 	// ResourceGroup is the Azure resource group where the APIM service is located.

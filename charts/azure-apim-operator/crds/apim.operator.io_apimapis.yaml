@@ -58,10 +58,10 @@ spec:
                 pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               openApiDefinitionUrl:
-                description: OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger
-                  definition can be fetched.
+                description: |-
+                  OpenAPIDefinitionURL is the URL where the OpenAPI/Swagger definition can be fetched.
+                  Required for HTTP APIs, ignored for websocket APIs.
                 maxLength: 2048
-                minLength: 1
                 pattern: ^https?://
                 type: string
               productIds:
@@ -78,11 +78,12 @@ spec:
                 pattern: ^[a-zA-Z0-9._~/-]*$
                 type: string
               serviceUrl:
-                description: ServiceURL is the backend service URL that APIM will
-                  proxy requests to.
+                description: |-
+                  ServiceURL is the backend service URL that APIM will proxy requests to.
+                  http(s) for HTTP APIs, ws(s) for websocket APIs.
                 maxLength: 2048
                 minLength: 1
-                pattern: ^https?://
+                pattern: ^(https?|wss?)://
                 type: string
               subscriptionRequired:
                 default: true
@@ -152,14 +153,58 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+              type:
+                default: http
+                description: |-
+                  Type selects the kind of API to create in APIM. "http" (the default) imports the
+                  OpenAPI document at OpenAPIDefinitionURL. "websocket" creates a WebSocket API from
+                  ServiceURL alone; APIM adds the onHandshake operation itself and no OpenAPI document
+                  is fetched. Settings that only apply to one type live in a block named after it.
+                enum:
+                - http
+                - websocket
+                type: string
+              websocket:
+                description: |-
+                  WebSocket holds websocket-only settings. Optional even for websocket APIs; only
+                  allowed when Type is "websocket".
+                properties:
+                  displayName:
+                    description: |-
+                      DisplayName is the name shown for the API in the Azure portal and developer portal.
+                      An http API takes its name from the OpenAPI document instead. Defaults to APIID.
+                    maxLength: 300
+                    type: string
+                  protocols:
+                    description: Protocols lists the protocols the API is exposed
+                      on in APIM. Defaults to ["wss"].
+                    items:
+                      enum:
+                      - ws
+                      - wss
+                      type: string
+                    maxItems: 2
+                    type: array
+                type: object
             required:
             - APIID
             - apimService
-            - openApiDefinitionUrl
             - routePrefix
             - serviceUrl
             - subscriptionRequired
             type: object
+            x-kubernetes-validations:
+            - message: openApiDefinitionUrl is required unless type is websocket
+              rule: (has(self.type) && self.type == 'websocket') || (has(self.openApiDefinitionUrl)
+                && size(self.openApiDefinitionUrl) > 0)
+            - message: a websocket API needs a ws:// or wss:// serviceUrl
+              rule: '!(has(self.type) && self.type == ''websocket'') || self.serviceUrl.startsWith(''ws://'')
+                || self.serviceUrl.startsWith(''wss://'')'
+            - message: an http API needs an http:// or https:// serviceUrl
+              rule: (has(self.type) && self.type == 'websocket') || self.serviceUrl.startsWith('http://')
+                || self.serviceUrl.startsWith('https://')
+            - message: the websocket block is only allowed when type is websocket
+              rule: (has(self.type) && self.type == 'websocket') || !has(self.websocket)
           status:
             description: Status reflects the observed state of the API in APIM.
             properties:

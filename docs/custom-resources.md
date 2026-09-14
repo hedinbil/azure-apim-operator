@@ -73,15 +73,26 @@ Declares an API that should be managed in Azure APIM. The operator uses this as 
 - Legacy fallback: if `spec.target.selector` is omitted, `metadata.name` must match the ReplicaSet `app.kubernetes.io/name` label.
 - `serviceUrl` and `openApiDefinitionUrl` remain explicit URLs. They often point to an ingress or internal host rather than a Kubernetes Service DNS name.
 
+**API types:**
+
+- `http` (default): the operator fetches `openApiDefinitionUrl` and imports it. Operations come from the document.
+- `websocket`: no document is fetched. The operator creates a WebSocket API in APIM from `serviceUrl` (`ws://` or `wss://`), `routePrefix` and the optional `websocket` block; APIM adds the single `onHandshake` operation itself. Use this for SignalR hubs and other socket servers, which OpenAPI cannot describe and which APIM will not accept inside an HTTP API. The SignalR `negotiate` call is plain HTTP and belongs in the HTTP API's OpenAPI document instead.
+
+Settings that only apply to one type live in a block named after the type (`websocket:` today), so a field cannot be set where it would be silently ignored. The CRD rejects an `http` API without `openApiDefinitionUrl`, an `http` API with a `ws(s)://` backend, a `websocket` API with an `http(s)://` backend, and a `websocket` block on anything but a `websocket` API.
+
 ### Spec Fields
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `APIID` | string | Yes | | Unique identifier for the API in APIM |
 | `apimService` | string | Yes | | Name of the `APIMService` CR to target |
+| `type` | string | No | `http` | `http` or `websocket` |
 | `routePrefix` | string | Yes | | Base route path in APIM (e.g., `/my-api`) |
-| `serviceUrl` | string | Yes | | Backend service URL that APIM proxies to |
-| `openApiDefinitionUrl` | string | Yes | | URL to fetch the OpenAPI/Swagger spec |
+| `serviceUrl` | string | Yes | | Backend URL that APIM proxies to; `http(s)://` for `http`, `ws(s)://` for `websocket` |
+| `openApiDefinitionUrl` | string | For `http` | | URL to fetch the OpenAPI/Swagger spec; ignored for `websocket` |
+| `websocket` | object | No | | Websocket-only settings; only allowed when `type` is `websocket` |
+| `websocket.displayName` | string | No | `APIID` | Display name in APIM (HTTP APIs take `info.title` from the document) |
+| `websocket.protocols` | []string | No | `[wss]` | Gateway protocols, `ws` and/or `wss` |
 | `target.selector` | object | No | | Label selector used to match application ReplicaSets |
 | `subscriptionRequired` | bool | No | `true` | Whether a subscription key is required |
 | `productIds` | []string | No | | Product IDs to associate with this API |
@@ -93,7 +104,7 @@ Declares an API that should be managed in Azure APIM. The operator uses this as 
 |-------|------|-------------|
 | `importedAt` | string | Timestamp of last successful import (RFC 3339) |
 | `status` | string | Current status (`OK` or `Error`) |
-| `apiHost` | string | Full APIM gateway URL (e.g., `https://apim.azure-api.net/my-api`) |
+| `apiHost` | string | Full APIM gateway URL (e.g., `https://apim.azure-api.net/my-api`; `wss://` for websocket APIs) |
 | `developerPortalHost` | string | APIM developer portal URL |
 
 ### Example
@@ -123,6 +134,31 @@ spec:
 
 If you omit `target`, the legacy behavior still works: name the `APIMAPI` resource `payment-service` so it matches `app.kubernetes.io/name` on the workload.
 
+### WebSocket Example
+
+```yaml
+apiVersion: apim.operator.io/v1
+kind: APIMAPI
+metadata:
+  name: bidme-signalr-connect
+  namespace: retail-bidme-prod
+spec:
+  APIID: distribution-bidme-signalr-connect
+  type: websocket
+  websocket:
+    displayName: Distribution - BidMe - SignalR connect
+  apimService: apim-apim-prod-hedinit
+  routePrefix: /bidme/auctionhub
+  serviceUrl: wss://bidme.retail-prod.external.hedinit.io/auctionhub
+  target:
+    selector:
+      matchLabels:
+        app.kubernetes.io/name: bidme
+  subscriptionRequired: true
+  productIds:
+    - distribution-bidme
+```
+
 ---
 
 ## APIMAPIDeployment
@@ -142,9 +178,11 @@ You typically do not create this resource manually. The controller sets `spec.ap
 | `apimService` | string | Yes | | Name of the `APIMService` CR |
 | `subscription` | string | Yes | | Azure subscription ID |
 | `resourceGroup` | string | Yes | | Azure resource group |
+| `type` | string | No | `http` | `http` or `websocket`; copied from the `APIMAPI` |
+| `websocket` | object | No | | Websocket-only settings; copied from the `APIMAPI` |
 | `routePrefix` | string | Yes | | Base route path in APIM |
 | `serviceUrl` | string | Yes | | Backend service URL |
-| `openApiDefinitionUrl` | string | Yes | | URL to fetch the OpenAPI spec |
+| `openApiDefinitionUrl` | string | For `http` | | URL to fetch the OpenAPI spec; empty for websocket APIs |
 | `subscriptionRequired` | bool | No | `true` | Whether a subscription key is required |
 | `revision` | string | No | | API revision number (creates a new revision if set) |
 | `productIds` | []string | No | | Product IDs to assign |
