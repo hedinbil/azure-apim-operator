@@ -67,3 +67,59 @@ rules:
     verbs: ["update"]
 
 
+---
+# Aggregated into the built-in view/edit/admin ClusterRoles so teams can read
+# the APIM custom resources in their own namespaces with kubectl. A CRD is
+# invisible to the built-in roles unless an aggregated role opts it in.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "azure-apim-operator.fullname" . }}-view
+  labels:
+    app.kubernetes.io/name: {{ include "azure-apim-operator.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["apim.operator.io"]
+    resources:
+      - apimapis
+      - apimapideployments
+      - apiminboundpolicies
+      - apimproducts
+      - apimservices
+      - apimtags
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apim.operator.io"]
+    resources:
+      - apimapis/status
+      - apimapideployments/status
+      - apiminboundpolicies/status
+      - apimproducts/status
+      - apimservices/status
+      - apimtags/status
+    verbs: ["get"]
+---
+# Write verbs aggregated into edit/admin only - never view - so a team that
+# owns a namespace can remove the APIM custom resources in it and therefore
+# delete the namespace itself. patch is what clears a stuck finalizer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "azure-apim-operator.fullname" . }}-edit
+  labels:
+    app.kubernetes.io/name: {{ include "azure-apim-operator.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["apim.operator.io"]
+    resources:
+      - apimapis
+      - apimapideployments
+      - apiminboundpolicies
+      - apimproducts
+      - apimservices
+      - apimtags
+    verbs: ["create", "update", "patch", "delete"]
