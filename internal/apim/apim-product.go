@@ -98,8 +98,11 @@ func DeleteProduct(ctx context.Context, config APIMProductConfig) error {
 		return nil
 	}
 
-	productURL := serviceURL(
-		config, "products", config.ProductID)
+	// APIM refuses to delete a product that still has subscriptions unless they are
+	// deleted with it; without the flag the call is a 400 ValidationError for any
+	// product actually in use. A Delete policy means the product and its keys go.
+	productURL := withQuery(serviceURL(
+		config, "products", config.ProductID), "deleteSubscriptions", "true")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, productURL, nil)
 	if err != nil {
@@ -114,7 +117,7 @@ func DeleteProduct(ctx context.Context, config APIMProductConfig) error {
 		"url", productURL,
 	)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("product deletion request failed: %w", err)
 	}

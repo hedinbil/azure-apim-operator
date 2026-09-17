@@ -52,6 +52,12 @@ type APIMInboundPolicySpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=131072
 	PolicyContent string `json:"policyContent"`
+	// DeletionPolicy decides whether deleting this resource also deletes the policy in APIM.
+	// Retain (the default) leaves it in place. Delete is not implemented for this kind yet
+	// and behaves like Retain.
+	// +kubebuilder:default=Retain
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // APIMInboundPolicyStatus defines the observed state of APIMInboundPolicy.

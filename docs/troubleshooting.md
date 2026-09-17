@@ -324,6 +324,40 @@ The next time the application is redeployed, the operator will create a fresh `A
 
 Validate your policy XML against the APIM policy reference. Ensure all four sections (`inbound`, `backend`, `outbound`, `on-error`) are present with `<base />` elements.
 
+### Namespace Stuck Terminating on apimproducts
+
+**Symptom:**
+
+```
+kubectl describe namespace <ns>
+  NamespaceContentRemaining     SomeResourcesRemain   apimproducts.apim.operator.io has N resource instances
+  NamespaceFinalizersRemaining  SomeFinalizersRemain  apim.operator.io/product in N resource instances
+```
+
+**Cause:** One or more `APIMProduct` resources have `spec.deletionPolicy: Delete`, so they carry the `apim.operator.io/product` finalizer, and the operator cannot complete the delete in APIM. The operator log shows the reason every 30 seconds, for example `Failed to delete product ... 403 Forbidden`, or the product is still referenced by an API.
+
+Resources with the default `Retain` policy carry no finalizer and can never block a namespace.
+
+**Solution:**
+
+1. Read the reason from the operator log:
+   ```bash
+   kubectl logs -n azure-apim-operator deploy/azure-apim-operator | grep "Failed to delete product"
+   ```
+
+2. If the product must stay in APIM - typically because the same `productId` is now managed from another cluster - switch the stuck resources to `Retain`. The operator releases the finalizer on its next reconcile without touching APIM, and the namespace finalizes within about 30 seconds:
+   ```bash
+   kubectl patch apimproducts.apim.operator.io <name> -n <ns> --type=merge \
+     -p '{"spec":{"deletionPolicy":"Retain"}}'
+   ```
+   Use the fully qualified resource name: some clusters still carry legacy `apim.hedinit.io` CRDs that shadow the short name.
+
+3. If the product should go, fix what the log reports (permissions, references) and let the operator retry.
+
+**Moving an application between clusters:** the same `productId` in the same APIM instance is shared, not copied. Before deleting the source namespace, make sure every `APIMProduct` there is `Retain` (the default), otherwise the delete from the old cluster removes the product the new cluster is serving.
+
+---
+
 ## Getting Help
 
 If the issue is not covered here:

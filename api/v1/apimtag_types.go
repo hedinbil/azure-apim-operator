@@ -41,6 +41,12 @@ type APIMTagSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=300
 	DisplayName string `json:"displayName"`
+	// DeletionPolicy decides whether deleting this resource also deletes the tag in APIM.
+	// Retain (the default) leaves it in place. Delete is not implemented for this kind yet
+	// and behaves like Retain.
+	// +kubebuilder:default=Retain
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // APIMTagStatus defines the observed state of APIMTag.

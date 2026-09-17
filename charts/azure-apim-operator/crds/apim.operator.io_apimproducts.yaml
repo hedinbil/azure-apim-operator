@@ -49,10 +49,10 @@ spec:
                 pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
               deletionPolicy:
-                default: Delete
+                default: Retain
                 description: |-
                   DeletionPolicy decides whether deleting this resource also deletes the product in APIM.
-                  Delete (the default) removes it; Retain leaves it in place.
+                  Retain (the default) leaves it in place; Delete removes it, subscriptions included.
                 enum:
                 - Delete
                 - Retain

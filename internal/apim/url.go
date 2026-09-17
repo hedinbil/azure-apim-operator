@@ -1,9 +1,15 @@
 package apim
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 )
+
+// httpClient is the client every ARM call in this package goes through. A
+// package variable rather than http.DefaultClient inline so a test can swap the
+// transport and see the exact request without a network.
+var httpClient = http.DefaultClient
 
 // apiVersion is the Azure API Management control-plane API version every
 // request in this package targets.
@@ -73,6 +79,13 @@ func serviceURLEscaped(cfg serviceScope, segments ...string) string {
 	b.WriteString("?api-version=")
 	b.WriteString(apiVersion)
 	return b.String()
+}
+
+// withQuery appends one query parameter to a URL built by serviceURL. Every
+// such URL already carries ?api-version=, so the parameter is joined with "&";
+// both halves are query-escaped because the value may come from a resource.
+func withQuery(u, key, value string) string {
+	return u + "&" + url.QueryEscape(key) + "=" + url.QueryEscape(value)
 }
 
 // revisionURL builds the URL of one API, optionally a specific revision. APIM

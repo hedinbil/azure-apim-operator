@@ -155,9 +155,10 @@ var _ = Describe("APIMProduct Controller", func() {
 					Namespace: invalidProductName.Namespace,
 				},
 				Spec: apimv1.APIMProductSpec{
-					APIMService: "non-existent-service",
-					ProductID:   "test-product-id",
-					DisplayName: "Test Product",
+					APIMService:    "non-existent-service",
+					ProductID:      "test-product-id",
+					DeletionPolicy: apimv1.DeletionPolicyDelete, // the finalizer must be taken even before the APIMService exists
+					DisplayName:    "Test Product",
 				},
 			}
 			Expect(k8sClient.Create(ctx, invalidProduct)).To(Succeed())
@@ -182,7 +183,7 @@ var _ = Describe("APIMProduct Controller", func() {
 			Expect(controllerutil.ContainsFinalizer(invalidProduct, productFinalizer)).To(BeTrue())
 		})
 
-		It("should add the finalizer and create the product in APIM", func() {
+		It("should create the product in APIM without a finalizer when deletionPolicy is Retain, the default", func() {
 			restore := stubAzureIdentityEnv()
 			defer restore()
 
@@ -209,9 +210,61 @@ var _ = Describe("APIMProduct Controller", func() {
 
 			product := &apimv1.APIMProduct{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeFalse(), "a Retain resource must never wait on this operator to be deleted")
+			Expect(product.Status.Phase).To(Equal(phaseCreated))
+			Expect(product.Spec.DeletionPolicy).To(Equal(apimv1.DeletionPolicyRetain), "the API server should default deletionPolicy to Retain")
+		})
+
+		It("should take the finalizer when deletionPolicy is Delete", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+			}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
 			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
 			Expect(product.Status.Phase).To(Equal(phaseCreated))
-			Expect(product.Spec.DeletionPolicy).To(Equal(apimv1.DeletionPolicyDelete), "the API server should default deletionPolicy")
+		})
+
+		It("should drop the finalizer when deletionPolicy switches from Delete to Retain", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					Fail("deleteProduct must not be called when nothing is being deleted")
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
+
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyRetain)
+			_, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeFalse(), "Retain must not leave a finalizer behind")
 		})
 
 		It("should delete the product in APIM before letting the resource go", func() {
@@ -230,6 +283,8 @@ var _ = Describe("APIMProduct Controller", func() {
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
+
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
 
 			By("reconciling once so the finalizer is in place")
 			_, err := controllerReconciler.Reconcile(ctx, req)
@@ -267,6 +322,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
 			_, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -301,12 +357,12 @@ var _ = Describe("APIMProduct Controller", func() {
 
 			By("marking the product as retained")
 			product := &apimv1.APIMProduct{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
-			product.Spec.DeletionPolicy = apimv1.DeletionPolicyRetain
-			Expect(k8sClient.Update(ctx, product)).To(Succeed())
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyRetain)
 
 			_, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeFalse())
 
 			By("deleting the resource and reconciling")
 			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
@@ -314,6 +370,45 @@ var _ = Describe("APIMProduct Controller", func() {
 			result, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(BeZero())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
+		It("should release a refused Delete once deletionPolicy is switched to Retain", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			deleteCalls := 0
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					deleteCalls++
+					return fmt.Errorf("failed to delete product: 400 Bad Request: product has active subscriptions")
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("deleting the resource: APIM refuses, the resource stays")
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+			result, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(deleteCalls).To(Equal(1))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+
+			By("switching the stuck resource to Retain: it goes without another APIM call")
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyRetain)
+			result, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(deleteCalls).To(Equal(1), "Retain must not try APIM again")
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
 		})
 
@@ -330,6 +425,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
 
 			By("reconciling once: the finalizer is taken and the missing identity is reported")
 			result, err := controllerReconciler.Reconcile(ctx, req)
@@ -363,6 +459,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
 			_, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -448,6 +545,14 @@ func stubAzureIdentityEnv() func() {
 	_ = os.Setenv("AZURE_CLIENT_ID", "test-client-id")
 	_ = os.Setenv("AZURE_TENANT_ID", "test-tenant-id")
 	return restore
+}
+
+// setDeletionPolicy updates spec.deletionPolicy on a product, also one already being deleted.
+func setDeletionPolicy(ctx context.Context, key types.NamespacedName, policy apimv1.DeletionPolicy) {
+	product := &apimv1.APIMProduct{}
+	Expect(k8sClient.Get(ctx, key, product)).To(Succeed())
+	product.Spec.DeletionPolicy = policy
+	Expect(k8sClient.Update(ctx, product)).To(Succeed())
 }
 
 // forceDeleteProduct deletes a product and strips the finalizer, which no controller

@@ -86,6 +86,7 @@ Settings that only apply to one type live in a block named after the type (`webs
 |-------|------|----------|---------|-------------|
 | `APIID` | string | Yes | | Unique identifier for the API in APIM |
 | `apimService` | string | Yes | | Name of the `APIMService` CR to target |
+| `deletionPolicy` | string | No | `Retain` | `Retain` leaves the API in APIM when this resource is deleted. `Delete` is declared for a uniform contract but not implemented for APIs yet |
 | `type` | string | No | `http` | `http` or `websocket` |
 | `routePrefix` | string | Yes | | Base route path in APIM (e.g., `/my-api`) |
 | `serviceUrl` | string | Yes | | Backend URL that APIM proxies to; `http(s)://` for `http`, `ws(s)://` for `websocket` |
@@ -239,6 +240,7 @@ Manages a product in Azure APIM. Products group APIs and control access through 
 | `description` | string | No | Product description |
 | `published` | bool | No | Whether the product is published and visible |
 | `apimService` | string | Yes | Name of the `APIMService` CR |
+| `deletionPolicy` | string | No | `Retain` (default) leaves the product in APIM when this resource is deleted. `Delete` removes it from APIM first, subscriptions included, via a finalizer |
 | `apiID` | string | No | API to associate with this product |
 
 ### Status Fields
@@ -262,6 +264,9 @@ spec:
   description: All integration APIs
   published: true
   apimService: my-apim
+  # Retain (default) keeps the product in APIM when this resource is deleted.
+  # Delete removes it - and its subscriptions - from APIM first.
+  deletionPolicy: Retain
 ```
 
 ---
@@ -279,6 +284,7 @@ Manages a tag in Azure APIM. Tags are used for categorization and organization o
 | `tagId` | string | Yes | Unique tag identifier in APIM |
 | `displayName` | string | Yes | Display name shown in the APIM UI |
 | `apimService` | string | Yes | Name of the `APIMService` CR |
+| `deletionPolicy` | string | No | `Retain` (default) leaves the tag in APIM. `Delete` is declared but not implemented for tags yet |
 
 ### Status Fields
 
@@ -314,6 +320,7 @@ Manages inbound policies in Azure APIM. Policies can be applied at the API level
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `apimService` | string | Yes | Name of the `APIMService` CR |
+| `deletionPolicy` | string | No | `Retain` (default) leaves the policy in APIM. `Delete` is declared but not implemented for policies yet |
 | `apiId` | string | Yes | API identifier in APIM |
 | `operationId` | string | No | Operation identifier. If set, the policy applies to this specific operation. If omitted, the policy applies to the entire API. |
 | `policyContent` | string | Yes | Complete XML policy document |

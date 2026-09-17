@@ -27,7 +27,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
@@ -49,6 +51,8 @@ type APIMProductReconciler struct {
 }
 
 // productFinalizer keeps an APIMProduct around until its product is removed from APIM.
+// Only a resource with spec.deletionPolicy Delete carries it: a Retain resource must be
+// deletable even when this operator is absent, broken or without credentials.
 const productFinalizer = "apim.operator.io/product"
 
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimproducts,verbs=get;list;watch;create;update;patch;delete
@@ -56,7 +60,8 @@ const productFinalizer = "apim.operator.io/product"
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimproducts/finalizers,verbs=update
 
 // Reconcile creates or updates the product in APIM and, when the resource is deleted,
-// removes it again unless spec.deletionPolicy is Retain.
+// removes it again if spec.deletionPolicy is Delete. Retain (the default) never touches
+// APIM on the way out.
 func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -72,22 +77,30 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	deleting := !product.DeletionTimestamp.IsZero()
 	hasFinalizer := controllerutil.ContainsFinalizer(&product, productFinalizer)
+	wantsDelete := product.Spec.DeletionPolicy == apimv1.DeletionPolicyDelete
 	switch {
 	case deleting && !hasFinalizer:
-		// Nothing of ours is left in APIM to clean up.
+		// Nothing of ours is left to clean up; the API server finishes the delete on its own.
 		return ctrl.Result{}, nil
-	case !deleting && !hasFinalizer:
+	case deleting && !wantsDelete:
+		// Retain - or switched to Retain while a Delete was refused - lets the resource go
+		// and leaves the product where it is.
+		logger.Info("🗑️ APIMProduct deleted with deletionPolicy Retain; the product stays in APIM",
+			"name", req.NamespacedName, "productId", product.Spec.ProductID)
+		return r.releaseFinalizer(ctx, &product)
+	case !deleting && wantsDelete && !hasFinalizer:
 		// Take the finalizer before the product exists in APIM so a delete can never orphan it.
 		controllerutil.AddFinalizer(&product, productFinalizer)
 		if err := r.Update(ctx, &product); err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-
-	if deleting && product.Spec.DeletionPolicy == apimv1.DeletionPolicyRetain {
-		logger.Info("🗑️ APIMProduct deleted with deletionPolicy Retain; the product stays in APIM",
-			"name", req.NamespacedName, "productId", product.Spec.ProductID)
-		return r.releaseFinalizer(ctx, &product)
+	case !deleting && !wantsDelete && hasFinalizer:
+		// Switched from Delete to Retain: drop the finalizer now, so deleting the resource
+		// later never waits on this operator.
+		controllerutil.RemoveFinalizer(&product, productFinalizer)
+		if err := r.Update(ctx, &product); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	operatorNamespace := getOperatorNamespace()
@@ -217,7 +230,25 @@ func (r *APIMProductReconciler) remove(ctx context.Context, cfg apim.APIMProduct
 func (r *APIMProductReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMProduct{}).
-		WithEventFilter(specOrDeletionChanged()).
+		WithEventFilter(predicate.And(logRetainedOnDelete(), specOrDeletionChanged())).
 		Named("apimproduct").
 		Complete(r)
+}
+
+// logRetainedOnDelete records what a deleted APIMProduct leaves behind in APIM. A Retain
+// resource carries no finalizer, so this cache event is the last moment the operator still
+// knows which product it was; the reconcile that follows only sees NotFound. The line is
+// the audit trail for cleaning APIM up by hand later.
+func logRetainedOnDelete() predicate.Predicate {
+	return predicate.Funcs{
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			if product, ok := e.Object.(*apimv1.APIMProduct); ok &&
+				product.Spec.DeletionPolicy != apimv1.DeletionPolicyDelete {
+				ctrl.Log.WithName("apimproduct").Info("📦 APIMProduct removed; its product was retained in APIM",
+					"name", product.Name, "namespace", product.Namespace,
+					"productId", product.Spec.ProductID, "apimService", product.Spec.APIMService)
+			}
+			return true
+		},
+	}
 }

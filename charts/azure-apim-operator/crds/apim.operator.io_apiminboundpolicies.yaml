@@ -52,6 +52,16 @@ spec:
                 minLength: 1
                 pattern: ^[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]$
                 type: string
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy decides whether deleting this resource also deletes the policy in APIM.
+                  Retain (the default) leaves it in place. Delete is not implemented for this kind yet
+                  and behaves like Retain.
+                enum:
+                - Delete
+                - Retain
+                type: string
               operationId:
                 description: |-
                   OperationID is the unique identifier for the operation (endpoint) within the API.

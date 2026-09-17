@@ -96,6 +96,12 @@ type APIMAPISpec struct {
 	// If not specified, defaults to true (subscription required).
 	// +kubebuilder:default=true
 	SubscriptionRequired bool `json:"subscriptionRequired"`
+	// DeletionPolicy decides whether deleting this resource also deletes the API in APIM.
+	// Retain (the default) leaves it in place. Delete is not implemented for this kind yet
+	// and behaves like Retain.
+	// +kubebuilder:default=Retain
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // APIMAPIStatus defines the observed state of APIMAPI.

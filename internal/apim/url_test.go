@@ -113,3 +113,19 @@ func TestEveryConfigProvidesItsScope(t *testing.T) {
 		}
 	}
 }
+
+// TestWithQueryAppendsAfterAPIVersion pins the shape of a URL with an extra
+// parameter: serviceURL always ends in ?api-version=, so the helper must join
+// with "&" and escape both halves.
+func TestWithQueryAppendsAfterAPIVersion(t *testing.T) {
+	got := withQuery(serviceURL(testConfig(), "products", "p1"), "deleteSubscriptions", "true")
+	want := prefix + "/products/p1?api-version=" + apiVersion + "&deleteSubscriptions=true"
+	if got != want {
+		t.Errorf("withQuery() =\n  %s\nwant\n  %s", got, want)
+	}
+	got = withQuery(prefix+"?api-version="+apiVersion, "a b", "c&d")
+	want = prefix + "?api-version=" + apiVersion + "&a+b=c%26d"
+	if got != want {
+		t.Errorf("withQuery() with hostile input =\n  %s\nwant\n  %s", got, want)
+	}
+}

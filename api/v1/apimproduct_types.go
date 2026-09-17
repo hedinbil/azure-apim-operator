@@ -4,17 +4,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// DeletionPolicy decides what happens to the product in APIM when its APIMProduct is deleted.
-// +kubebuilder:validation:Enum=Delete;Retain
-type DeletionPolicy string
-
-const (
-	// DeletionPolicyDelete removes the product from APIM before the resource goes away.
-	DeletionPolicyDelete DeletionPolicy = "Delete"
-	// DeletionPolicyRetain leaves the product in APIM and only removes the resource.
-	DeletionPolicyRetain DeletionPolicy = "Retain"
-)
-
 // APIMProductSpec defines the desired state
 type APIMProductSpec struct {
 	// +kubebuilder:validation:MinLength=1
@@ -34,8 +23,8 @@ type APIMProductSpec struct {
 	// +kubebuilder:validation:MaxLength=80
 	APIID string `json:"apiID,omitempty"` // Optional API to associate with the product
 	// DeletionPolicy decides whether deleting this resource also deletes the product in APIM.
-	// Delete (the default) removes it; Retain leaves it in place.
-	// +kubebuilder:default=Delete
+	// Retain (the default) leaves it in place; Delete removes it, subscriptions included.
+	// +kubebuilder:default=Retain
 	// +optional
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
