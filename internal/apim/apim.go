@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -31,7 +30,7 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 
 	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to call APIM API: %w", err)
 	}
@@ -71,7 +70,8 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 // It creates or updates an API in APIM with the provided OpenAPI content, route prefix, and optional revision.
 // The function uses the Azure Management API to perform the import operation.
 // For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
-func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
+// An import APIM is still running comes back as a pending UpsertResult; see doAPIUpsert.
+func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) (UpsertResult, error) {
 	etag := ifMatchForUpsert(ctx, apimParams)
 
 	// Build the Azure Management API URL for importing the API. APIM addresses
@@ -80,7 +80,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, importURL, bytes.NewReader(openApiContent))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
-		return fmt.Errorf("failed to build request: %w", err)
+		return UpsertResult{}, fmt.Errorf("failed to build request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/vnd.oai.openapi+json")
@@ -108,7 +108,7 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 
 	logger.Info("📄 OpenAPI document ready for import", "apiID", apimParams.APIID, "bytes", len(openApiContent))
 
-	return doAPIUpsert(ctx, apimParams, req, "imported API into")
+	return doAPIUpsert(apimParams, req, "imported API into")
 }
 
 // ifMatchForUpsert picks the If-Match header for a PUT on an API: the current
@@ -144,14 +144,18 @@ func ifMatchForUpsert(ctx context.Context, apimParams APIMDeploymentConfig) stri
 	return etag
 }
 
-// doAPIUpsert sends a prepared PUT for an API and waits for APIM to finish
-// it, including the asynchronous (202) case. verb is what the success log
+// doAPIUpsert sends a prepared PUT for an API. verb is what the success log
 // says was done, e.g. "imported API into".
-func doAPIUpsert(ctx context.Context, apimParams APIMDeploymentConfig, req *http.Request, verb string) error {
-	resp, err := http.DefaultClient.Do(req)
+//
+// A large import comes back 202 and keeps running in APIM for minutes. The
+// operation URL is returned instead of waited on: the caller records it and
+// polls it on later reconciles (GetOperationState), so no worker is blocked for
+// the length of an import and the API is not written again while it runs.
+func doAPIUpsert(apimParams APIMDeploymentConfig, req *http.Request, verb string) (UpsertResult, error) {
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		logger.Error(err, "❌ Failed to send request to APIM", "apiID", apimParams.APIID)
-		return fmt.Errorf("failed to call APIM API: %w", err)
+		return UpsertResult{}, fmt.Errorf("failed to call APIM API: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -163,16 +167,15 @@ func doAPIUpsert(ctx context.Context, apimParams APIMDeploymentConfig, req *http
 
 	if resp.StatusCode >= 300 {
 		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ APIM API returned error", "apiID", apimParams.APIID, "status", resp.Status, "body", string(body))
-		return fmt.Errorf("APIM API failed: %s\n%s", resp.Status, string(body))
+		return UpsertResult{}, fmt.Errorf("APIM API failed: %s\n%s", resp.Status, string(body))
 	}
 
-	// Azure APIM may return 202 (Accepted) for asynchronous import operations.
-	// Poll completion explicitly so we don't report success while the import later fails.
 	if resp.StatusCode == http.StatusAccepted {
-		if err := waitForAsyncImportCompletion(ctx, apimParams.BearerToken, apimParams.APIID, resp); err != nil {
-			logger.Error(err, "❌ APIM async import did not complete successfully", "apiID", apimParams.APIID)
-			return err
+		if operationURL := asyncOperationURL(resp); operationURL != "" {
+			logger.Info("⏳ APIM accepted the request and is still processing it", "apiID", apimParams.APIID, "operationURL", operationURL)
+			return UpsertResult{OperationURL: operationURL}, nil
 		}
+		logger.Info("ℹ️ APIM returned 202 without a usable polling URL; cannot verify completion", "apiID", apimParams.APIID)
 	}
 
 	logger.Info("✅ Successfully "+verb+" APIM",
@@ -181,86 +184,7 @@ func doAPIUpsert(ctx context.Context, apimParams APIMDeploymentConfig, req *http
 		"statusCode", resp.StatusCode,
 	)
 
-	return nil
-}
-
-// waitForAsyncImportCompletion polls Azure APIM long-running operation URLs until completion.
-// APIM may return either Azure-AsyncOperation or Location headers on 202 responses.
-func waitForAsyncImportCompletion(ctx context.Context, bearerToken string, apiID string, initialResp *http.Response) error {
-	pollURL := strings.TrimSpace(initialResp.Header.Get("Azure-AsyncOperation"))
-	if pollURL == "" {
-		pollURL = strings.TrimSpace(initialResp.Header.Get("Location"))
-	}
-	if pollURL == "" {
-		logger.Info("ℹ️ Import returned 202 without polling URL headers; cannot verify completion", "apiID", apiID)
-		return nil
-	}
-
-	if strings.HasPrefix(pollURL, "/") {
-		pollURL = "https://management.azure.com" + pollURL
-	}
-
-	logger.Info("⏳ Polling APIM async import status", "apiID", apiID, "pollURL", pollURL)
-
-	timeout := time.After(3 * time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for async import completion: %w", ctx.Err())
-		case <-timeout:
-			return fmt.Errorf("timed out waiting for async import completion")
-		case <-ticker.C:
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
-			if err != nil {
-				return fmt.Errorf("build async poll request: %w", err)
-			}
-			req.Header.Set("Authorization", "Bearer "+bearerToken)
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return fmt.Errorf("poll async operation: %w", err)
-			}
-
-			body, readErr := io.ReadAll(resp.Body)
-			closeErr := resp.Body.Close()
-			if readErr != nil {
-				if closeErr != nil {
-					return fmt.Errorf("read async poll body: %w (close error: %v)", readErr, closeErr)
-				}
-				return fmt.Errorf("read async poll body: %w", readErr)
-			}
-			if closeErr != nil {
-				return fmt.Errorf("close async poll response body: %w", closeErr)
-			}
-
-			// If poll endpoint returns a terminal non-202 status and no status field,
-			// treat 2xx as success and non-2xx as failure.
-			if resp.StatusCode >= 300 && resp.StatusCode != http.StatusAccepted {
-				return fmt.Errorf("async poll failed: %s\n%s", resp.Status, string(body))
-			}
-
-			status := extractAsyncStatus(body)
-			switch strings.ToLower(status) {
-			case "succeeded", "success":
-				logger.Info("✅ APIM async import completed", "apiID", apiID, "pollURL", pollURL)
-				return nil
-			case "failed", "canceled", "cancelled":
-				return fmt.Errorf("async import reported status=%s body=%s", status, string(body))
-			case "inprogress", "running", "":
-				// If there's no status field and status code is terminal success, consider done.
-				if status == "" && resp.StatusCode != http.StatusAccepted {
-					logger.Info("✅ APIM async import completed (terminal HTTP status)", "apiID", apiID, "httpStatus", resp.Status)
-					return nil
-				}
-				logger.Info("⌛ APIM async import still in progress", "apiID", apiID, "httpStatus", resp.Status, "operationStatus", status)
-			default:
-				logger.Info("ℹ️ APIM async import returned unknown status", "apiID", apiID, "operationStatus", status, "httpStatus", resp.Status)
-			}
-		}
-	}
+	return UpsertResult{}, nil
 }
 
 func extractAsyncStatus(body []byte) string {

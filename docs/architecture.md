@@ -110,7 +110,7 @@ The `APIMAPIDeploymentReconciler` processes `APIMAPIDeployment` resources (Creat
 
 1. **Fetch OpenAPI spec** from the URL specified in the resource (with exponential backoff: 2s, 4s, 8s, 16s, 32s -- up to 5 retries)
 2. **Acquire Azure token** using Workload Identity (`AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables)
-3. **Import the OpenAPI definition** into APIM via `PUT` with `?import=true`
+3. **Import the OpenAPI definition** into APIM via `PUT` with `?import=true`. A large import comes back `202 Accepted` and keeps running in APIM; the operator records its operation URL in `status.pendingImport`, polls it every 15 seconds and does not write the API again until APIM reports the import finished (the steps below then run), failed (a fresh import follows after 60 seconds) or no longer knows it. An import still reported as running after two hours is treated as lost
 4. **Patch the service URL** to point APIM to the backend service
 5. **Set subscription requirement** (whether API keys are required)
 6. **Assign products** to the API (if configured)
@@ -167,6 +167,9 @@ This means the quality and correctness of the OpenAPI spec is entirely the respo
 | OpenAPI fetch failure | Exponential backoff (2s, 4s, 8s, 16s, 32s), up to 5 retries. If all fail, requeue after 60s |
 | Azure token failure | Requeue after 30s |
 | APIM import failure | Requeue after 60s |
+| APIM import accepted (`202`) | Record `status.pendingImport`; poll it every 15s. No new import until APIM reports it finished, failed or unknown, or it is two hours old |
+| Reading a pending import fails (APIM's management endpoint answering 409/422, throttling, 5xx) | Keep waiting and poll again after 15s. A failed reading is not a failed import |
+| APIM reports the pending import failed | Requeue after 60s, then import again |
 | Service URL patch failure | Requeue after 60s |
 | Product/tag assignment failure | Requeue after 60s |
 | Status patch failure | Return error (immediate retry by controller runtime) |

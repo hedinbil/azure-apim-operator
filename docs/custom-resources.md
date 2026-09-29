@@ -195,6 +195,7 @@ You typically do not create this resource manually. The controller sets `spec.ap
 |-------|------|-------------|
 | `importedAt` | string | Timestamp of import |
 | `status` | string | Deployment status (`OK` or `Error`) |
+| `pendingImport` | object | An import APIM accepted (`202`) and has not finished: `operationUrl`, `desiredHash`, `startedAt`. While it is set the operator polls it instead of writing the API again |
 
 ### Example
 

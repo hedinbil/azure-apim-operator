@@ -250,6 +250,32 @@ kubectl rollout restart deployment/<name> -n <namespace>
 
 ---
 
+### Import Waiting on APIM (`status.pendingImport`)
+
+**Symptoms:** An `APIMAPIDeployment` stays in phase `Importing` with a message like `APIM is still importing the definition it accepted at ...`, and `status.pendingImport` is set.
+
+**Cause:** APIM accepted the import (`202`) and is still running it. Large OpenAPI documents take minutes, much longer on a busy Developer-tier instance. The operator polls the operation every 15 seconds and deliberately does not send another import until this one finishes: APIM runs a second import alongside the first rather than refusing it, and piled-up imports can saturate a single-unit instance and slow every API on its gateway.
+
+**Diagnosis:**
+
+```bash
+# When the import was accepted, and what the last reading said
+kubectl get apimapideployment <name> -n <namespace> -o jsonpath='{.status.pendingImport}{"\n"}{.status.message}{"\n"}{.status.lastError}'
+
+# Ask APIM directly (read-only)
+az rest --method get --url "<status.pendingImport.operationUrl>"
+```
+
+A `lastError` mentioning `ManagementApiRequestFailed` or `Timeout` means APIM's management endpoint did not answer the poll, not that the import failed; the operator keeps waiting.
+
+**Resolution:** Usually none: the operator continues as soon as APIM reports a result, and treats an import still running after two hours as lost. To start over sooner, first confirm in the APIM activity log that no import of the API is running, then clear the field:
+
+```bash
+kubectl patch apimapideployment <name> -n <namespace> --subresource=status --type=merge -p '{"status":{"pendingImport":null}}'
+```
+
+---
+
 ### APIMAPIDeployment Stuck (Not Cleaning Up)
 
 **Symptoms:** An `APIMAPIDeployment` resource persists instead of being deleted after import.

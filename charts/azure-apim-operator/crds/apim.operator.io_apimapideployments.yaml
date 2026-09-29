@@ -198,6 +198,28 @@ spec:
                 description: OpenAPIHash is the hash of the latest successfully fetched
                   OpenAPI document.
                 type: string
+              pendingImport:
+                description: |-
+                  PendingImport is an import APIM accepted and had not finished at the last
+                  reconcile. While it is set the operator polls it and does not write the API
+                  again, so an API never has two imports running in APIM at once.
+                properties:
+                  desiredHash:
+                    description: DesiredHash is the desired state the write was started
+                      for.
+                    type: string
+                  operationUrl:
+                    description: OperationURL is the Azure-AsyncOperation or Location
+                      URL APIM returned.
+                    type: string
+                  startedAt:
+                    description: StartedAt is when APIM accepted the write (RFC 3339).
+                    type: string
+                required:
+                - desiredHash
+                - operationUrl
+                - startedAt
+                type: object
               phase:
                 description: |-
                   Phase indicates the current reconciliation phase.

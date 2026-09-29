@@ -19,21 +19,21 @@ var defaultWebSocketProtocols = []string{"wss"}
 
 // UpsertWebSocketAPI creates or updates a WebSocket API in Azure APIM from the config
 // alone. It is the websocket counterpart of ImportOpenAPIDefinitionToAPIM: same URL,
-// same If-Match handling, same async completion, but a JSON body with type "websocket"
-// instead of an OpenAPI import.
-func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) error {
+// same If-Match handling, same pending result for a 202, but a JSON body with type
+// "websocket" instead of an OpenAPI import.
+func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) (UpsertResult, error) {
 	etag := ifMatchForUpsert(ctx, apimParams)
 
 	body, err := webSocketAPIBody(apimParams)
 	if err != nil {
-		return err
+		return UpsertResult{}, err
 	}
 
 	upsertURL := revisionURL(apimParams, apimParams.APIID, apimParams.Revision)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, upsertURL, bytes.NewReader(body))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
-		return fmt.Errorf("failed to build request: %w", err)
+		return UpsertResult{}, fmt.Errorf("failed to build request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -50,7 +50,7 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) er
 		"ifMatch", etag,
 	)
 
-	return doAPIUpsert(ctx, apimParams, req, "created WebSocket API in")
+	return doAPIUpsert(apimParams, req, "created WebSocket API in")
 }
 
 // webSocketAPIBody is the PUT body for a websocket API. Kept separate from the

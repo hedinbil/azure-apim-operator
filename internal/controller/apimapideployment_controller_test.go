@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
+	"github.com/hedinit/azure-apim-operator/internal/apim"
 )
 
 var _ = Describe("APIMAPIDeployment Controller", func() {
@@ -504,8 +506,214 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			Expect(updatedDeployment.Status.Message).To(ContainSubstring("No changes detected"))
 			Expect(updatedDeployment.Status.AppliedHash).To(Equal(desiredHash))
 		})
+
+		It("should record an import APIM accepted and poll it instead of importing again", func() {
+			server := newOpenAPIServer()
+			defer server.Close()
+			pointDeploymentAtReadyWorkload(ctx, typeNamespacedName, "test-accepted", server.URL)
+			restoreIdentityEnv := setAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			upserts, reads := 0, 0
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				fetcher:  testOpenAPIFetcher(),
+				getToken: fakeManagementToken,
+				upsertAPI: func(context.Context, apim.APIMDeploymentConfig, []byte) (apim.UpsertResult, error) {
+					upserts++
+					return apim.UpsertResult{OperationURL: testOperationURL}, nil
+				},
+				operationState: func(_ context.Context, bearerToken, operationURL string) (apim.OperationState, error) {
+					reads++
+					Expect(bearerToken).To(Equal("test-token"))
+					Expect(operationURL).To(Equal(testOperationURL))
+					return apim.OperationState{Status: apim.OperationRunning}, nil
+				},
+			}
+
+			By("importing once and recording the operation APIM returned")
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pendingImportPollInterval))
+			Expect(upserts).To(Equal(1))
+
+			updated := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+			Expect(updated.Status.PendingImport).NotTo(BeNil())
+			Expect(updated.Status.PendingImport.OperationURL).To(Equal(testOperationURL))
+			Expect(updated.Status.PendingImport.DesiredHash).To(Equal(updated.Status.DesiredHash))
+
+			By("polling the running import on the next reconcile instead of importing again")
+			result, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pendingImportPollInterval))
+			Expect(upserts).To(Equal(1))
+			Expect(reads).To(Equal(1))
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+			Expect(updated.Status.Message).To(ContainSubstring("still importing"))
+			Expect(updated.Status.PendingImport).NotTo(BeNil())
+		})
+
+		It("should keep waiting for a pending import when reading its state fails", func() {
+			server := newOpenAPIServer()
+			defer server.Close()
+			pointDeploymentAtReadyWorkload(ctx, typeNamespacedName, "test-unreadable", server.URL)
+			setPendingImport(ctx, typeNamespacedName, "any-hash")
+			restoreIdentityEnv := setAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			upserts := 0
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				fetcher:  testOpenAPIFetcher(),
+				getToken: fakeManagementToken,
+				upsertAPI: func(context.Context, apim.APIMDeploymentConfig, []byte) (apim.UpsertResult, error) {
+					upserts++
+					return apim.UpsertResult{}, nil
+				},
+				operationState: func(context.Context, string, string) (apim.OperationState, error) {
+					return apim.OperationState{}, fmt.Errorf("poll APIM operation: 422 Unprocessable Entity")
+				},
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pendingImportPollInterval))
+			Expect(upserts).To(BeZero())
+
+			updated := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+			Expect(updated.Status.LastError).To(ContainSubstring("422"))
+			Expect(updated.Status.PendingImport).NotTo(BeNil())
+		})
+
+		It("should not report the API in sync while an import APIM accepted is still running", func() {
+			server := newOpenAPIServer()
+			defer server.Close()
+			deployment := pointDeploymentAtReadyWorkload(ctx, typeNamespacedName, "test-insync", server.URL)
+			openAPIHash := sha256Hex([]byte(`{"openapi":"3.0.0","info":{"title":"test","version":"1.0.0"},"paths":{}}`))
+			desiredHash, err := buildDesiredAPIMStateHash(&deployment.Spec, deployment.Spec.Subscription, deployment.Spec.ResourceGroup, openAPIHash)
+			Expect(err).NotTo(HaveOccurred())
+			setPendingImport(ctx, typeNamespacedName, "an-older-hash")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
+			deployment.Status.AppliedHash = desiredHash
+			Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+			restoreIdentityEnv := setAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			reads := 0
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				fetcher:  testOpenAPIFetcher(),
+				getToken: fakeManagementToken,
+				operationState: func(context.Context, string, string) (apim.OperationState, error) {
+					reads++
+					return apim.OperationState{Status: apim.OperationRunning}, nil
+				},
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pendingImportPollInterval))
+			Expect(reads).To(Equal(1))
+
+			updated := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+			Expect(updated.Status.Message).NotTo(ContainSubstring("No changes detected"))
+		})
+
+		It("should import again only after APIM reports the pending import failed", func() {
+			server := newOpenAPIServer()
+			defer server.Close()
+			pointDeploymentAtReadyWorkload(ctx, typeNamespacedName, "test-failed", server.URL)
+			setPendingImport(ctx, typeNamespacedName, "any-hash")
+			restoreIdentityEnv := setAzureIdentityEnvVars()
+			defer restoreIdentityEnv()
+
+			upserts := 0
+			controllerReconciler := &APIMAPIDeploymentReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				fetcher:  testOpenAPIFetcher(),
+				getToken: fakeManagementToken,
+				upsertAPI: func(context.Context, apim.APIMDeploymentConfig, []byte) (apim.UpsertResult, error) {
+					upserts++
+					return apim.UpsertResult{OperationURL: testOperationURL}, nil
+				},
+				operationState: func(context.Context, string, string) (apim.OperationState, error) {
+					return apim.OperationState{Status: apim.OperationFailed, Detail: `{"status":"Failed","error":{"code":"InternalServerError"}}`}, nil
+				},
+			}
+
+			By("recording the failure without importing in the same reconcile")
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(requeueImportFailure))
+			Expect(upserts).To(BeZero())
+
+			updated := &apimv1.APIMAPIDeployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(phaseError))
+			Expect(updated.Status.LastError).To(ContainSubstring("InternalServerError"))
+			Expect(updated.Status.PendingImport).To(BeNil())
+			Expect(updated.Status.AppliedHash).To(BeEmpty())
+
+			By("importing again on the next reconcile")
+			result, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pendingImportPollInterval))
+			Expect(upserts).To(Equal(1))
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.PendingImport).NotTo(BeNil())
+		})
 	})
 })
+
+// pointDeploymentAtReadyWorkload gives the deployment a ready ReplicaSet that its
+// same-named APIMAPI matches and points it at a local OpenAPI document, which is what an
+// import needs to proceed.
+func pointDeploymentAtReadyWorkload(ctx context.Context, key types.NamespacedName, prefix, openAPIURL string) *apimv1.APIMAPIDeployment {
+	rs := createReplicaSet(ctx, prefix+"-replicaset", map[string]string{"app.kubernetes.io/name": key.Name}, map[string]string{"app": key.Name})
+	createReadyPodForReplicaSet(ctx, rs, prefix+"-pod")
+
+	deployment := &apimv1.APIMAPIDeployment{}
+	Expect(k8sClient.Get(ctx, key, deployment)).To(Succeed())
+	deployment.Spec.OpenAPIDefinitionURL = openAPIURL
+	Expect(k8sClient.Update(ctx, deployment)).To(Succeed())
+	return deployment
+}
+
+// setPendingImport records an import APIM accepted a minute ago for desiredHash.
+func setPendingImport(ctx context.Context, key types.NamespacedName, desiredHash string) {
+	deployment := &apimv1.APIMAPIDeployment{}
+	Expect(k8sClient.Get(ctx, key, deployment)).To(Succeed())
+	deployment.Status.PendingImport = &apimv1.APIMPendingImport{
+		OperationURL: testOperationURL,
+		DesiredHash:  desiredHash,
+		StartedAt:    time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+	}
+	Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+}
+
+func fakeManagementToken(context.Context, string, string) (string, error) {
+	return "test-token", nil
+}
+
+func setAzureIdentityEnvVars() func() {
+	restore := unsetAzureIdentityEnvVars()
+	_ = os.Setenv("AZURE_CLIENT_ID", "00000000-0000-0000-0000-0000000000c1")
+	_ = os.Setenv("AZURE_TENANT_ID", "00000000-0000-0000-0000-0000000000a1")
+	return restore
+}
 
 func newOpenAPIServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
