@@ -3,11 +3,9 @@
 package apim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -29,42 +27,28 @@ func UpsertTag(ctx context.Context, config APIMTagConfig) error {
 		return fmt.Errorf("failed to marshal tag body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, tagURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("failed to build tag request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("If-Match", "*")
-
 	logger.Info("🏷️ Upserting tag",
 		"tagID", config.TagID,
 		"url", tagURL,
 	)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := armRequest{
+		operation:   "upsert tag " + config.TagID,
+		method:      http.MethodPut,
+		url:         tagURL,
+		token:       config.BearerToken,
+		body:        bodyBytes,
+		contentType: contentTypeJSON,
+		ifMatch:     "*",
+	}.send(ctx)
 	if err != nil {
-		return fmt.Errorf("tag request failed: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
-		}
-	}()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to upsert tag",
-			"status", resp.Status,
-			"body", string(respBody),
-		)
-		return fmt.Errorf("failed to upsert tag: %s\n%s", resp.Status, string(respBody))
+		logger.Error(err, "❌ Failed to upsert tag", "tagID", config.TagID)
+		return err
 	}
 
 	logger.Info("✅ Tag upserted",
 		"tagID", config.TagID,
-		"status", resp.Status,
+		"status", resp.status,
 	)
 
 	return nil
@@ -85,38 +69,24 @@ func AssignTagsToAPI(ctx context.Context, config APIMDeploymentConfig) error {
 		tagAssignURL := serviceURL(
 			config, "apis", config.APIID, "tags", tagID)
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, tagAssignURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to build tag assign request for %s: %w", tagID, err)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-
 		logger.Info("🔖 Assigning tag to API",
 			"apiID", config.APIID,
 			"tagID", tagID,
 			"url", tagAssignURL,
 		)
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("tag assign request failed for %s: %w", tagID, err)
-		}
-		defer func() {
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID, "tagID", tagID)
-			}
-		}()
-
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode >= 300 {
-			logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to assign tag to API",
+		if _, err := (armRequest{
+			operation: "assign tag " + tagID + " to API",
+			method:    http.MethodPut,
+			url:       tagAssignURL,
+			token:     config.BearerToken,
+			dependent: true,
+		}).send(ctx); err != nil {
+			logger.Error(err, "❌ Failed to assign tag to API",
 				"apiID", config.APIID,
 				"tagID", tagID,
-				"status", resp.Status,
-				"body", string(body),
 			)
-			return fmt.Errorf("assigning tag to API %s failed: %s\n%s", tagID, resp.Status, string(body))
+			return err
 		}
 
 		logger.Info("✅ Tag successfully assigned to API",

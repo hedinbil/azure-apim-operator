@@ -31,7 +31,6 @@ import (
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
-	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
 // APIMAPIDeploymentReconciler reconciles APIMAPIDeployment custom resources.
@@ -49,6 +48,14 @@ type APIMAPIDeploymentReconciler struct {
 
 	// fetcher downloads tenant OpenAPI documents; nil selects the guarded default.
 	fetcher *openAPIFetcher
+	// getToken obtains the Azure management token; nil selects identity.GetManagementToken.
+	getToken managementTokenFunc
+	// retry is how failed APIM writes are retried; nil selects productionRetryPolicy.
+	retry *retryPolicy
+	// apiReader reads the resource itself, bypassing the informer cache, so the retry
+	// gate never decides on a status older than the last failure; see latestReader.
+	// SetupWithManager sets it; nil reads through the embedded client.
+	apiReader client.Reader
 }
 
 func (r *APIMAPIDeploymentReconciler) openAPI() *openAPIFetcher {
@@ -82,7 +89,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Fetch the APIMAPIDeployment resource that triggered this reconciliation.
 	var deployment apimv1.APIMAPIDeployment
-	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
+	if err := latestReader(r.apiReader, r.Client).Get(ctx, req.NamespacedName, &deployment); err != nil {
 		logger.Info("ℹ️ Unable to fetch APIMAPIDeployment")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -282,11 +289,41 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			status.MatchedReplicaSets = matchedReplicaSetNames
 			status.OpenAPIHash = openAPIHash
 			status.DesiredHash = desiredHash
+			// APIM already holds this state, so failures recorded for another one no
+			// longer apply (e.g. a spec that failed and was then reverted).
+			status.ConsecutiveFailures = 0
+			status.NextAttemptAt = ""
 		}); statusErr != nil {
 			return ctrl.Result{}, statusErr
 		}
 		logger.Info("✅ APIM already in sync; skipping import", "apiID", deployment.Spec.APIID, "desiredHash", desiredHash)
 		return ctrl.Result{}, nil
+	}
+
+	// Decide whether APIM may be written to at all before anything is persisted: a
+	// deployment still backing off, Stalled or Invalid returns here without a token, an
+	// APIM call or a status write. A new desired hash or a new apim.operator.io/retry
+	// value clears the failures, except a new OpenAPI document alone during a backoff (see
+	// deploymentSpecChanged); the hash is compared with status.desiredHash before the
+	// Importing patch below overwrites it.
+	w := r.retry.begin(logger, "APIMAPIDeployment", &deployment, "apiID", deployment.Spec.APIID)
+	specChanged := deploymentSpecChanged(&deployment.Spec, &deployment.Status,
+		apimService.Spec.Subscription, apimService.Spec.ResourceGroup, desiredHash)
+	if proceed, result := w.gate(deployment.Status.RetryStatus, specChanged); !proceed {
+		// Put the phase back if a path above (missing APIMService, failed OpenAPI fetch,
+		// no ready pod) overwrote it while the deployment was held. lastError keeps the
+		// last error seen.
+		if phase, message, ok := w.heldStatus(deployment.Status.Phase); ok {
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = phase
+				status.Status = phaseError
+				status.Message = message
+				status.MatchedReplicaSets = matchedReplicaSetNames
+			}); statusErr != nil {
+				logger.Error(statusErr, "❌ Failed to patch APIMAPIDeployment status", "apiID", deployment.Spec.APIID)
+			}
+		}
+		return result, nil
 	}
 
 	if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
@@ -299,8 +336,37 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		status.MatchedReplicaSets = matchedReplicaSetNames
 		status.OpenAPIHash = openAPIHash
 		status.DesiredHash = desiredHash
+		// Persist the reset together with the new desired hash, so a crash mid-import
+		// cannot leave failures of the old state counting against the new one.
+		w.prepare(&status.RetryStatus)
 	}); statusErr != nil {
 		return ctrl.Result{}, statusErr
+	}
+
+	// failWrite records a failed APIM call through the shared retry handling: Backoff
+	// until status.nextAttemptAt, Stalled after too many transient failures in a row, or
+	// Invalid when APIM rejected the request. step says which call failed. It returns
+	// what Reconcile returns; the error itself is never handed back, which would put
+	// controller-runtime's rate limiter back in charge of the retries. A failing status
+	// patch is logged for the same reason: the failure count is lost for this attempt,
+	// but the requeue still waits out its backoff instead of re-importing at once.
+	failWrite := func(step string, err error) (ctrl.Result, error) {
+		var out writeOutcome
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			out = w.failed(&status.RetryStatus, err)
+			status.Phase = out.Phase
+			status.Status = phaseError
+			status.Message = step + ": " + out.Message
+			status.LastError = err.Error()
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+		}); statusErr != nil {
+			logger.Error(statusErr, "❌ Failed to patch APIMAPIDeployment status", "apiID", deployment.Spec.APIID)
+		}
+		return out.Result, nil
 	}
 
 	// Step 2: Acquire an Azure management token for authenticating with the APIM Management API.
@@ -324,7 +390,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
+	token, err := r.getToken.get(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token", "apiID", deployment.Spec.APIID)
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
@@ -381,47 +447,24 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	upsertMessage := "Failed to import API into APIM"
 	if isWebSocket {
 		upsertMessage = "Failed to create WebSocket API in APIM"
+		w.starting("step", "upsert websocket API")
 		err = apim.UpsertWebSocketAPI(ctx, config)
 	} else {
+		w.starting("step", "import API", "bytes", len(openApiContent))
 		err = apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent)
 	}
 	if err != nil {
 		logger.Error(err, "🚫 Failed to create or update API", "apiID", deployment.Spec.APIID, "type", config.Type)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = upsertMessage
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-			status.OpenAPIHash = openAPIHash
-			status.DesiredHash = desiredHash
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return failWrite(upsertMessage, err)
 	}
 	logger.Info("✅ API created or updated in APIM", "apiID", deployment.Spec.APIID, "type", config.Type)
 
 	// Step 5: Update the backend service URL for the API.
 	// This points the API to the correct backend service endpoint.
+	w.starting("step", "patch serviceUrl")
 	if err := apim.AssignServiceUrlToApi(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch service URL", "apiID", deployment.Spec.APIID)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = "Failed to patch service URL in APIM"
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-			status.OpenAPIHash = openAPIHash
-			status.DesiredHash = desiredHash
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return failWrite("Failed to patch service URL in APIM", err)
 	}
 	logger.Info("✅ Service URL patched in APIM", "apiID", deployment.Spec.APIID)
 
@@ -429,44 +472,20 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// This controls whether a subscription key is required to access the API.
 	// Defaults to true (subscription required) if not explicitly set to false.
 	subscriptionRequired := config.SubscriptionRequired
+	w.starting("step", "patch subscriptionRequired")
 	if err := apim.SetSubscriptionRequired(ctx, config); err != nil {
 		logger.Error(err, "🚫 Failed to patch subscription requirement", "apiID", deployment.Spec.APIID)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = "Failed to patch subscription requirement in APIM"
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-			status.OpenAPIHash = openAPIHash
-			status.DesiredHash = desiredHash
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+		return failWrite("Failed to patch subscription requirement in APIM", err)
 	}
 	logger.Info("✅ Subscription requirement patched in APIM", "apiID", deployment.Spec.APIID, "subscriptionRequired", subscriptionRequired)
 
 	// Step 7: Assign the API to all configured products (if any).
 	// Products are used to group APIs and require subscriptions for access.
 	if len(config.ProductIDs) > 0 {
+		w.starting("step", "assign products", "productIDs", config.ProductIDs)
 		if err := apim.AssignProductsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to products", "apiID", deployment.Spec.APIID, "productIDs", config.ProductIDs)
-			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-				status.Phase = phaseError
-				status.Status = phaseError
-				status.Message = "Failed to assign API to products"
-				status.LastError = err.Error()
-				status.LastAttemptAt = attemptTime
-				status.ObservedGeneration = apimApi.Generation
-				status.MatchedReplicaSets = matchedReplicaSetNames
-				status.OpenAPIHash = openAPIHash
-				status.DesiredHash = desiredHash
-			}); statusErr != nil {
-				return ctrl.Result{}, statusErr
-			}
-			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+			return failWrite("Failed to assign API to products", err)
 		}
 		logger.Info("✅ API assigned to products", "apiID", config.APIID, "productIDs", config.ProductIDs)
 	} else {
@@ -476,22 +495,10 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// Step 8: Assign the API to all configured tags (if any).
 	// Tags help organize and categorize APIs for better management.
 	if len(config.TagIDs) > 0 {
+		w.starting("step", "assign tags", "tagIDs", config.TagIDs)
 		if err := apim.AssignTagsToAPI(ctx, config); err != nil {
 			logger.Error(err, "🚫 Failed to assign API to tags", "apiID", deployment.Spec.APIID, "tagIDs", config.TagIDs)
-			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-				status.Phase = phaseError
-				status.Status = phaseError
-				status.Message = "Failed to assign API to tags"
-				status.LastError = err.Error()
-				status.LastAttemptAt = attemptTime
-				status.ObservedGeneration = apimApi.Generation
-				status.MatchedReplicaSets = matchedReplicaSetNames
-				status.OpenAPIHash = openAPIHash
-				status.DesiredHash = desiredHash
-			}); statusErr != nil {
-				return ctrl.Result{}, statusErr
-			}
-			return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+			return failWrite("Failed to assign API to tags", err)
 		}
 		logger.Info("✅ API assigned to tags", "apiID", config.APIID, "tagIDs", config.TagIDs)
 	} else {
@@ -503,20 +510,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	apiHost, developerPortalHost, err := apim.GetAPIMServiceDetails(ctx, config)
 	if err != nil {
 		logger.Error(err, "⚠️ Failed to fetch APIM details", "apiID", deployment.Spec.APIID)
-		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-			status.Phase = phaseError
-			status.Status = phaseError
-			status.Message = "Failed to fetch APIM service details"
-			status.LastError = err.Error()
-			status.LastAttemptAt = attemptTime
-			status.ObservedGeneration = apimApi.Generation
-			status.MatchedReplicaSets = matchedReplicaSetNames
-			status.OpenAPIHash = openAPIHash
-			status.DesiredHash = desiredHash
-		}); statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		return ctrl.Result{}, err
+		return failWrite("Failed to fetch APIM service details", err)
 	}
 
 	// Update the APIMAPI status with deployment information.
@@ -547,6 +541,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		status.DesiredHash = desiredHash
 		status.AppliedHash = desiredHash
 		status.ImportedAt = time.Now().UTC().Format(time.RFC3339)
+		w.succeeded(&status.RetryStatus)
 	}); statusErr != nil {
 		return ctrl.Result{}, statusErr
 	}
@@ -563,9 +558,13 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *APIMAPIDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.apiReader == nil {
+		r.apiReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMAPIDeployment{}).
 		WithEventFilter(apimAPIDeploymentPredicate()).
+		WithOptions(apimWriterOptions()).
 		Named("apimapideployment").
 		Complete(r)
 }
@@ -592,6 +591,11 @@ func apimAPIDeploymentPredicate() predicate.Predicate {
 			}
 
 			if oldAnnotations[apimDeploymentReplicaSetAnnotation] != newAnnotations[apimDeploymentReplicaSetAnnotation] {
+				return true
+			}
+
+			// apim.operator.io/retry lets a Stalled or Invalid deployment write again.
+			if retryAnnotationChanged(e) {
 				return true
 			}
 

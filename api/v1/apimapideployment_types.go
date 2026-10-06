@@ -70,7 +70,9 @@ type APIMAPIDeploymentSpec struct {
 // This status tracks the deployment progress and result.
 type APIMAPIDeploymentStatus struct {
 	// Phase indicates the current reconciliation phase.
-	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, and Error.
+	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, Error,
+	// Backoff (a failed write waits for nextAttemptAt), Stalled (five transient failures in
+	// a row) and Invalid (APIM rejected the request).
 	Phase string `json:"phase,omitempty"`
 	// Message describes the current reconciliation state in a human-readable way.
 	Message string `json:"message,omitempty"`
@@ -92,6 +94,8 @@ type APIMAPIDeploymentStatus struct {
 	ImportedAt string `json:"importedAt,omitempty"`
 	// Status indicates the current deployment status (e.g., "OK", "Error").
 	Status string `json:"status,omitempty"`
+	// RetryStatus tracks backing off from failed APIM writes.
+	RetryStatus `json:",inline"`
 }
 
 // +kubebuilder:object:root=true

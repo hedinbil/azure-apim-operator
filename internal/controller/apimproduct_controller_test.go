@@ -318,7 +318,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
 				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
 				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
-					return fmt.Errorf("failed to delete product: 400 Bad Request: product has active subscriptions")
+					return errProductHasSubscriptions
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
@@ -332,11 +332,13 @@ var _ = Describe("APIMProduct Controller", func() {
 
 			result, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(result).To(BeZero(), "a rejected delete is Invalid and waits for a person, not a timer")
 			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed(), "the resource must stay until APIM is cleaned up")
 			Expect(controllerutil.ContainsFinalizer(product, productFinalizer)).To(BeTrue())
-			Expect(product.Status.Phase).To(Equal(phaseError))
+			Expect(product.Status.Phase).To(Equal(phaseInvalid))
 			Expect(product.Status.Message).To(ContainSubstring("active subscriptions"))
+			Expect(product.Status.Message).To(ContainSubstring("spec.deletionPolicy to Retain"),
+				"a held delete must say how to let the resource go")
 		})
 
 		It("should keep the product in APIM when deletionPolicy is Retain", func() {
@@ -385,7 +387,7 @@ var _ = Describe("APIMProduct Controller", func() {
 				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
 				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
 					deleteCalls++
-					return fmt.Errorf("failed to delete product: 400 Bad Request: product has active subscriptions")
+					return errProductHasSubscriptions
 				},
 			}
 			req := reconcile.Request{NamespacedName: typeNamespacedName}
@@ -399,7 +401,13 @@ var _ = Describe("APIMProduct Controller", func() {
 			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
 			result, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(result).To(BeZero())
+			Expect(deleteCalls).To(Equal(1))
+
+			By("reconciling the Invalid delete again: no further APIM call")
+			result, err = controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
 			Expect(deleteCalls).To(Equal(1))
 			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
 
@@ -499,6 +507,11 @@ var _ = Describe("APIMProduct Controller", func() {
 			controllerReconciler := &APIMProductReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				// Fail the way workload identity does with bad credentials, without asking
+				// Entra ID for real.
+				getToken: func(context.Context, string, string) (string, error) {
+					return "", fmt.Errorf("WorkloadIdentityCredential authentication failed")
+				},
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

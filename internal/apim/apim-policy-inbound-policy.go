@@ -3,11 +3,9 @@
 package apim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -57,15 +55,6 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 		return fmt.Errorf("failed to marshal policy body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, policyURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("failed to build policy request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("If-Match", "*")
-
 	// Log the appropriate scope
 	if config.OperationID != "" {
 		logger.Info("📋 Upserting inbound policy for operation",
@@ -80,24 +69,19 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 		)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := armRequest{
+		operation:   "upsert inbound policy",
+		method:      http.MethodPut,
+		url:         policyURL,
+		token:       config.BearerToken,
+		body:        bodyBytes,
+		contentType: contentTypeJSON,
+		ifMatch:     "*",
+		dependent:   true,
+	}.send(ctx)
 	if err != nil {
-		return fmt.Errorf("policy request failed: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID)
-		}
-	}()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to upsert inbound policy",
-			"apiID", config.APIID,
-			"status", resp.Status,
-			"body", string(respBody),
-		)
-		return fmt.Errorf("failed to upsert inbound policy: %s\n%s", resp.Status, string(respBody))
+		logger.Error(err, "❌ Failed to upsert inbound policy", "apiID", config.APIID)
+		return err
 	}
 
 	// Log success with appropriate scope
@@ -105,12 +89,12 @@ func UpsertInboundPolicy(ctx context.Context, config APIMInboundPolicyConfig) er
 		logger.Info("✅ Inbound policy upserted for operation",
 			"apiID", config.APIID,
 			"operationID", config.OperationID,
-			"status", resp.Status,
+			"status", resp.status,
 		)
 	} else {
 		logger.Info("✅ Inbound policy upserted for API",
 			"apiID", config.APIID,
-			"status", resp.Status,
+			"status", resp.status,
 		)
 	}
 

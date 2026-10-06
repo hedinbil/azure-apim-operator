@@ -4,7 +4,6 @@
 package apim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,19 +29,10 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) er
 	}
 
 	upsertURL := revisionURL(apimParams, apimParams.APIID, apimParams.Revision)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, upsertURL, bytes.NewReader(body))
-	if err != nil {
-		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
-		return fmt.Errorf("failed to build request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
-	req.Header.Set("If-Match", etag)
 
 	logger.Info("📤 Sending WebSocket API request to APIM",
-		"method", req.Method,
-		"url", req.URL.String(),
+		"method", http.MethodPut,
+		"url", upsertURL,
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
 		"serviceUrl", apimParams.ServiceURL,
@@ -50,7 +40,15 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) er
 		"ifMatch", etag,
 	)
 
-	return doAPIUpsert(ctx, apimParams, req, "created WebSocket API in")
+	return doAPIUpsert(ctx, apimParams, armRequest{
+		operation:   "upsert WebSocket API",
+		method:      http.MethodPut,
+		url:         upsertURL,
+		token:       apimParams.BearerToken,
+		body:        body,
+		contentType: contentTypeJSON,
+		ifMatch:     etag,
+	}, "created WebSocket API in")
 }
 
 // webSocketAPIBody is the PUT body for a websocket API. Kept separate from the

@@ -30,7 +30,6 @@ import (
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
-	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
 // APIMTagReconciler reconciles APIMTag custom resources.
@@ -40,6 +39,15 @@ import (
 type APIMTagReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// getToken obtains the Azure Management API token; nil means identity.GetManagementToken.
+	getToken managementTokenFunc
+	// retry is how failed tag upserts are retried; nil means productionRetryPolicy.
+	retry *retryPolicy
+	// apiReader reads the resource itself, bypassing the informer cache, so the retry
+	// gate never decides on a status older than the last failure; see latestReader.
+	// SetupWithManager sets it; nil reads through the embedded client.
+	apiReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimtags,verbs=get;list;watch;create;update;patch;delete
@@ -59,7 +67,7 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logger := log.FromContext(ctx)
 
 	var tag apimv1.APIMTag
-	if err := r.Get(ctx, req.NamespacedName, &tag); err != nil {
+	if err := latestReader(r.apiReader, r.Client).Get(ctx, req.NamespacedName, &tag); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("🧹 APIMTag deleted, skipping", "name", req.NamespacedName)
 			return ctrl.Result{}, nil
@@ -99,7 +107,24 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	token, err := identity.GetManagementToken(ctx, clientID, tenantID)
+	// Decide before touching APIM, and before fetching a token: a tag that is backing off,
+	// Stalled or Invalid costs nothing until its time comes, its spec changes or the retry
+	// annotation is set.
+	w := r.retry.begin(logger, "APIMTag", &tag, "tagID", tag.Spec.TagID)
+	if proceed, result := w.gate(tag.Status.RetryStatus, tag.Generation != tag.Status.ObservedGeneration); !proceed {
+		// Put the phase back if an error path above overwrote it while the tag was held.
+		if phase, message, ok := w.heldStatus(tag.Status.Phase); ok {
+			statusPatch := client.MergeFrom(tag.DeepCopy())
+			tag.Status.Phase = phase
+			tag.Status.Message = message
+			if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
+				logger.Error(err, "❌ Failed to patch APIMTag status", "tagID", tag.Spec.TagID)
+			}
+		}
+		return result, nil
+	}
+
+	token, err := r.getToken.get(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		// Use Patch to update only status without touching spec fields.
@@ -119,18 +144,33 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		BearerToken:    token,
 	}
 
-	if err := apim.UpsertTag(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to upsert APIM tag", "tagID", cfg.TagID)
-		tag.Status.Phase = phaseError
-		tag.Status.Message = err.Error()
-	} else {
-		logger.Info("✅ Successfully upserted APIM tag", "tagID", cfg.TagID)
-		tag.Status.Phase = phaseCreated
-		tag.Status.Message = "Tag created or updated"
+	w.starting()
+	upsertErr := apim.UpsertTag(ctx, cfg)
+
+	// Take the patch base before changing the status, so the patch carries the changes.
+	statusPatch := client.MergeFrom(tag.DeepCopy())
+	tag.Status.ObservedGeneration = tag.Generation
+
+	if upsertErr != nil {
+		// Back off, stall or give up as the shared retry handling decides. The error is never
+		// returned: that would hand the requeue back to controller-runtime's rate limiter.
+		out := w.failed(&tag.Status.RetryStatus, upsertErr)
+		tag.Status.Phase = out.Phase
+		// APIMTagStatus has no lastError, so the error itself goes into the message.
+		tag.Status.Message = out.statusMessage("Failed to create or update tag in APIM", upsertErr)
+		if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
+			// The failure count is lost without the patch, but the requeue still waits out
+			// this attempt's backoff instead of retrying at once.
+			logger.Error(err, "❌ Failed to patch APIMTag status", "tagID", cfg.TagID)
+		}
+		return out.Result, nil
 	}
 
+	w.succeeded(&tag.Status.RetryStatus)
+	tag.Status.Phase = phaseCreated
+	tag.Status.Message = "Tag created or updated"
+
 	// Use Patch to update only status without touching spec fields.
-	statusPatch := client.MergeFrom(tag.DeepCopy())
 	if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
 		logger.Error(err, "❌ Failed to patch APIMTag status")
 		return ctrl.Result{}, err
@@ -141,9 +181,13 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *APIMTagReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.apiReader == nil {
+		r.apiReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMTag{}).
 		WithEventFilter(specOrDeletionChanged()).
+		WithOptions(apimWriterOptions()).
 		Named("apimtag").
 		Complete(r)
 }

@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -33,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
+	"github.com/hedinit/azure-apim-operator/internal/apim"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -57,6 +60,21 @@ var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	ctx, cancel = context.WithCancel(context.TODO())
+
+	// No spec may reach real Azure. ARM calls go to a closed local port unless a spec
+	// points the apim package at its own httptest fake (apim.UseEndpoint, restored after
+	// each spec), and a reconciler left on the real identity.GetManagementToken has its
+	// Entra ID requests refused the same way instead of reaching login.microsoftonline.com.
+	DeferCleanup(apim.UseEndpoint("https://127.0.0.1:1", &http.Client{Timeout: 5 * time.Second}))
+	previousAuthority, hadAuthority := os.LookupEnv("AZURE_AUTHORITY_HOST")
+	Expect(os.Setenv("AZURE_AUTHORITY_HOST", "https://127.0.0.1:1/")).To(Succeed())
+	DeferCleanup(func() {
+		if hadAuthority {
+			_ = os.Setenv("AZURE_AUTHORITY_HOST", previousAuthority)
+		} else {
+			_ = os.Unsetenv("AZURE_AUTHORITY_HOST")
+		}
+	})
 
 	var err error
 	err = apimv1.AddToScheme(scheme.Scheme)

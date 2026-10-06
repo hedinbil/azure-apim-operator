@@ -135,6 +135,35 @@ func updateAPIMAPIDeploymentStatus(ctx context.Context, c client.Client, deploym
 	return nil
 }
 
+// deploymentSpecChanged is the deployment's "spec changed" test for the retry gate:
+// whether desiredHash, which covers the spec and the OpenAPI document fetched in this
+// reconcile, differs from status.desiredHash in a way that should clear the failures.
+//
+// A change to anything but the document always counts. A change to the document alone
+// counts unless the deployment is backing off. The document is fetched again on every
+// reconcile, and one that is not byte-identical from fetch to fetch (two app versions
+// behind one Service during a canary, a generator that embeds a timestamp) would
+// otherwise clear the count on every attempt: the deployment would re-import every
+// minute and never reach Stalled. During a backoff the next attempt imports whatever the
+// document is by then, so nothing is lost by waiting. A new document still lifts a
+// Stalled or Invalid deployment at once, which is how a fixed document recovers. Neither
+// is requeued, so that only happens on an event (a rollout's ReplicaSet signal, an
+// operator restart), and each such round is again bounded by five attempts.
+func deploymentSpecChanged(spec *apimv1.APIMAPIDeploymentSpec, status *apimv1.APIMAPIDeploymentStatus,
+	subscription, resourceGroup, desiredHash string) bool {
+	if desiredHash == status.DesiredHash {
+		return false
+	}
+	backingOff := status.ConsecutiveFailures > 0 && status.NextAttemptAt != ""
+	if !backingOff || status.DesiredHash == "" {
+		return true
+	}
+	// The desired hash with the document the failures were recorded against: equal to
+	// status.desiredHash when only the document moved since.
+	withPreviousDocument, err := buildDesiredAPIMStateHash(spec, subscription, resourceGroup, status.OpenAPIHash)
+	return err != nil || withPreviousDocument != status.DesiredHash
+}
+
 func buildDesiredAPIMStateHash(spec *apimv1.APIMAPIDeploymentSpec, subscription string, resourceGroup string, openAPIHash string) (string, error) {
 	productIDs := append([]string(nil), spec.ProductIDs...)
 	tagIDs := append([]string(nil), spec.TagIDs...)

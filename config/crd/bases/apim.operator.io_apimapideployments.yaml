@@ -163,6 +163,13 @@ spec:
                 description: AppliedHash is the desired hash that was last successfully
                   reconciled in APIM.
                 type: string
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures counts the failed APIM writes in a row since the last success,
+                  spec change or retry annotation.
+                format: int32
+                minimum: 0
+                type: integer
               desiredHash:
                 description: DesiredHash is the hash of the desired APIM state derived
                   from the deployment inputs.
@@ -179,6 +186,12 @@ spec:
                 description: LastError contains the most recent reconciliation error,
                   if any.
                 type: string
+              lastRetryAnnotation:
+                description: |-
+                  LastRetryAnnotation is the value of the apim.operator.io/retry annotation the
+                  operator last acted on. Setting the annotation to any other value clears the
+                  failure count and retries at once.
+                type: string
               matchedReplicaSets:
                 description: MatchedReplicaSets lists the ReplicaSets currently matched
                   to the source APIMAPI.
@@ -188,6 +201,12 @@ spec:
               message:
                 description: Message describes the current reconciliation state in
                   a human-readable way.
+                type: string
+              nextAttemptAt:
+                description: |-
+                  NextAttemptAt is the earliest time (RFC3339) the operator writes to APIM again.
+                  Empty when no retry is scheduled: the last write succeeded, or the resource is
+                  Stalled or Invalid.
                 type: string
               observedGeneration:
                 description: ObservedGeneration is the APIMAPI generation that this
@@ -201,7 +220,9 @@ spec:
               phase:
                 description: |-
                   Phase indicates the current reconciliation phase.
-                  Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, and Error.
+                  Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, Error,
+                  Backoff (a failed write waits for nextAttemptAt), Stalled (five transient failures in
+                  a row) and Invalid (APIM rejected the request).
                 type: string
               status:
                 description: Status indicates the current deployment status (e.g.,

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -204,6 +205,11 @@ var _ = Describe("APIMInboundPolicy Controller", func() {
 			controllerReconciler := &APIMInboundPolicyReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				// Fail the way workload identity does with bad credentials, without asking
+				// Entra ID for real.
+				getToken: func(context.Context, string, string) (string, error) {
+					return "", fmt.Errorf("WorkloadIdentityCredential authentication failed")
+				},
 			}
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

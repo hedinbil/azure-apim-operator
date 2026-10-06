@@ -33,7 +33,6 @@ import (
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	"github.com/hedinit/azure-apim-operator/internal/apim"
-	"github.com/hedinit/azure-apim-operator/internal/identity"
 )
 
 // APIMProductReconciler reconciles APIMProduct custom resources.
@@ -45,9 +44,16 @@ type APIMProductReconciler struct {
 	Scheme *runtime.Scheme
 
 	// Seams for tests. When nil the real Azure calls are used.
-	getToken      func(ctx context.Context, clientID, tenantID string) (string, error)
+	getToken      managementTokenFunc
 	upsertProduct func(ctx context.Context, cfg apim.APIMProductConfig) error
 	deleteProduct func(ctx context.Context, cfg apim.APIMProductConfig) error
+
+	// retry is how failed APIM writes back off; nil means productionRetryPolicy.
+	retry *retryPolicy
+	// apiReader reads the resource itself, bypassing the informer cache, so the retry
+	// gate never decides on a status older than the last failure; see latestReader.
+	// SetupWithManager sets it; nil reads through the embedded client.
+	apiReader client.Reader
 }
 
 // productFinalizer keeps an APIMProduct around until its product is removed from APIM.
@@ -66,7 +72,7 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	logger := log.FromContext(ctx)
 
 	var product apimv1.APIMProduct
-	if err := r.Get(ctx, req.NamespacedName, &product); err != nil {
+	if err := latestReader(r.apiReader, r.Client).Get(ctx, req.NamespacedName, &product); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("🧹 APIMProduct deleted, skipping", "name", req.NamespacedName)
 			return ctrl.Result{}, nil
@@ -139,7 +145,26 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	token, err := r.token(ctx, clientID, tenantID)
+	// Gate before the token: a product that is backing off, Stalled or Invalid does not
+	// even fetch one. The upsert and the finalizer's delete share one retry state; the
+	// generation bump that comes with a delete resets it, so a product that stalled while
+	// being created still gets a fresh set of attempts at being removed.
+	operation := "upsert"
+	if deleting {
+		operation = "delete"
+	}
+	w := r.retry.begin(logger, "APIMProduct", &product, "productID", product.Spec.ProductID, "operation", operation)
+	if proceed, result := w.gate(product.Status.RetryStatus, product.Generation != product.Status.ObservedGeneration); !proceed {
+		// Put the phase back if an error path above overwrote it while the product was held.
+		if phase, message, ok := w.heldStatus(product.Status.Phase); ok {
+			if err := r.status(ctx, &product, phase, message); err != nil {
+				logger.Error(err, "❌ Failed to patch APIMProduct status", "productID", product.Spec.ProductID)
+			}
+		}
+		return result, nil
+	}
+
+	token, err := r.getToken.get(ctx, clientID, tenantID)
 	if err != nil {
 		logger.Error(err, "❌ Failed to get Azure token")
 		r.setError(ctx, &product, errMsgFailedToGetAzureToken)
@@ -159,26 +184,52 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if deleting {
 		logger.Info("🗑️ APIMProduct is being deleted", "name", req.NamespacedName, "productId", cfg.ProductID)
+		w.starting()
 		if err := r.remove(ctx, cfg); err != nil {
-			logger.Error(err, "❌ Failed to delete product in APIM", "productId", cfg.ProductID)
-			r.setError(ctx, &product, err.Error())
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return r.writeFailed(ctx, &product, w, err, "Failed to delete product in APIM")
 		}
-		logger.Info("✅ Successfully deleted APIM product", "productId", cfg.ProductID)
+		// The resource is about to go, so the cleared retry state is only logged, not patched.
+		w.succeeded(&product.Status.RetryStatus)
 		return r.releaseFinalizer(ctx, &product)
 	}
 
+	w.starting()
 	if err := r.upsert(ctx, cfg); err != nil {
-		logger.Error(err, "❌ Failed to create product in APIM", "productId", cfg.ProductID)
-		r.setError(ctx, &product, err.Error())
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return r.writeFailed(ctx, &product, w, err, "Failed to create product in APIM")
 	}
-	logger.Info("✅ Successfully created APIM product", "productId", cfg.ProductID)
-	if err := r.status(ctx, &product, phaseCreated, "Product created successfully"); err != nil {
+	patch := client.MergeFrom(product.DeepCopy())
+	w.succeeded(&product.Status.RetryStatus)
+	product.Status.ObservedGeneration = product.Generation
+	product.Status.Phase = phaseCreated
+	product.Status.Message = "Product created successfully"
+	if err := r.Status().Patch(ctx, &product, patch); err != nil {
 		logger.Error(err, "❌ Failed to patch APIMProduct status")
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// writeFailed records a failed APIM write: Backoff until the next attempt time, Stalled
+// after too many transient failures in a row, or Invalid when APIM rejected the request.
+// It returns the requeue the retry policy decided on and never the error itself, which
+// would put controller-runtime's own rate limiter back in charge.
+func (r *APIMProductReconciler) writeFailed(ctx context.Context, product *apimv1.APIMProduct, w *apimWrite, err error, step string) (ctrl.Result, error) {
+	patch := client.MergeFrom(product.DeepCopy())
+	out := w.failed(&product.Status.RetryStatus, err)
+	product.Status.ObservedGeneration = product.Generation
+	product.Status.Phase = out.Phase
+	// APIMProductStatus has no lastError, so the error itself goes into the message.
+	product.Status.Message = out.statusMessage(step, err)
+	if !product.DeletionTimestamp.IsZero() && out.Result.IsZero() {
+		// Stalled or Invalid while deleting holds the finalizer until someone acts; say how
+		// to let the resource go without touching APIM.
+		product.Status.Message += fmt.Sprintf("; or set spec.deletionPolicy to %s to delete the resource and keep the product",
+			apimv1.DeletionPolicyRetain)
+	}
+	if patchErr := r.Status().Patch(ctx, product, patch); patchErr != nil {
+		log.FromContext(ctx).Error(patchErr, "❌ Failed to patch APIMProduct status")
+	}
+	return out.Result, nil
 }
 
 // status patches only the status subresource so spec and metadata stay untouched.
@@ -205,13 +256,6 @@ func (r *APIMProductReconciler) releaseFinalizer(ctx context.Context, product *a
 	return ctrl.Result{}, nil
 }
 
-func (r *APIMProductReconciler) token(ctx context.Context, clientID, tenantID string) (string, error) {
-	if r.getToken != nil {
-		return r.getToken(ctx, clientID, tenantID)
-	}
-	return identity.GetManagementToken(ctx, clientID, tenantID)
-}
-
 func (r *APIMProductReconciler) upsert(ctx context.Context, cfg apim.APIMProductConfig) error {
 	if r.upsertProduct != nil {
 		return r.upsertProduct(ctx, cfg)
@@ -228,10 +272,14 @@ func (r *APIMProductReconciler) remove(ctx context.Context, cfg apim.APIMProduct
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *APIMProductReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.apiReader == nil {
+		r.apiReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&apimv1.APIMProduct{}).
 		WithEventFilter(predicate.And(logRetainedOnDelete(), specOrDeletionChanged())).
 		Named("apimproduct").
+		WithOptions(apimWriterOptions()).
 		Complete(r)
 }
 

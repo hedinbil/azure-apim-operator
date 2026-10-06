@@ -51,11 +51,19 @@ type APIMTagSpec struct {
 
 // APIMTagStatus defines the observed state of APIMTag.
 type APIMTagStatus struct {
-	// Phase indicates lifecycle state like "Created" or "Error"
+	// Phase indicates lifecycle state like "Created", "Error", "Backoff", "Stalled" or "Invalid"
 	Phase string `json:"phase,omitempty"`
 
 	// Message contains error details or status context
 	Message string `json:"message,omitempty"`
+
+	// ObservedGeneration is the metadata.generation the last APIM write was for. A spec
+	// change makes it differ, which clears the retry state.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// RetryStatus tracks backing off from failed APIM writes.
+	RetryStatus `json:",inline"`
 }
 
 // +kubebuilder:object:root=true
