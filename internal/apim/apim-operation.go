@@ -1,33 +1,17 @@
 // Package apim provides functions for interacting with Azure API Management (APIM) REST API.
-// This file covers APIM's asynchronous writes: a PUT that APIM accepts with 202 and keeps
-// working on, and the operation URL it hands back for the caller to poll.
+// This file reads an asynchronous APIM operation that a write left running when its wait
+// ended (see waitForAsyncImportCompletion), so the caller can keep waiting for it across
+// reconciles instead of sending another import on top of it.
 package apim
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 )
-
-// UpsertResult is APIM's answer to a PUT that creates, updates or imports an API.
-type UpsertResult struct {
-	// OperationURL is set when APIM accepted the request (202) and is still working on
-	// it. The API must not be written again until GetOperationState reports the
-	// operation finished: APIM does not refuse a second import of the same API, it runs
-	// it alongside the first, and on a single Developer unit a pile of large imports
-	// starves both the management endpoint and the gateway.
-	OperationURL string
-}
-
-// Pending reports whether APIM is still processing the request.
-func (r UpsertResult) Pending() bool {
-	return r.OperationURL != ""
-}
 
 // OperationStatus is the state of an asynchronous APIM operation.
 type OperationStatus string
@@ -37,7 +21,7 @@ const (
 	OperationRunning OperationStatus = "Running"
 	// OperationSucceeded means the operation completed.
 	OperationSucceeded OperationStatus = "Succeeded"
-	// OperationFailed means APIM gave up on the operation; OperationState.Detail says why.
+	// OperationFailed means APIM gave up on the operation; OperationState.Err says why.
 	OperationFailed OperationStatus = "Failed"
 	// OperationGone means APIM no longer knows the operation (404), for example because its
 	// result has expired. Whether it succeeded is unknown.
@@ -47,38 +31,24 @@ const (
 // OperationState is one reading of an asynchronous APIM operation.
 type OperationState struct {
 	Status OperationStatus
-	// Detail is APIM's response for a failed operation.
-	Detail string
+	// Err is why a failed operation failed: an *Error wrapping ErrAsyncOperationFailed for
+	// an operation result of Failed or Canceled, or the *Error of the poll answer.
+	Err error
 }
 
 // ErrNotOperationURL is returned for an operation URL that is not on Azure Resource Manager.
 var ErrNotOperationURL = errors.New("not an Azure Resource Manager URL")
 
-// IsOperationURL reports whether u is an https URL on the Azure Resource Manager host. It is
-// the only place an operation URL may point: polling sends the operator's ARM token there, and
-// a URL read back from a resource's status is not proof that APIM issued it.
+// IsOperationURL reports whether u is on the Azure Resource Manager endpoint this package
+// talks to. It is the only place an operation URL may point: polling sends the operator's
+// ARM token there, and a URL read back from a resource's status is not proof that APIM
+// issued it.
 func IsOperationURL(u string) bool {
 	parsed, err := url.Parse(u)
 	if err != nil {
 		return false
 	}
 	return parsed.Scheme+"://"+parsed.Host == armHost && parsed.User == nil
-}
-
-// asyncOperationURL returns where to poll a request APIM accepted with 202, or "" when APIM
-// gave no usable URL.
-func asyncOperationURL(resp *http.Response) string {
-	operationURL := strings.TrimSpace(resp.Header.Get("Azure-AsyncOperation"))
-	if operationURL == "" {
-		operationURL = strings.TrimSpace(resp.Header.Get("Location"))
-	}
-	if strings.HasPrefix(operationURL, "/") {
-		operationURL = armHost + operationURL
-	}
-	if !IsOperationURL(operationURL) {
-		return ""
-	}
-	return operationURL
 }
 
 // GetOperationState reads an asynchronous APIM operation once.
@@ -91,67 +61,71 @@ func GetOperationState(ctx context.Context, bearerToken, operationURL string) (O
 		return OperationState{}, fmt.Errorf("poll APIM operation %q: %w", operationURL, ErrNotOperationURL)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, operationURL, nil)
-	if err != nil {
-		return OperationState{}, fmt.Errorf("build APIM operation poll request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+bearerToken)
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return OperationState{}, fmt.Errorf("poll APIM operation: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return OperationState{}, fmt.Errorf("read APIM operation poll response: %w", err)
-	}
-
+	resp, err := armRequest{
+		operation: "import API (poll)",
+		method:    http.MethodGet,
+		url:       operationURL,
+		token:     bearerToken,
+	}.send(ctx)
 	switch {
-	case resp.StatusCode == http.StatusAccepted:
-		return OperationState{Status: OperationRunning}, nil
-	case resp.StatusCode == http.StatusNotFound:
+	case IsNotFound(err):
 		return OperationState{Status: OperationGone}, nil
-	case isTransientManagementError(resp.StatusCode, body):
-		return OperationState{}, fmt.Errorf("poll APIM operation: %s\n%s", resp.Status, string(body))
-	case resp.StatusCode >= 300:
-		return OperationState{Status: OperationFailed, Detail: fmt.Sprintf("%s\n%s", resp.Status, string(body))}, nil
+	case err != nil && isTransientPollError(err):
+		return OperationState{}, err
+	case err != nil:
+		return OperationState{Status: OperationFailed, Err: err}, nil
+	case resp.statusCode == http.StatusAccepted:
+		return OperationState{Status: OperationRunning}, nil
 	}
 
 	// A terminal HTTP status without a status field means the operation is done.
-	switch strings.ToLower(extractAsyncStatus(body)) {
+	status := extractAsyncStatus(resp.body)
+	switch strings.ToLower(status) {
 	case "succeeded", "success", "":
 		return OperationState{Status: OperationSucceeded}, nil
 	case "failed", "canceled", "cancelled":
-		return OperationState{Status: OperationFailed, Detail: string(body)}, nil
+		code, detailCode, message := parseARMError(resp.body)
+		return OperationState{Status: OperationFailed, Err: &Error{
+			Operation:  "import API",
+			Method:     http.MethodGet,
+			Code:       code,
+			DetailCode: detailCode,
+			Message:    strings.TrimSpace("operation status " + status + ": " + message),
+			Err:        ErrAsyncOperationFailed,
+		}}, nil
 	default:
 		return OperationState{Status: OperationRunning}, nil
 	}
 }
 
-// isTransientManagementError reports whether an error response says APIM's management plane
-// was unreachable or overloaded, rather than that the request or operation was wrong.
-func isTransientManagementError(statusCode int, body []byte) bool {
-	if statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError {
+// RunningOperation returns the URL of an asynchronous operation APIM accepted when err
+// says the wait for it ended without learning its outcome: the wait timed out, or a poll
+// failed without saying anything about the operation. Such an operation may still be
+// running, and importing again would run a second import alongside it. Any other error,
+// including a poll that failed for a reason about the operation itself, returns "".
+func RunningOperation(err error) string {
+	var apimErr *Error
+	if !errors.As(err, &apimErr) || apimErr.OperationURL == "" {
+		return ""
+	}
+	if errors.Is(err, ErrImportWaitTimeout) || isTransientPollError(apimErr) {
+		return apimErr.OperationURL
+	}
+	return ""
+}
+
+// isTransientPollError reports whether a failed poll says nothing about the operation:
+// the request did not get through, or APIM's management plane was throttled, overloaded
+// or unreachable. Every code here was seen while imports were still running in Sep 2026.
+func isTransientPollError(err error) bool {
+	var apimErr *Error
+	if !errors.As(err, &apimErr) {
 		return true
 	}
-	if statusCode != http.StatusConflict && statusCode != http.StatusUnprocessableEntity {
-		return false
+	if apimErr.StatusCode == http.StatusTooManyRequests || apimErr.StatusCode >= http.StatusInternalServerError {
+		return true
 	}
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
-	}
-	switch payload.Error.Code {
+	switch apimErr.Code {
 	case "ManagementApiRequestFailed", "Timeout":
 		return true
 	}

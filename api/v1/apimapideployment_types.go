@@ -70,7 +70,9 @@ type APIMAPIDeploymentSpec struct {
 // This status tracks the deployment progress and result.
 type APIMAPIDeploymentStatus struct {
 	// Phase indicates the current reconciliation phase.
-	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, and Error.
+	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, Error,
+	// Backoff (a failed write waits for nextAttemptAt), Stalled (five transient failures in
+	// a row) and Invalid (APIM rejected the request).
 	Phase string `json:"phase,omitempty"`
 	// Message describes the current reconciliation state in a human-readable way.
 	Message string `json:"message,omitempty"`
@@ -92,9 +94,11 @@ type APIMAPIDeploymentStatus struct {
 	ImportedAt string `json:"importedAt,omitempty"`
 	// Status indicates the current deployment status (e.g., "OK", "Error").
 	Status string `json:"status,omitempty"`
-	// PendingImport is an import APIM accepted and had not finished at the last
-	// reconcile. While it is set the operator polls it and does not write the API
-	// again, so an API never has two imports running in APIM at once.
+	// RetryStatus tracks backing off from failed APIM writes.
+	RetryStatus `json:",inline"`
+	// PendingImport is an import APIM accepted and had not finished when the operator
+	// stopped waiting for it. While it is set the operator polls it and does not write
+	// the API again, so an API never has two imports running in APIM at once.
 	PendingImport *APIMPendingImport `json:"pendingImport,omitempty"`
 }
 

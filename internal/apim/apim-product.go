@@ -3,11 +3,9 @@
 package apim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -47,42 +45,28 @@ func UpsertProduct(ctx context.Context, config APIMProductConfig) error {
 		return fmt.Errorf("failed to marshal product body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, productURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("failed to build product creation request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("If-Match", "*")
-
 	logger.Info("📦 Creating or updating product",
 		"productId", config.ProductID,
 		"url", productURL,
 	)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := armRequest{
+		operation:   "upsert product " + config.ProductID,
+		method:      http.MethodPut,
+		url:         productURL,
+		token:       config.BearerToken,
+		body:        bodyBytes,
+		contentType: contentTypeJSON,
+		ifMatch:     "*",
+	}.send(ctx)
 	if err != nil {
-		return fmt.Errorf("product creation request failed: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
-		}
-	}()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to create product",
-			"status", resp.Status,
-			"body", string(body),
-		)
-		return fmt.Errorf("failed to create product: %s\n%s", resp.Status, string(body))
+		logger.Error(err, "❌ Failed to create product", "productId", config.ProductID)
+		return err
 	}
 
 	logger.Info("✅ Product created or already exists",
 		"productId", config.ProductID,
-		"status", resp.Status,
+		"status", resp.status,
 	)
 
 	return nil
@@ -104,48 +88,32 @@ func DeleteProduct(ctx context.Context, config APIMProductConfig) error {
 	productURL := withQuery(serviceURL(
 		config, "products", config.ProductID), "deleteSubscriptions", "true")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, productURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to build product deletion request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-	req.Header.Set("If-Match", "*")
-
 	logger.Info("🗑️ Deleting product",
 		"productId", config.ProductID,
 		"url", productURL,
 	)
 
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("product deletion request failed: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.Error(closeErr, "⚠️ Failed to close response body")
-		}
-	}()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == 404 {
+	resp, err := armRequest{
+		operation: "delete product " + config.ProductID,
+		method:    http.MethodDelete,
+		url:       productURL,
+		token:     config.BearerToken,
+		ifMatch:   "*",
+	}.send(ctx)
+	if IsNotFound(err) {
 		logger.Info("ℹ️ Product not found, already deleted",
 			"productId", config.ProductID,
 		)
 		return nil // Product doesn't exist, consider deletion successful
 	}
-
-	if resp.StatusCode >= 300 {
-		logger.Error(fmt.Errorf("status code: %d", resp.StatusCode), "❌ Failed to delete product",
-			"status", resp.Status,
-			"body", string(body),
-		)
-		return fmt.Errorf("failed to delete product: %s\n%s", resp.Status, string(body))
+	if err != nil {
+		logger.Error(err, "❌ Failed to delete product", "productId", config.ProductID)
+		return err
 	}
 
 	logger.Info("✅ Product deleted successfully",
 		"productId", config.ProductID,
-		"status", resp.Status,
+		"status", resp.status,
 	)
 
 	return nil
@@ -166,32 +134,20 @@ func AssignProductsToAPI(ctx context.Context, config APIMDeploymentConfig) error
 		productAssignURL := serviceURL(
 			config, "products", productID, "apis", config.APIID)
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, productAssignURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to build product assign request for %s: %w", productID, err)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
-
 		logger.Info("📦 Assigning API to product",
 			"apiID", config.APIID,
 			"productID", productID,
 			"url", productAssignURL,
 		)
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("product assign request failed for %s: %w", productID, err)
-		}
-		defer func() {
-			if closeErr := resp.Body.Close(); closeErr != nil {
-				logger.Error(closeErr, "⚠️ Failed to close response body", "apiID", config.APIID, "productID", productID)
-			}
-		}()
-
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode >= 300 {
-			return fmt.Errorf("assigning API to product %s failed: %s\n%s", productID, resp.Status, string(body))
+		if _, err := (armRequest{
+			operation: "assign API to product " + productID,
+			method:    http.MethodPut,
+			url:       productAssignURL,
+			token:     config.BearerToken,
+			dependent: true,
+		}).send(ctx); err != nil {
+			return err
 		}
 
 		logger.Info("✅ API successfully assigned to product",

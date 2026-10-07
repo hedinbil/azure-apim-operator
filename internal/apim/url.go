@@ -15,8 +15,20 @@ var httpClient = http.DefaultClient
 // request in this package targets.
 const apiVersion = "2021-08-01"
 
-// armHost is the Azure Resource Manager endpoint.
-const armHost = "https://management.azure.com"
+// armHost is the Azure Resource Manager endpoint. A variable so a test can point the
+// package at an httptest server standing in for ARM (see UseEndpoint).
+var armHost = "https://management.azure.com"
+
+// UseEndpoint points every ARM call in this package at host (scheme and authority, no
+// trailing slash) through client, and returns a func that restores the previous values.
+// It exists for tests in other packages, which run the whole write path against an
+// httptest server; production code never calls it. Not safe to call while requests are
+// in flight.
+func UseEndpoint(host string, client *http.Client) (restore func()) {
+	previousHost, previousClient := armHost, httpClient
+	armHost, httpClient = host, client
+	return func() { armHost, httpClient = previousHost, previousClient }
+}
 
 // serviceScope identifies one API Management instance. Every config type in
 // this package satisfies it, which is what lets the URL builders below be

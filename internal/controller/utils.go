@@ -67,8 +67,9 @@ func missingAPIMServiceMessage(name, namespace string) string {
 	return fmt.Sprintf("APIMService %q not found in namespace %s", name, namespace)
 }
 
-// specOrDeletionChanged reconciles on create, on spec changes (which bump the generation)
-// and when a deletion starts; status-only updates are ignored.
+// specOrDeletionChanged reconciles on create, on spec changes (which bump the generation),
+// when a deletion starts and when the apim.operator.io/retry annotation is added or set
+// to a new value; status-only updates are ignored.
 func specOrDeletionChanged() predicate.Predicate {
 	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{
 		CreateFunc:  func(event.CreateEvent) bool { return false },
@@ -78,7 +79,18 @@ func specOrDeletionChanged() predicate.Predicate {
 			if e.ObjectOld == nil || e.ObjectNew == nil {
 				return false
 			}
-			return e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero()
+			return e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero() ||
+				retryAnnotationChanged(e)
 		},
 	})
+}
+
+// retryAnnotationChanged reports whether an update changed the apim.operator.io/retry
+// annotation. A metadata-only change does not bump the generation, so without this the
+// annotation would never reach Reconcile.
+func retryAnnotationChanged(e event.UpdateEvent) bool {
+	if e.ObjectOld == nil || e.ObjectNew == nil {
+		return false
+	}
+	return e.ObjectOld.GetAnnotations()[retryAnnotation] != e.ObjectNew.GetAnnotations()[retryAnnotation]
 }

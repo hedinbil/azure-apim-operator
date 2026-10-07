@@ -3,52 +3,10 @@ package apim
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
+	"time"
 )
-
-// cannedResponse is one answer from a scriptedTransport.
-type cannedResponse struct {
-	status int
-	header http.Header
-	body   string
-}
-
-// scriptedTransport stands in for ARM across several requests: it answers each
-// request with the next canned response and records every request it saw.
-type scriptedTransport struct {
-	responses []cannedResponse
-	requests  []*http.Request
-}
-
-func (st *scriptedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	st.requests = append(st.requests, req)
-	if len(st.requests) > len(st.responses) {
-		return nil, fmt.Errorf("unexpected request %d: %s %s", len(st.requests), req.Method, req.URL)
-	}
-	canned := st.responses[len(st.requests)-1]
-	header := canned.header
-	if header == nil {
-		header = http.Header{}
-	}
-	return &http.Response{
-		StatusCode: canned.status,
-		Status:     fmt.Sprintf("%d %s", canned.status, http.StatusText(canned.status)),
-		Body:       io.NopCloser(strings.NewReader(canned.body)),
-		Header:     header,
-		Request:    req,
-	}, nil
-}
-
-// headerWith builds a response header the way net/http reads it back.
-func headerWith(key, value string) http.Header {
-	header := http.Header{}
-	header.Set(key, value)
-	return header
-}
 
 // failingTransport fails every request, as a dropped connection does.
 type failingTransport struct{}
@@ -57,167 +15,134 @@ func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("connection reset by peer")
 }
 
-const testOperationURL = "https://management.azure.com/subscriptions/sub-1/resourceGroups/rg-1" +
-	"/providers/Microsoft.ApiManagement/service/apim-1/operationresults/op-1?api-version=2021-08-01"
+// TestImportStillRunningCarriesItsOperation pins the fix for the Sep 2026 incident: the
+// wait for an import APIM is still running ends with the operation URL, so the controller
+// can keep waiting for that import instead of starting another one alongside it.
+func TestImportStillRunningCarriesItsOperation(t *testing.T) {
+	withAsyncTiming(t, 40*time.Millisecond, 5*time.Millisecond)
+	asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/running"}}, func(_ int, w http.ResponseWriter) {
+		writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
+	})
 
-func deploymentConfig() APIMDeploymentConfig {
-	return APIMDeploymentConfig{
-		SubscriptionID: "sub-1", ResourceGroup: "rg-1", ServiceName: "apim-1",
-		APIID: "api-1", RoutePrefix: "/api", BearerToken: "tok",
+	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+	if !errors.Is(err, ErrImportWaitTimeout) {
+		t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
+	}
+	if got, want := RunningOperation(err), hcUnroutableHost+"/operations/running"; got != want {
+		t.Errorf("RunningOperation = %q, want %q", got, want)
 	}
 }
 
-// apiNotFound answers the If-Match lookup that precedes every import.
-var apiNotFound = cannedResponse{status: http.StatusNotFound}
-
-// TestImportReturnsTheOperationAPIMIsStillRunning pins the fix for the 2026-09
-// incident: an import APIM accepts with 202 is handed back to the caller to
-// track, not waited on and then abandoned, so nothing imports on top of it.
-func TestImportReturnsTheOperationAPIMIsStillRunning(t *testing.T) {
-	st := &scriptedTransport{responses: []cannedResponse{
-		apiNotFound,
-		{status: http.StatusAccepted, header: headerWith("Azure-AsyncOperation", testOperationURL)},
-	}}
-	withTransport(t, st)
-
-	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if err != nil {
-		t.Fatalf("ImportOpenAPIDefinitionToAPIM() error = %v", err)
+// TestFailedPollLeavesTheOperationRunning: a poll the management endpoint fails says
+// nothing about the import, which may well still be running. The answers are the ones
+// apim-apim-dev-hedinit gave while imports were still running in Sep 2026.
+func TestFailedPollLeavesTheOperationRunning(t *testing.T) {
+	answers := map[string]struct {
+		status int
+		body   string
+	}{
+		"management endpoint timed out":   {http.StatusUnprocessableEntity, `{"error":{"code":"Timeout","message":"Call to Management API timed out"}}`},
+		"management endpoint unreachable": {http.StatusConflict, `{"error":{"code":"ManagementApiRequestFailed"}}`},
+		"throttled":                       {http.StatusTooManyRequests, ``},
+		"server error":                    {http.StatusServiceUnavailable, ``},
 	}
-	if !result.Pending() || result.OperationURL != testOperationURL {
-		t.Errorf("result = %+v, want pending on %s", result, testOperationURL)
-	}
-	if len(st.requests) != 2 || st.requests[1].Method != http.MethodPut {
-		t.Fatalf("requests = %d, want the lookup and the PUT and no polling", len(st.requests))
-	}
-	if got := st.requests[1].Header.Get("If-Match"); got != "*" {
-		t.Errorf("If-Match = %q, want * for an API that does not exist yet", got)
-	}
-}
-
-func TestImportResolvesARelativeLocationAgainstARM(t *testing.T) {
-	relative := strings.TrimPrefix(testOperationURL, armHost)
-	withTransport(t, &scriptedTransport{responses: []cannedResponse{
-		apiNotFound,
-		{status: http.StatusAccepted, header: headerWith("Location", relative)},
-	}})
-
-	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if err != nil {
-		t.Fatalf("ImportOpenAPIDefinitionToAPIM() error = %v", err)
-	}
-	if result.OperationURL != testOperationURL {
-		t.Errorf("OperationURL = %q, want %q", result.OperationURL, testOperationURL)
-	}
-}
-
-// TestImportIsDoneWhenAPIMGivesNoUsableOperationURL keeps the old behaviour for a
-// 202 that cannot be tracked, and never keeps a URL off ARM: it would later get
-// the operator's ARM token.
-func TestImportIsDoneWhenAPIMGivesNoUsableOperationURL(t *testing.T) {
-	for name, header := range map[string]http.Header{
-		"no header":     {},
-		"not ARM":       headerWith("Location", "https://attacker.example/operationresults/op-1"),
-		"plain http":    headerWith("Location", strings.Replace(testOperationURL, "https://", "http://", 1)),
-		"lookalike ARM": headerWith("Location", "https://management.azure.com.attacker.example/op-1"),
-	} {
+	for name, answer := range answers {
 		t.Run(name, func(t *testing.T) {
-			st := &scriptedTransport{responses: []cannedResponse{apiNotFound, {status: http.StatusAccepted, header: header}}}
-			withTransport(t, st)
+			withAsyncTiming(t, 2*time.Second, time.Millisecond)
+			asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/unreadable"}}, func(_ int, w http.ResponseWriter) {
+				writeJSON(w, answer.status, answer.body)
+			})
 
-			result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-			if err != nil {
-				t.Fatalf("ImportOpenAPIDefinitionToAPIM() error = %v", err)
+			err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+			if err == nil {
+				t.Fatal("import = nil, want the failed poll")
 			}
-			if result.Pending() {
-				t.Errorf("result = %+v, want not pending", result)
-			}
-			if len(st.requests) != 2 {
-				t.Errorf("requests = %d, want 2", len(st.requests))
+			if got, want := RunningOperation(err), hcUnroutableHost+"/operations/unreadable"; got != want {
+				t.Errorf("RunningOperation(%v) = %q, want %q", err, got, want)
 			}
 		})
 	}
 }
 
-func TestImportIsDoneWhenAPIMAnswersSynchronously(t *testing.T) {
-	withTransport(t, &scriptedTransport{responses: []cannedResponse{apiNotFound, {status: http.StatusCreated}}})
-
-	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if err != nil {
-		t.Fatalf("ImportOpenAPIDefinitionToAPIM() error = %v", err)
+// TestFailedPollAboutTheOperationEndsIt: an answer about the operation itself is no
+// reason to keep waiting for it.
+func TestFailedPollAboutTheOperationEndsIt(t *testing.T) {
+	answers := map[string]struct {
+		status int
+		body   string
+	}{
+		"rejected":  {http.StatusBadRequest, `{"error":{"code":"ValidationError"}}`},
+		"forgotten": {http.StatusNotFound, `{"error":{"code":"ResourceNotFound"}}`},
+		"failed":    {http.StatusOK, `{"status":"Failed","error":{"code":"InternalServerError"}}`},
 	}
-	if result.Pending() {
-		t.Errorf("result = %+v, want not pending", result)
+	for name, answer := range answers {
+		t.Run(name, func(t *testing.T) {
+			withAsyncTiming(t, 2*time.Second, time.Millisecond)
+			asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/ended"}}, func(_ int, w http.ResponseWriter) {
+				writeJSON(w, answer.status, answer.body)
+			})
+
+			err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+			if err == nil {
+				t.Fatal("import = nil, want an error")
+			}
+			if got := RunningOperation(err); got != "" {
+				t.Errorf("RunningOperation(%v) = %q, want \"\"", err, got)
+			}
+		})
 	}
 }
 
-func TestImportReportsAnAPIMError(t *testing.T) {
-	withTransport(t, &scriptedTransport{responses: []cannedResponse{
-		apiNotFound,
-		{status: http.StatusBadRequest, body: `{"error":{"code":"ValidationError"}}`},
-	}})
-
-	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if err == nil || !strings.Contains(err.Error(), "ValidationError") {
-		t.Fatalf("ImportOpenAPIDefinitionToAPIM() error = %v, want APIM's ValidationError", err)
-	}
-	if result.Pending() {
-		t.Errorf("result = %+v, want not pending", result)
+func TestRunningOperationIgnoresOtherErrors(t *testing.T) {
+	for name, err := range map[string]error{
+		"nil":                        nil,
+		"plain":                      errors.New("boom"),
+		"typed without an operation": &Error{Operation: "import API", StatusCode: http.StatusServiceUnavailable},
+		"rejected write":             &Error{Operation: "import API", StatusCode: http.StatusBadRequest, OperationURL: hcUnroutableHost + "/operations/x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := RunningOperation(err); got != "" {
+				t.Errorf("RunningOperation = %q, want \"\"", got)
+			}
+		})
 	}
 }
 
-// TestGetOperationStateClassifiesAPIMAnswers covers what a poll can say. The 409
-// and 422 bodies are the ones apim-apim-dev-hedinit returned while imports were
-// still running: they describe the management endpoint, not the import.
+// TestGetOperationStateClassifiesAPIMAnswers covers what a poll of a pending import can
+// say. A failed reading comes back as an error, not as a failed operation.
 func TestGetOperationStateClassifiesAPIMAnswers(t *testing.T) {
 	tests := []struct {
-		name       string
-		response   cannedResponse
-		want       OperationStatus
-		wantErr    bool
-		wantDetail string
+		name     string
+		status   int
+		body     string
+		want     OperationStatus
+		wantErr  bool
+		wantCode string
 	}{
-		{name: "accepted", response: cannedResponse{status: http.StatusAccepted}, want: OperationRunning},
-		{name: "in progress", response: cannedResponse{status: http.StatusOK, body: `{"status":"InProgress"}`}, want: OperationRunning},
-		{name: "succeeded", response: cannedResponse{status: http.StatusOK, body: `{"status":"Succeeded"}`}, want: OperationSucceeded},
-		{name: "done without status", response: cannedResponse{status: http.StatusOK}, want: OperationSucceeded},
+		{name: "accepted", status: http.StatusAccepted, want: OperationRunning},
+		{name: "in progress", status: http.StatusOK, body: `{"status":"InProgress"}`, want: OperationRunning},
+		{name: "succeeded", status: http.StatusOK, body: `{"status":"Succeeded"}`, want: OperationSucceeded},
+		{name: "done without status", status: http.StatusOK, body: `{}`, want: OperationSucceeded},
+		{name: "provisioning state", status: http.StatusOK, body: `{"properties":{"provisioningState":"Succeeded"}}`, want: OperationSucceeded},
 		{
-			name:     "provisioning state",
-			response: cannedResponse{status: http.StatusOK, body: `{"properties":{"provisioningState":"Succeeded"}}`},
-			want:     OperationSucceeded,
+			name: "failed", status: http.StatusOK,
+			body: `{"status":"Failed","error":{"code":"InternalServerError","message":"DeadOperationMonitor"}}`,
+			want: OperationFailed, wantCode: "InternalServerError",
 		},
-		{
-			name:       "failed",
-			response:   cannedResponse{status: http.StatusOK, body: `{"status":"Failed","error":{"code":"InternalServerError"}}`},
-			want:       OperationFailed,
-			wantDetail: "InternalServerError",
-		},
-		{name: "forgotten", response: cannedResponse{status: http.StatusNotFound}, want: OperationGone},
-		{
-			name:       "rejected",
-			response:   cannedResponse{status: http.StatusBadRequest, body: `{"error":{"code":"ValidationError"}}`},
-			want:       OperationFailed,
-			wantDetail: "ValidationError",
-		},
-		{
-			name:     "management endpoint timed out",
-			response: cannedResponse{status: http.StatusUnprocessableEntity, body: `{"error":{"code":"Timeout","message":"Call to Management API timed out"}}`},
-			wantErr:  true,
-		},
-		{
-			name:     "management endpoint unreachable",
-			response: cannedResponse{status: http.StatusConflict, body: `{"error":{"code":"ManagementApiRequestFailed"}}`},
-			wantErr:  true,
-		},
-		{name: "throttled", response: cannedResponse{status: http.StatusTooManyRequests}, wantErr: true},
-		{name: "server error", response: cannedResponse{status: http.StatusServiceUnavailable}, wantErr: true},
+		{name: "forgotten", status: http.StatusNotFound, body: `{"error":{"code":"ResourceNotFound"}}`, want: OperationGone},
+		{name: "rejected", status: http.StatusBadRequest, body: `{"error":{"code":"ValidationError"}}`, want: OperationFailed, wantCode: "ValidationError"},
+		{name: "management endpoint timed out", status: http.StatusUnprocessableEntity, body: `{"error":{"code":"Timeout"}}`, wantErr: true},
+		{name: "management endpoint unreachable", status: http.StatusConflict, body: `{"error":{"code":"ManagementApiRequestFailed"}}`, wantErr: true},
+		{name: "throttled", status: http.StatusTooManyRequests, wantErr: true},
+		{name: "server error", status: http.StatusServiceUnavailable, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			st := &scriptedTransport{responses: []cannedResponse{tt.response}}
-			withTransport(t, st)
+			fake := newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, tt.status, tt.body)
+			})
 
-			state, err := GetOperationState(context.Background(), "tok", testOperationURL)
+			state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/op-1?api-version=2021-08-01")
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("GetOperationState() = %+v, want an error", state)
@@ -230,48 +155,55 @@ func TestGetOperationStateClassifiesAPIMAnswers(t *testing.T) {
 			if state.Status != tt.want {
 				t.Errorf("Status = %s, want %s", state.Status, tt.want)
 			}
-			if !strings.Contains(state.Detail, tt.wantDetail) {
-				t.Errorf("Detail = %q, want it to contain %q", state.Detail, tt.wantDetail)
+			if tt.wantCode != "" {
+				var apimErr *Error
+				if !errors.As(state.Err, &apimErr) || apimErr.Code != tt.wantCode {
+					t.Errorf("Err = %v, want an *Error with code %s", state.Err, tt.wantCode)
+				}
 			}
-			if got := st.requests[0].Header.Get("Authorization"); got != "Bearer tok" {
+			if got := fake.count(); got != 1 {
+				t.Fatalf("requests = %d, want 1", got)
+			}
+			req := fake.request(0)
+			if req.Method != http.MethodGet || req.URL.Path != "/operations/op-1" {
+				t.Errorf("polled %s %s, want GET /operations/op-1", req.Method, req.URL.Path)
+			}
+			if got := req.Header.Get("Authorization"); got != "Bearer tok" {
 				t.Errorf("Authorization = %q, want the bearer token", got)
-			}
-			if got := st.requests[0].URL.String(); got != testOperationURL {
-				t.Errorf("polled %s, want %s", got, testOperationURL)
 			}
 		})
 	}
 }
 
 func TestGetOperationStateReportsAFailedRequestAsAnError(t *testing.T) {
-	withTransport(t, failingTransport{})
+	t.Cleanup(UseEndpoint(hcUnroutableHost, &http.Client{Transport: failingTransport{}}))
 
-	if state, err := GetOperationState(context.Background(), "tok", testOperationURL); err == nil {
+	if state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/op-1"); err == nil {
 		t.Fatalf("GetOperationState() = %+v, want an error", state)
 	}
 }
 
-// TestGetOperationStateSendsTheTokenOnlyToARM: the URL may come from a resource's
-// status, which is not proof that APIM issued it.
+// TestGetOperationStateSendsTheTokenOnlyToARM: the URL of a pending import is read back
+// from a resource's status, which is not proof that APIM issued it.
 func TestGetOperationStateSendsTheTokenOnlyToARM(t *testing.T) {
+	fake := newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, `{"status":"Succeeded"}`)
+	})
 	for _, operationURL := range []string{
-		"https://attacker.example/operationresults/op-1",
-		strings.Replace(testOperationURL, "https://", "http://", 1),
-		"https://management.azure.com.attacker.example/op-1",
-		"https://user@management.azure.com/op-1",
+		"https://attacker.example/operations/op-1",
+		// Reachable, but not the ARM endpoint the package is configured for.
+		fake.server.URL + "/operations/op-1",
+		"http://arm.invalid.attacker.example/operations/op-1",
+		"http://user@arm.invalid/operations/op-1",
 		"",
 	} {
 		t.Run(operationURL, func(t *testing.T) {
-			st := &scriptedTransport{}
-			withTransport(t, st)
-
-			_, err := GetOperationState(context.Background(), "tok", operationURL)
-			if !errors.Is(err, ErrNotOperationURL) {
+			if _, err := GetOperationState(context.Background(), "tok", operationURL); !errors.Is(err, ErrNotOperationURL) {
 				t.Errorf("GetOperationState() error = %v, want ErrNotOperationURL", err)
 			}
-			if len(st.requests) != 0 {
-				t.Errorf("sent %d requests, want none", len(st.requests))
-			}
 		})
+	}
+	if got := fake.count(); got != 0 {
+		t.Errorf("sent %d requests, want none", got)
 	}
 }

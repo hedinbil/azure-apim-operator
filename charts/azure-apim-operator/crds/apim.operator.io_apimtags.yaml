@@ -74,11 +74,37 @@ spec:
           status:
             description: APIMTagStatus defines the observed state of APIMTag.
             properties:
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures counts the failed APIM writes in a row since the last success,
+                  spec change or retry annotation.
+                format: int32
+                minimum: 0
+                type: integer
+              lastRetryAnnotation:
+                description: |-
+                  LastRetryAnnotation is the value of the apim.operator.io/retry annotation the
+                  operator last acted on. Setting the annotation to any other value clears the
+                  failure count and retries at once.
+                type: string
               message:
                 description: Message contains error details or status context
                 type: string
+              nextAttemptAt:
+                description: |-
+                  NextAttemptAt is the earliest time (RFC3339) the operator writes to APIM again.
+                  Empty when no retry is scheduled: the last write succeeded, or the resource is
+                  Stalled or Invalid.
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the metadata.generation the last APIM write was for. A spec
+                  change makes it differ, which clears the retry state.
+                format: int64
+                type: integer
               phase:
-                description: Phase indicates lifecycle state like "Created" or "Error"
+                description: Phase indicates lifecycle state like "Created", "Error",
+                  "Backoff", "Stalled" or "Invalid"
                 type: string
             type: object
         type: object

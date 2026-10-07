@@ -4,7 +4,6 @@
 package apim
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,30 +18,21 @@ var defaultWebSocketProtocols = []string{"wss"}
 
 // UpsertWebSocketAPI creates or updates a WebSocket API in Azure APIM from the config
 // alone. It is the websocket counterpart of ImportOpenAPIDefinitionToAPIM: same URL,
-// same If-Match handling, same pending result for a 202, but a JSON body with type
-// "websocket" instead of an OpenAPI import.
-func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) (UpsertResult, error) {
+// same If-Match handling, same async completion, but a JSON body with type "websocket"
+// instead of an OpenAPI import.
+func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) error {
 	etag := ifMatchForUpsert(ctx, apimParams)
 
 	body, err := webSocketAPIBody(apimParams)
 	if err != nil {
-		return UpsertResult{}, err
+		return err
 	}
 
 	upsertURL := revisionURL(apimParams, apimParams.APIID, apimParams.Revision)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, upsertURL, bytes.NewReader(body))
-	if err != nil {
-		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
-		return UpsertResult{}, fmt.Errorf("failed to build request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apimParams.BearerToken)
-	req.Header.Set("If-Match", etag)
 
 	logger.Info("📤 Sending WebSocket API request to APIM",
-		"method", req.Method,
-		"url", req.URL.String(),
+		"method", http.MethodPut,
+		"url", upsertURL,
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
 		"serviceUrl", apimParams.ServiceURL,
@@ -50,7 +40,15 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) (U
 		"ifMatch", etag,
 	)
 
-	return doAPIUpsert(apimParams, req, "created WebSocket API in")
+	return doAPIUpsert(ctx, apimParams, armRequest{
+		operation:   "upsert WebSocket API",
+		method:      http.MethodPut,
+		url:         upsertURL,
+		token:       apimParams.BearerToken,
+		body:        body,
+		contentType: contentTypeJSON,
+		ifMatch:     etag,
+	}, "created WebSocket API in")
 }
 
 // webSocketAPIBody is the PUT body for a websocket API. Kept separate from the

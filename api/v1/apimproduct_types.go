@@ -31,8 +31,14 @@ type APIMProductSpec struct {
 
 // APIMProductStatus defines the observed state
 type APIMProductStatus struct {
-	Phase   string `json:"phase,omitempty"`   // Status phase (e.g. Created, Error)
+	Phase   string `json:"phase,omitempty"`   // Status phase (e.g. Created, Error, Backoff, Stalled, Invalid)
 	Message string `json:"message,omitempty"` // Status message or error description
+	// ObservedGeneration is the metadata.generation the last APIM write was for. A spec
+	// change makes it differ, which clears the retry state.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// RetryStatus tracks backing off from failed APIM writes.
+	RetryStatus `json:",inline"`
 }
 
 // +kubebuilder:object:root=true

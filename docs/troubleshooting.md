@@ -254,7 +254,7 @@ kubectl rollout restart deployment/<name> -n <namespace>
 
 **Symptoms:** An `APIMAPIDeployment` stays in phase `Importing` with a message like `APIM is still importing the definition it accepted at ...`, and `status.pendingImport` is set.
 
-**Cause:** APIM accepted the import (`202`) and is still running it. Large OpenAPI documents take minutes, much longer on a busy Developer-tier instance. The operator polls the operation every 15 seconds and deliberately does not send another import until this one finishes: APIM runs a second import alongside the first rather than refusing it, and piled-up imports can saturate a single-unit instance and slow every API on its gateway.
+**Cause:** APIM accepted the import (`202`) and is still running it. Large OpenAPI documents take minutes, much longer on a busy Developer-tier instance. The operator reads the operation (every 15 seconds at first, then every half of its age, at most every 15 minutes) and deliberately does not send another import until this one ends: APIM runs a second import alongside the first rather than refusing it, and piled-up imports can saturate a single-unit instance and slow every API on its gateway. A `nextAttemptAt` in the past next to it is left from a failure before this import; it is due, not a wait.
 
 **Diagnosis:**
 
@@ -268,7 +268,7 @@ az rest --method get --url "<status.pendingImport.operationUrl>"
 
 A `lastError` mentioning `ManagementApiRequestFailed` or `Timeout` means APIM's management endpoint did not answer the poll, not that the import failed; the operator keeps waiting.
 
-**Resolution:** Usually none: the operator continues as soon as APIM reports a result, and treats an import still running after two hours as lost. To start over sooner, first confirm in the APIM activity log that no import of the API is running, then clear the field:
+**Resolution:** Usually none: the operator continues as soon as APIM reports a result. An import that fails, or is still running after two hours, counts as a failed write (Backoff, then Stalled after five in a row). To start over sooner, first confirm in the APIM activity log that no import of the API is running, then clear the field:
 
 ```bash
 kubectl patch apimapideployment <name> -n <namespace> --subresource=status --type=merge -p '{"status":{"pendingImport":null}}'
