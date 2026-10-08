@@ -278,7 +278,10 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	if deployment.Status.AppliedHash == desiredHash {
+	// An import APIM is still running may change the API after this point, so the
+	// applied hash only proves the API is in sync when no import is pending.
+	pending := deployment.Status.PendingImport
+	if pending == nil && deployment.Status.AppliedHash == desiredHash {
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
 			status.Phase = apimDeploymentPhaseSucceeded
 			status.Status = "OK"
@@ -326,21 +329,25 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return result, nil
 	}
 
-	if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
-		status.Phase = apimDeploymentPhaseImporting
-		status.Status = apimDeploymentStatusPending
-		status.Message = "Reconciling desired API state in APIM"
-		status.LastError = ""
-		status.LastAttemptAt = attemptTime
-		status.ObservedGeneration = apimApi.Generation
-		status.MatchedReplicaSets = matchedReplicaSetNames
-		status.OpenAPIHash = openAPIHash
-		status.DesiredHash = desiredHash
-		// Persist the reset together with the new desired hash, so a crash mid-import
-		// cannot leave failures of the old state counting against the new one.
-		w.prepare(&status.RetryStatus)
-	}); statusErr != nil {
-		return ctrl.Result{}, statusErr
+	// A deployment waiting for an import APIM is still running writes its status once
+	// it knows how that import stands, below; the same reset goes with it.
+	if pending == nil {
+		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+			status.Phase = apimDeploymentPhaseImporting
+			status.Status = apimDeploymentStatusPending
+			status.Message = "Reconciling desired API state in APIM"
+			status.LastError = ""
+			status.LastAttemptAt = attemptTime
+			status.ObservedGeneration = apimApi.Generation
+			status.MatchedReplicaSets = matchedReplicaSetNames
+			status.OpenAPIHash = openAPIHash
+			status.DesiredHash = desiredHash
+			// Persist the reset together with the new desired hash, so a crash mid-import
+			// cannot leave failures of the old state counting against the new one.
+			w.prepare(&status.RetryStatus)
+		}); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 	}
 
 	// failWrite records a failed APIM call through the shared retry handling: Backoff
@@ -349,8 +356,9 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// what Reconcile returns; the error itself is never handed back, which would put
 	// controller-runtime's rate limiter back in charge of the retries. A failing status
 	// patch is logged for the same reason: the failure count is lost for this attempt,
-	// but the requeue still waits out its backoff instead of re-importing at once.
-	failWrite := func(step string, err error) (ctrl.Result, error) {
+	// but the requeue still waits out its backoff instead of re-importing at once. also
+	// lets a caller change more of the status in the same patch.
+	failWrite := func(step string, err error, also ...func(*apimv1.APIMAPIDeploymentStatus)) (ctrl.Result, error) {
 		var out writeOutcome
 		if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
 			out = w.failed(&status.RetryStatus, err)
@@ -363,6 +371,9 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			status.MatchedReplicaSets = matchedReplicaSetNames
 			status.OpenAPIHash = openAPIHash
 			status.DesiredHash = desiredHash
+			for _, mutate := range also {
+				mutate(status)
+			}
 		}); statusErr != nil {
 			logger.Error(statusErr, "❌ Failed to patch APIMAPIDeployment status", "apiID", deployment.Spec.APIID)
 		}
@@ -443,21 +454,86 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	)
 
 	// Step 4: Create or update the API in Azure APIM. An HTTP API is imported from the
-	// OpenAPI document; a websocket API is created from the spec alone.
+	// OpenAPI document; a websocket API is created from the spec alone. A write APIM
+	// accepted and was still running when the last wait ended is waited for first: the
+	// API is never written while APIM is still working on the previous write (see
+	// apimapideployment_pending.go).
 	upsertMessage := "Failed to import API into APIM"
 	if isWebSocket {
 		upsertMessage = "Failed to create WebSocket API in APIM"
-		w.starting("step", "upsert websocket API")
-		err = apim.UpsertWebSocketAPI(ctx, config)
-	} else {
-		w.starting("step", "import API", "bytes", len(openApiContent))
-		err = apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent)
 	}
-	if err != nil {
-		logger.Error(err, "🚫 Failed to create or update API", "apiID", deployment.Spec.APIID, "type", config.Type)
-		return failWrite(upsertMessage, err)
+	writeAPI := true
+	if pending != nil {
+		outcome := checkPendingImport(ctx, pending, desiredHash, w.policy.Now(), func(ctx context.Context, operationURL string) (apim.OperationState, error) {
+			return apim.GetOperationState(ctx, token, operationURL)
+		})
+		switch outcome.step {
+		case pendingImportWait:
+			logger.Info("⏳ "+outcome.message, "apiID", deployment.Spec.APIID, "detail", outcome.detail)
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = apimDeploymentPhaseImporting
+				status.Status = apimDeploymentStatusPending
+				status.Message = outcome.message
+				status.LastError = outcome.detail
+				status.LastAttemptAt = attemptTime
+				status.ObservedGeneration = apimApi.Generation
+				status.MatchedReplicaSets = matchedReplicaSetNames
+				status.OpenAPIHash = openAPIHash
+				status.DesiredHash = desiredHash
+				w.prepare(&status.RetryStatus)
+			}); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+			return ctrl.Result{RequeueAfter: pendingImportPollDelay(pending.StartedAt, w.policy.Now())}, nil
+		case pendingImportFailed:
+			// The write that failed is the import, whichever reconcile learns of it. A failed
+			// or lost import may have changed the API partway, so nothing is known to be
+			// applied any more.
+			logger.Error(outcome.err, "🚫 "+outcome.message, "apiID", deployment.Spec.APIID)
+			return failWrite(upsertMessage, outcome.err, forgetPendingImport)
+		case pendingImportRestart:
+			logger.Info("🔁 "+outcome.message, "apiID", deployment.Spec.APIID)
+			if statusErr := updateAPIMAPIDeploymentStatus(ctx, r.Client, &deployment, func(status *apimv1.APIMAPIDeploymentStatus) {
+				status.Phase = apimDeploymentPhaseImporting
+				status.Status = apimDeploymentStatusPending
+				status.Message = outcome.message
+				status.LastError = ""
+				status.LastAttemptAt = attemptTime
+				status.ObservedGeneration = apimApi.Generation
+				status.MatchedReplicaSets = matchedReplicaSetNames
+				status.OpenAPIHash = openAPIHash
+				status.DesiredHash = desiredHash
+				// Persisted with the import that follows, as the Importing patch above does.
+				w.prepare(&status.RetryStatus)
+				forgetPendingImport(status)
+			}); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
+		case pendingImportDone:
+			logger.Info("✅ "+outcome.message, "apiID", deployment.Spec.APIID)
+			writeAPI = false
+		}
 	}
-	logger.Info("✅ API created or updated in APIM", "apiID", deployment.Spec.APIID, "type", config.Type)
+
+	if writeAPI {
+		if isWebSocket {
+			w.starting("step", "upsert websocket API")
+			err = apim.UpsertWebSocketAPI(ctx, config)
+		} else {
+			w.starting("step", "import API", "bytes", len(openApiContent))
+			err = apim.ImportOpenAPIDefinitionToAPIM(ctx, config, openApiContent)
+		}
+		if operationURL := apim.RunningOperation(err); operationURL != "" {
+			if result, recorded := r.recordPendingImport(ctx, logger, &deployment, operationURL, desiredHash, w.policy.Now()); recorded {
+				return result, nil
+			}
+		}
+		if err != nil {
+			logger.Error(err, "🚫 Failed to create or update API", "apiID", deployment.Spec.APIID, "type", config.Type)
+			return failWrite(upsertMessage, err)
+		}
+		logger.Info("✅ API created or updated in APIM", "apiID", deployment.Spec.APIID, "type", config.Type)
+	}
 
 	// Step 5: Update the backend service URL for the API.
 	// This points the API to the correct backend service endpoint.
@@ -541,6 +617,7 @@ func (r *APIMAPIDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		status.DesiredHash = desiredHash
 		status.AppliedHash = desiredHash
 		status.ImportedAt = time.Now().UTC().Format(time.RFC3339)
+		status.PendingImport = nil
 		w.succeeded(&status.RetryStatus)
 	}); statusErr != nil {
 		return ctrl.Result{}, statusErr

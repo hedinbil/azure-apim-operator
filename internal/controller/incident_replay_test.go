@@ -347,31 +347,47 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 			By("never writing before nextAttemptAt, and requeueing for exactly the time left")
 			var notBefore time.Time
 			var stalledAt time.Time
+			// A failure is recorded by the reconcile that writes, or by the one that learns
+			// that an import it was waiting for (status.pendingImport) has failed.
+			failedSteps, skipped, held := 0, 0, 0
+			previousFailures := int32(0)
 			for i, s := range steps {
 				Expect(s.realDuration).To(BeNumerically("<", 5*time.Second),
 					"reconcile %d: a Retry-After must never stretch the wait beyond AsyncWaitTimeout", i)
 				if s.wrote {
 					Expect(s.at.Before(notBefore)).To(BeFalse(), "reconcile %d wrote at %s, before %s", i, s.at, notBefore)
 				}
+				failed := s.retry.ConsecutiveFailures > previousFailures
+				previousFailures = s.retry.ConsecutiveFailures
 				switch {
-				case s.wrote && s.phase == phaseBackoff:
+				case failed && s.phase == phaseBackoff:
+					failedSteps++
 					next, err := time.Parse(time.RFC3339, s.retry.NextAttemptAt)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(s.result.RequeueAfter).To(Equal(next.Sub(s.after)))
 					expectJitteredDelay(next.Sub(s.after), s.retry.ConsecutiveFailures, jitter)
 					notBefore = next
-				case !s.wrote && s.phase == phaseBackoff:
+				case s.phase == phaseBackoff:
+					skipped++
+					Expect(s.wrote).To(BeFalse(), "reconcile %d wrote without recording a failure", i)
 					next, err := time.Parse(time.RFC3339, s.retry.NextAttemptAt)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(s.at.Before(next)).To(BeTrue(), "reconcile %d held back although due", i)
 					Expect(s.result).To(Equal(ctrl.Result{RequeueAfter: next.Sub(s.at)}))
 				case s.phase == phaseStalled:
 					Expect(s.result).To(BeZero(), "a Stalled deployment is not requeued")
-					if s.wrote {
+					if failed {
 						stalledAt = s.after
+					} else {
+						held++
 					}
 					// Nothing may reach APIM once Stalled.
 					notBefore = incidentStart.Add(1000 * time.Hour)
+				case s.phase == apimDeploymentPhaseImporting:
+					// Waiting for an import APIM is still running: it is read, never written over.
+					Expect(s.result.RequeueAfter).To(And(
+						BeNumerically(">=", minPendingImportPoll), BeNumerically("<=", maxPendingImportPoll)),
+						"reconcile %d waits for the running import", i)
 				}
 			}
 
@@ -432,19 +448,7 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 				Expect(kv).To(HaveKeyWithValue("bytes", float64(docSize)))
 			}
 			failedLines := tee.entries(msgWriteFailed, name)
-			wantFailed := 0
-			skipped, held := 0, 0
-			for _, s := range steps {
-				switch {
-				case s.wrote && s.phase == phaseBackoff:
-					wantFailed++
-				case !s.wrote && s.phase == phaseBackoff:
-					skipped++
-				case !s.wrote && s.phase == phaseStalled:
-					held++
-				}
-			}
-			Expect(failedLines).To(HaveLen(wantFailed))
+			Expect(failedLines).To(HaveLen(failedSteps))
 			for i, kv := range failedLines {
 				Expect(kv).To(HaveKeyWithValue("class", string(errorClassTransient)))
 				Expect(kv).To(HaveKeyWithValue("attempt", fmt.Sprintf("%d/5", i+1)))
@@ -461,35 +465,37 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 				Expect(tee.entries(msgWriteSucceeded, name)).To(HaveLen(1))
 			}
 		},
+		// Before status.pendingImport every import after the first overlapped a running one
+		// and drew a 412; now each waits for the one before it to end.
 		Entry("the Sep 2026 mix: 1.75 MB import, 202 beyond the wait, 412 on overlap, 422 timeouts", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, fullDoc: true,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 30 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
 		Entry("the Sep 2026 mix with production jitter, seed 1", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, jitterSeed: 1,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 35 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
 		Entry("the Sep 2026 mix with production jitter, seed 42", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, jitterSeed: 42,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 35 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
 		Entry("the Sep 2026 mix with production jitter, seed 2026", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, jitterSeed: 2026,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 35 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
-		Entry("imports outliving the wait and overlapping, without 422s", incidentScenario{
+		Entry("imports outliving the wait, without 422s", incidentScenario{
 			opDuration: 10 * time.Minute,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusPreconditionFailed,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusAccepted,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 30 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
 		Entry("every accepted import dying with DeadOperationMonitor", incidentScenario{
 			opDuration: 4 * time.Minute,
@@ -511,31 +517,48 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 		}),
 		Entry("Retry-After: 60 on every 202 and poll, bounded by the wait", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, retryAfter: "60",
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},
-			wantPhase: phaseStalled, wantLastErr: "still running", stallsWithin: 30 * time.Minute,
+			wantPhase: phaseStalled, wantLastErr: "DeadOperationMonitor", stallsWithin: 80 * time.Minute,
 		}),
 		Entry("APIM recovering after the third import", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, recoverAfter: 3,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusCreated},
 			wantPhase: apimDeploymentPhaseSucceeded,
 		}),
 		Entry("APIM recovering after the fourth import, the last one before Stalled", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, recoverAfter: 4,
-			wantAnswers: []int{http.StatusAccepted, http.StatusPreconditionFailed, http.StatusUnprocessableEntity,
+			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusCreated},
 			wantPhase: apimDeploymentPhaseSucceeded,
 		}),
 	)
 
+	// failOnce reconciles until one more failure is recorded, moving the clock on while an
+	// accepted import is still running in APIM, as the replay's noise would.
+	failOnce := func() {
+		GinkgoHelper()
+		want := getDeployment().Status.ConsecutiveFailures + 1
+		for range 100 {
+			reconcileOnce()
+			deployment := getDeployment()
+			if deployment.Status.ConsecutiveFailures >= want {
+				return
+			}
+			Expect(deployment.Status.PendingImport).NotTo(BeNil(), "neither failed nor waiting for an import")
+			clock.advance(time.Minute)
+		}
+		Fail("no failure was recorded")
+	}
+
 	It("keeps the stall across an operator restart and writes no status while held", func() {
 		sep2026()
 
 		By("failing twice, then restarting the operator in the middle of the backoff")
-		reconcileOnce()
+		failOnce()
 		clock.set(mustParseRFC3339(getDeployment().Status.NextAttemptAt))
-		reconcileOnce()
+		failOnce()
 		Expect(arm.importCount()).To(Equal(2))
 		reconciler = newReconciler(0)
 		clock.advance(30 * time.Second)
@@ -639,15 +662,23 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 
 		steps := replay()
 
-		wrote := 0
+		wrote, read := 0, 0
+		previousFailures := int32(0)
 		for _, s := range steps {
-			if s.wrote {
+			failed := s.retry.ConsecutiveFailures > previousFailures
+			previousFailures = s.retry.ConsecutiveFailures
+			switch {
+			case s.wrote:
 				wrote++
+			case s.phase == apimDeploymentPhaseImporting, failed:
+				// Read the import APIM was still running, or learned that it failed.
+				read++
 			}
 		}
 		Expect(wrote).To(Equal(5))
-		Expect(len(steps)).To(BeNumerically(">", 100), "the replay reconciled far more often than it wrote")
-		Expect(tokens.Load()).To(Equal(int32(5)), "one token per write, none for a held reconcile")
+		Expect(read).To(BeNumerically(">", 0))
+		Expect(len(steps)).To(BeNumerically(">", 100), "the replay reconciled far more often than it touched APIM")
+		Expect(tokens.Load()).To(Equal(int32(wrote+read)), "one token per write or reading, none for a held reconcile")
 	})
 })
 

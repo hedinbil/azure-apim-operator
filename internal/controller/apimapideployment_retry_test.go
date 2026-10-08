@@ -622,7 +622,7 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag, armStepServiceDetails}),
 	)
 
-	It("treats an import that outlives the async wait as transient", func() {
+	It("waits for an import that outlives the async wait instead of counting it as a failure", func() {
 		previousTimeout, previousInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
 		apim.AsyncWaitTimeout, apim.AsyncPollInterval = 50*time.Millisecond, 5*time.Millisecond
 		DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousTimeout, previousInterval })
@@ -632,11 +632,12 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 			_, _ = io.WriteString(w, `{"status":"InProgress"}`)
 		})
 
-		Expect(reconcileOnce()).To(Equal(ctrl.Result{RequeueAfter: time.Minute}))
+		Expect(reconcileOnce()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}))
 
 		deployment := getDeployment()
-		Expect(deployment.Status.Phase).To(Equal(phaseBackoff))
-		Expect(deployment.Status.LastError).To(ContainSubstring("still running"))
+		Expect(deployment.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+		Expect(deployment.Status.ConsecutiveFailures).To(BeZero())
+		Expect(deployment.Status.PendingImport).NotTo(BeNil())
 		Expect(deployment.Status.AppliedHash).To(BeEmpty())
 		Expect(arm.stepsSince(0)).NotTo(ContainElement(armStepServiceURL), "nothing after the import may run")
 	})

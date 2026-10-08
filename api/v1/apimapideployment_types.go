@@ -96,6 +96,21 @@ type APIMAPIDeploymentStatus struct {
 	Status string `json:"status,omitempty"`
 	// RetryStatus tracks backing off from failed APIM writes.
 	RetryStatus `json:",inline"`
+	// PendingImport is an import APIM accepted and had not finished when the operator
+	// stopped waiting for it. While it is set the operator polls it and does not write
+	// the API again, so an API never has two imports running in APIM at once.
+	PendingImport *APIMPendingImport `json:"pendingImport,omitempty"`
+}
+
+// APIMPendingImport identifies an asynchronous APIM write (an OpenAPI import, or a
+// websocket API create) that the operator is waiting for.
+type APIMPendingImport struct {
+	// OperationURL is the Azure-AsyncOperation or Location URL APIM returned.
+	OperationURL string `json:"operationUrl"`
+	// DesiredHash is the desired state the write was started for.
+	DesiredHash string `json:"desiredHash"`
+	// StartedAt is when APIM accepted the write (RFC 3339).
+	StartedAt string `json:"startedAt"`
 }
 
 // +kubebuilder:object:root=true

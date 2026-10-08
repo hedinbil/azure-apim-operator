@@ -6,6 +6,7 @@ package apim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -28,8 +29,11 @@ var AsyncPollInterval = 10 * time.Second
 // APIM may return either Azure-AsyncOperation or Location headers on 202 responses. It
 // returns nil on success, an *Error wrapping ErrAsyncOperationFailed when the operation
 // ends Failed or Canceled, and an *Error wrapping ErrImportWaitTimeout when it is still
-// running after AsyncWaitTimeout. A Retry-After header on the 202 or on a poll answer
-// sets the next delay, never beyond the remaining wait.
+// running after AsyncWaitTimeout. A failed poll ends the wait with its *Error. The timeout
+// and a failed poll both carry the OperationURL, so the caller can keep waiting for an
+// operation that may still be running (see RunningOperation) instead of importing again.
+// A Retry-After header on the 202 or on a poll answer sets the next delay, never beyond
+// the remaining wait.
 func waitForAsyncImportCompletion(ctx context.Context, bearerToken, apiID, operation string, initial *armResponse) error {
 	pollURL := strings.TrimSpace(initial.header.Get("Azure-AsyncOperation"))
 	if pollURL == "" {
@@ -54,10 +58,11 @@ func waitForAsyncImportCompletion(ctx context.Context, bearerToken, apiID, opera
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return &Error{
-				Operation: operation,
-				Method:    http.MethodGet,
-				Message:   fmt.Sprintf("operation still running after %s", AsyncWaitTimeout),
-				Err:       ErrImportWaitTimeout,
+				Operation:    operation,
+				Method:       http.MethodGet,
+				Message:      fmt.Sprintf("operation still running after %s", AsyncWaitTimeout),
+				Err:          ErrImportWaitTimeout,
+				OperationURL: pollURL,
 			}
 		}
 		if delay <= 0 {
@@ -77,6 +82,10 @@ func waitForAsyncImportCompletion(ctx context.Context, bearerToken, apiID, opera
 			token:     bearerToken,
 		}.send(ctx)
 		if err != nil {
+			var pollErr *Error
+			if errors.As(err, &pollErr) {
+				pollErr.OperationURL = pollURL
+			}
 			return err
 		}
 		delay = retryAfter(resp.header, AsyncPollInterval)

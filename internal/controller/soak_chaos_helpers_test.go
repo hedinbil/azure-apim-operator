@@ -103,6 +103,9 @@ const (
 	soakOK soakOutcome = iota
 	soakTransient
 	soakPermanent
+	// soakPending: APIM accepted the import and was still running it when the wait
+	// ended; the deployment waits for that import (status.pendingImport).
+	soakPending
 )
 
 func (o soakOutcome) String() string {
@@ -111,6 +114,8 @@ func (o soakOutcome) String() string {
 		return "ok"
 	case soakTransient:
 		return "transient"
+	case soakPending:
+		return "pending"
 	default:
 		return "permanent"
 	}
@@ -174,7 +179,7 @@ var (
 	}
 	soakNotFound        = soakFault{name: "404 ResourceNotFound", status: http.StatusNotFound, body: soakARMError("ResourceNotFound", "not found")}
 	soakHangUp          = soakFault{name: "connection closed", mode: soakModeHangUp, expected: soakTransient}
-	soakAcceptedTimeout = soakFault{name: "202 never finishes", mode: soakModeAcceptedTimeout, expected: soakTransient}
+	soakAcceptedTimeout = soakFault{name: "202 never finishes", mode: soakModeAcceptedTimeout, expected: soakPending}
 	soakAcceptedFailed  = soakFault{name: "202 then DeadOperationMonitor", mode: soakModeAcceptedFailed, expected: soakTransient}
 	soakGarbage200      = soakFault{name: "200 not JSON", mode: soakModeGarbage200, expected: soakTransient}
 	soakUnavailable     = soakTransientHTTP[6]
@@ -341,6 +346,7 @@ type soakObject struct {
 	attemptsInEpoch   int
 	successesInEpoch  int
 	runTimes          []time.Time // attempt times of the current run of failures
+	pendingStartedAt  string      // status.pendingImport.startedAt of an import APIM is still running
 	runGaps           [][]time.Duration
 	stalls            int
 	rejections        int
@@ -907,7 +913,7 @@ func (d *soakDriver) next(kind soakKind) *soakObject {
 // run starts every object and blocks until the queues and timers are drained.
 func (d *soakDriver) run(ctx context.Context) {
 	d.mu.Lock()
-	d.reconcileLimit = 60 * len(d.objects)
+	d.reconcileLimit = 60*len(d.objects) + soakMaxAttempts*soakPendingPolls()*d.plan.deployments
 	for _, o := range d.objects {
 		d.enqueueLocked(o)
 	}
@@ -1061,6 +1067,10 @@ func (o *soakObject) expectWrite(now time.Time) bool {
 	if o.gone {
 		return false
 	}
+	if o.pendingStartedAt != "" {
+		// The running import is read, never written over, whatever else happened.
+		return false
+	}
 	if o.resetPending {
 		// A retry annotation on a deployment that is already in sync changes nothing:
 		// the in-sync check comes before the gate.
@@ -1104,9 +1114,12 @@ func (d *soakDriver) check(o *soakObject, idx int, now time.Time, expectWrite bo
 		d.violate(o, idx, "wrote to APIM = %v, the design says %v (model phase %q, consecutive %d, next %s, now %s, resetPending %v, steps %v)",
 			wrote, expectWrite, o.phase, o.consecutive, o.next.Format(time.RFC3339), now.Format(time.RFC3339), o.resetPending, soakSteps(served))
 	}
-	if wrote {
+	switch {
+	case wrote:
 		d.checkAttempt(o, idx, now, served, res, obs)
-	} else {
+	case o.pendingStartedAt != "":
+		d.checkPending(o, idx, now, served, res, obs)
+	default:
 		d.checkHeld(o, idx, now, served, res, obs)
 	}
 	if o.midFlightFired {
@@ -1199,8 +1212,51 @@ func (d *soakDriver) checkAttempt(o *soakObject, idx int, now time.Time, served 
 		return
 	case o.phase == phaseBackoff:
 		d.checkBackoff(o, idx, now, res, obs)
+	case o.pendingStartedAt != "":
+		if res.RequeueAfter != minPendingImportPoll {
+			d.violate(o, idx, "left an import running: RequeueAfter %s, want %s", res.RequeueAfter, minPendingImportPoll)
+		}
 	case !res.IsZero():
 		d.violate(o, idx, "phase %s must not requeue: %+v", o.phase, res)
+	}
+	d.expectStatus(o, idx, obs)
+}
+
+// checkPending checks a reconcile of a deployment whose import APIM is still running: it
+// reads the operation and writes nothing. Only an import older than maxPendingImportAge
+// changes the retry state, as one failed write.
+func (d *soakDriver) checkPending(o *soakObject, idx int, now time.Time, served []soakServed, res ctrl.Result, obs soakObserved) {
+	if len(served) > 0 {
+		d.violate(o, idx, "called APIM while an import was still running: %v", soakSteps(served))
+	}
+	if o.resetPending {
+		// The gate's reset is persisted before the running import is read.
+		o.consecutive = 0
+		o.runTimes = nil
+		o.resetPending = false
+		o.specResetPending = false
+	}
+	startedAt, err := time.Parse(time.RFC3339, o.pendingStartedAt)
+	if err != nil {
+		d.violate(o, idx, "unreadable pending startedAt %q", o.pendingStartedAt)
+		return
+	}
+	if now.Sub(startedAt) > maxPendingImportAge {
+		o.pendingStartedAt = ""
+		o.applyOutcome(soakTransient, now)
+		o.trace = append(o.trace, fmt.Sprintf("%d:import-lost:%s:%d", idx, o.phase, o.consecutive))
+		switch {
+		case o.phase == phaseBackoff:
+			d.checkBackoff(o, idx, now, res, obs)
+		case !res.IsZero():
+			d.violate(o, idx, "phase %s must not requeue: %+v", o.phase, res)
+		}
+		d.expectStatus(o, idx, obs)
+		return
+	}
+	o.trace = append(o.trace, fmt.Sprintf("%d:waiting:%s:%d", idx, o.phase, o.consecutive))
+	if want := pendingImportPollDelay(o.pendingStartedAt, now); res.RequeueAfter != want {
+		d.violate(o, idx, "waiting for a running import: RequeueAfter %s, want %s", res.RequeueAfter, want)
 	}
 	d.expectStatus(o, idx, obs)
 }
@@ -1231,6 +1287,13 @@ func (d *soakDriver) checkWrites(o *soakObject, idx int, served []soakServed) {
 
 // applyOutcome moves the model on after an attempt.
 func (o *soakObject) applyOutcome(outcome soakOutcome, now time.Time) {
+	if outcome == soakPending {
+		// Not a failure: the retry state stays as it is while the import runs.
+		o.phase = apimDeploymentPhaseImporting
+		o.next = time.Time{}
+		o.pendingStartedAt = now.UTC().Format(time.RFC3339)
+		return
+	}
 	o.runTimes = append(o.runTimes, now)
 	switch outcome {
 	case soakOK:
@@ -1304,8 +1367,21 @@ func (d *soakDriver) expectStatus(o *soakObject, idx int, obs soakObserved) {
 	if obs.retry.ConsecutiveFailures != o.consecutive {
 		d.violate(o, idx, "consecutiveFailures %d, the model says %d", obs.retry.ConsecutiveFailures, o.consecutive)
 	}
-	if (o.phase == phaseBackoff) != (obs.retry.NextAttemptAt != "") {
-		d.violate(o, idx, "phase %q with nextAttemptAt %q", o.phase, obs.retry.NextAttemptAt)
+	switch {
+	case o.phase == phaseBackoff:
+		if obs.retry.NextAttemptAt == "" {
+			d.violate(o, idx, "phase %q with nextAttemptAt %q", o.phase, obs.retry.NextAttemptAt)
+		}
+	case o.pendingStartedAt != "":
+		// A failure before the running import leaves its nextAttemptAt behind, already
+		// due. It must stay: the gate reads failures without one as Stalled or Invalid.
+		if (o.consecutive > 0) != (obs.retry.NextAttemptAt != "") {
+			d.violate(o, idx, "waiting with %d failures and nextAttemptAt %q", o.consecutive, obs.retry.NextAttemptAt)
+		}
+	default:
+		if obs.retry.NextAttemptAt != "" {
+			d.violate(o, idx, "phase %q with nextAttemptAt %q", o.phase, obs.retry.NextAttemptAt)
+		}
 	}
 	if o.kind == soakDeployment {
 		failed := o.phase == phaseBackoff || o.phase == phaseStalled || o.phase == phaseInvalid
@@ -1368,4 +1444,16 @@ func soakSteps(served []soakServed) []string {
 		}
 	}
 	return out
+}
+
+// soakPendingPolls is how many reconciles waiting out one import that never finishes
+// takes: every reading until it is maxPendingImportAge old, and the one that gives up.
+func soakPendingPolls() int {
+	start := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	startedAt := start.Format(time.RFC3339)
+	n := 1
+	for now := start; now.Sub(start) <= maxPendingImportAge; now = now.Add(pendingImportPollDelay(startedAt, now)) {
+		n++
+	}
+	return n
 }

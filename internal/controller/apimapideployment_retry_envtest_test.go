@@ -225,55 +225,104 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 	})
 
 	Context("with an import APIM accepts but does not finish", func() {
-		It("backs off when the async wait times out", func() {
+		It("waits for the running import, without counting a failure, when the async wait times out", func() {
 			f := newDepEnvFixture(depEnvOptions{})
 			depEnvAsync(40*time.Millisecond, 2*time.Millisecond)
 			f.arm.on(depEnvImport, depEnvAccepted(""))
 			f.arm.on(depEnvPoll, depEnvPollAnswer(http.StatusAccepted, `{"status":"InProgress"}`))
 
-			Expect(f.reconcile()).To(Equal(ctrl.Result{RequeueAfter: time.Minute}))
+			Expect(f.reconcile()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}))
 
 			Expect(f.arm.count(depEnvImport)).To(Equal(1))
 			Expect(f.arm.count(depEnvPoll)).To(BeNumerically(">=", 1))
 			Expect(f.arm.count(depEnvServiceURL)).To(BeZero(), "nothing after the import may run")
 			status := f.get().Status
-			Expect(status.Phase).To(Equal(phaseBackoff))
-			Expect(status.Status).To(Equal(phaseError))
-			Expect(status.ConsecutiveFailures).To(Equal(int32(1)))
-			Expect(status.NextAttemptAt).To(Equal(depEnvAt(time.Minute)))
-			Expect(status.Message).To(Equal(depEnvMsgImport + ": APIM write failed (transient, attempt 1/5); next attempt at " +
-				depEnvAt(time.Minute)))
-			Expect(status.LastError).To(ContainSubstring(apim.ErrImportWaitTimeout.Error()))
+			Expect(status.Phase).To(Equal(apimDeploymentPhaseImporting))
+			Expect(status.Status).To(Equal(apimDeploymentStatusPending))
+			Expect(status.ConsecutiveFailures).To(BeZero(), "a running import is not a failed one")
+			Expect(status.NextAttemptAt).To(BeEmpty())
+			Expect(status.PendingImport).NotTo(BeNil())
+			Expect(status.PendingImport.OperationURL).To(Equal(f.arm.server.URL + depEnvAsyncPath + "?api-version=2021-08-01"))
+			Expect(status.PendingImport.DesiredHash).To(Equal(f.desiredHash(depEnvDocV1)))
+			Expect(status.PendingImport.StartedAt).To(Equal(depEnvAt(0)))
 			Expect(status.DesiredHash).To(Equal(f.desiredHash(depEnvDocV1)))
 			Expect(status.AppliedHash).To(BeEmpty())
 		})
 
-		It("stalls after exactly five import PUTs and never calls ARM again", func() {
+		It("stalls after exactly five imports that never finish and never calls ARM again", func() {
 			f := newDepEnvFixture(depEnvOptions{productIDs: []string{"p1"}})
 			depEnvAsync(20*time.Millisecond, 2*time.Millisecond)
 			f.arm.on(depEnvImport, depEnvAccepted(""))
 			f.arm.on(depEnvPoll, depEnvPollAnswer(http.StatusAccepted, `{"status":"InProgress"}`))
 
-			requeues := f.drive(12)
+			// Each import is waited for until it is maxPendingImportAge old, and only then
+			// counts as a failed write; the backoff and the stall work as for any failure.
+			var requeues []time.Duration
+			for i := 0; i < 5; i++ {
+				f.toNextAttempt()
+				requeues = append(requeues, f.reconcile().RequeueAfter)
+				f.clock.advance(maxPendingImportAge + time.Minute)
+				requeues = append(requeues, f.reconcile().RequeueAfter)
+			}
+			requeues = append(requeues, f.drive(7)...)
 
 			Expect(requeues).To(Equal([]time.Duration{
-				time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 0, 0, 0, 0, 0, 0, 0, 0,
+				minPendingImportPoll, time.Minute,
+				minPendingImportPoll, 2 * time.Minute,
+				minPendingImportPoll, 4 * time.Minute,
+				minPendingImportPoll, 8 * time.Minute,
+				minPendingImportPoll, 0,
+				0, 0, 0, 0, 0, 0, 0,
 			}))
 			Expect(f.arm.count(depEnvImport)).To(Equal(5), "exactly five import PUTs")
 			Expect(f.arm.countPath(http.MethodPut, f.rel(""))).To(Equal(5))
 			Expect(f.arm.count(depEnvGetAPI)).To(Equal(5))
 			Expect(f.arm.count(depEnvServiceURL)).To(BeZero())
-			Expect(f.tokenCalls.Load()).To(Equal(int32(5)))
 			status := f.get().Status
 			Expect(status.Phase).To(Equal(phaseStalled))
 			Expect(status.Status).To(Equal(phaseError))
 			Expect(status.ConsecutiveFailures).To(Equal(int32(5)))
 			Expect(status.NextAttemptAt).To(BeEmpty())
-			Expect(status.Message).To(Equal(depEnvMsgImport + ": APIM write stalled after 5 failures in a row; " +
+			Expect(status.PendingImport).To(BeNil())
+			Expect(status.Message).To(HaveSuffix("APIM write stalled after 5 failures in a row; " +
 				"not retrying until the spec changes or the apim.operator.io/retry annotation is set"))
 			Expect(status.LastError).To(ContainSubstring(apim.ErrImportWaitTimeout.Error()))
 			Expect(status.AppliedHash).To(BeEmpty())
 		})
+
+		// A poll that fails says nothing about the import, which may well still be running;
+		// counting it as a failure is what let the next attempt import on top of it in Sep
+		// 2026. The answers are the ones apim-apim-dev-hedinit gave while imports ran.
+		DescribeTable("a poll that fails without saying anything about the import keeps waiting for it",
+			func(pollStatus int, pollBody string, wantInError string) {
+				f := newDepEnvFixture(depEnvOptions{})
+				f.arm.on(depEnvImport, depEnvAccepted(""))
+				f.arm.on(depEnvPoll, depEnvPollAnswer(pollStatus, pollBody))
+
+				Expect(f.reconcile()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}))
+				Expect(f.get().Status.PendingImport).NotTo(BeNil())
+
+				By("reading the pending import on the next reconcile, which fails the same way")
+				f.clock.advance(minPendingImportPoll)
+				Expect(f.reconcile()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}))
+
+				status := f.get().Status
+				Expect(status.Phase).To(Equal(apimDeploymentPhaseImporting))
+				Expect(status.ConsecutiveFailures).To(BeZero())
+				Expect(status.PendingImport).NotTo(BeNil())
+				Expect(status.LastError).To(ContainSubstring(wantInError))
+				Expect(f.arm.count(depEnvImport)).To(Equal(1), "no second import while the first may be running")
+				Expect(f.arm.count(depEnvServiceURL)).To(BeZero())
+			},
+			Entry("500 InternalServerError", http.StatusInternalServerError,
+				`{"error":{"code":"InternalServerError","message":"poll broke"}}`, "poll broke"),
+			Entry("503 ServiceUnavailable", http.StatusServiceUnavailable, `{"error":{"code":"ServiceUnavailable"}}`, "503"),
+			Entry("429 TooManyRequests", http.StatusTooManyRequests, `{"error":{"code":"TooManyRequests"}}`, "429"),
+			Entry("422 Management API timed out", http.StatusUnprocessableEntity,
+				`{"error":{"code":"Timeout","message":"Call to Management API timed out"}}`, "Timeout"),
+			Entry("409 management endpoint unreachable", http.StatusConflict,
+				`{"error":{"code":"ManagementApiRequestFailed","message":"Failed to connect to management endpoint"}}`, "ManagementApiRequestFailed"),
+		)
 
 		It("makes zero ARM calls while Stalled with an unchanged hash, however often and late it reconciles", func() {
 			f := newDepEnvFixture(depEnvOptions{productIDs: []string{"p1"}, tagIDs: []string{"t1"}})
@@ -309,8 +358,6 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 			Entry("Canceled", http.StatusOK, `{"status":"Canceled"}`, "Canceled"),
 			Entry("Failed with a code that is not on the transient list", http.StatusOK,
 				`{"status":"Failed","error":{"code":"ValidationError","message":"bad"}}`, "ValidationError"),
-			Entry("the poll itself answers 500", http.StatusInternalServerError,
-				`{"error":{"code":"InternalServerError","message":"poll broke"}}`, "poll broke"),
 			Entry("the poll itself answers 404 (a read)", http.StatusNotFound,
 				`{"error":{"code":"ResourceNotFound","message":"operation gone"}}`, "operation gone"),
 		)

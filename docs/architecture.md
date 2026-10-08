@@ -110,7 +110,7 @@ The `APIMAPIDeploymentReconciler` processes `APIMAPIDeployment` resources (Creat
 
 1. **Fetch OpenAPI spec** from the URL specified in the resource (with exponential backoff: 2s, 4s, 8s, 16s, 32s -- up to 5 retries)
 2. **Acquire Azure token** using Workload Identity (`AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables)
-3. **Import the OpenAPI definition** into APIM via `PUT` with `?import=true`
+3. **Import the OpenAPI definition** into APIM via `PUT` with `?import=true`. A large import comes back `202 Accepted` and keeps running in APIM. If it is still running when the wait for it ends, or a poll fails without saying anything about it, the operator records its operation URL in `status.pendingImport` and reads it on later reconciles (every 15 seconds at first, then every half of its age, at most every 15 minutes). It does not write the API again until APIM reports the import finished (the steps below then run), failed (a failed write: Backoff, then Stalled) or no longer knows it (a fresh import). An import still running after two hours counts as a failed write
 4. **Patch the service URL** to point APIM to the backend service
 5. **Set subscription requirement** (whether API keys are required)
 6. **Assign products** to the API (if configured)
@@ -167,6 +167,9 @@ This means the quality and correctness of the OpenAPI spec is entirely the respo
 | OpenAPI fetch failure | Exponential backoff (2s, 4s, 8s, 16s, 32s), up to 5 retries. If all fail, requeue after 60s |
 | Azure token failure | Requeue after 30s |
 | APIM import failure | Requeue after 60s |
+| APIM import accepted (`202`) and still running when the wait ends | Record `status.pendingImport` and read it every 15s, then every half of its age, at most every 15 min. No new import until it ends. Not a failure |
+| Reading a pending import fails (APIM's management endpoint answering 409/422 `ManagementApiRequestFailed` or `Timeout`, 429, 5xx) | Keep waiting. A failed reading is not a failed import |
+| A pending import fails, or is still running after two hours | A failed write: Backoff, then Stalled after five in a row |
 | Service URL patch failure | Requeue after 60s |
 | Product/tag assignment failure | Requeue after 60s |
 | Status patch failure | Return error (immediate retry by controller runtime) |

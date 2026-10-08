@@ -59,6 +59,10 @@ type Error struct {
 	// Err is a sentinel this error wraps: ErrImportWaitTimeout, ErrAsyncOperationFailed or
 	// ErrDependencyNotFound.
 	Err error
+	// OperationURL is where the asynchronous operation behind this error can be polled.
+	// Set when the wait for an operation APIM accepted ended without learning its outcome:
+	// the wait timed out (ErrImportWaitTimeout) or a poll failed. See RunningOperation.
+	OperationURL string
 }
 
 // Error renders the operation, status and Azure code first so a status message or log
