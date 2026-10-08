@@ -100,12 +100,11 @@ When your application's ReplicaSet has ready pods, the operator automatically:
 
 1. Detects the ready ReplicaSet
 2. Matches it to one or more `APIMAPI` resources using `spec.target.selector`, or the legacy name-based fallback if no selector is set
-3. Creates a transient `APIMAPIDeployment` resource for each match
-4. Fetches the OpenAPI spec from `openApiDefinitionUrl`
-5. Imports it into Azure APIM
-6. Configures service URL, products, tags, and subscription settings
+3. Signals the `APIMAPIDeployment` of each match (one per `APIMAPI`, same name, created by the operator; it keeps the import state and is not deleted)
+4. Waits for a rolling update to finish, then fetches the OpenAPI spec from `openApiDefinitionUrl`
+5. Imports it into Azure APIM together with the service URL and subscription setting, unless APIM already holds this exact state
+6. Assigns products and tags
 7. Updates the `APIMAPI` status with the APIM gateway URL
-8. Cleans up the `APIMAPIDeployment` resource
 
 ### Step 3: Verify the import
 

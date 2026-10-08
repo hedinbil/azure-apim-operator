@@ -339,7 +339,7 @@ var _ = Describe("APIMProduct Controller retry handling", func() {
 		},
 		Entry("400", http.StatusBadRequest, "ValidationError"),
 		Entry("401", http.StatusUnauthorized, "InvalidAuthenticationToken"),
-		Entry("403", http.StatusForbidden, "AuthorizationFailed"),
+		Entry("403", http.StatusForbidden, "LinkedAuthorizationFailed"),
 		Entry("404 on a write", http.StatusNotFound, "ResourceNotFound"),
 	)
 
@@ -452,7 +452,7 @@ var _ = Describe("APIMProduct Controller retry handling", func() {
 		It("holds a rejected delete as Invalid until deletionPolicy is switched to Retain", func() {
 			deleteResource()
 
-			arm.reply(http.StatusForbidden, "AuthorizationFailed", "no delete permission")
+			arm.reply(http.StatusForbidden, "LinkedAuthorizationFailed", "no delete permission")
 			Expect(reconcileIt()).To(BeZero())
 			product := get()
 			Expect(product.Status.Phase).To(Equal(phaseInvalid))

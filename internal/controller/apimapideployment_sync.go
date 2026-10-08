@@ -5,9 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
+
+	"github.com/go-logr/logr"
 
 	apimv1 "github.com/hedinit/azure-apim-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,17 +19,22 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
 	apimDeploymentPhaseWaitingForMatch    = "WaitingForMatch"
 	apimDeploymentPhaseWaitingForReadyPod = "WaitingForReadyPod"
+	apimDeploymentPhaseWaitingForRollout  = "WaitingForRollout"
 	apimDeploymentPhaseImporting          = "Importing"
 	apimDeploymentPhaseSucceeded          = "Succeeded"
 	apimDeploymentStatusPending           = "Pending"
 	apimDeploymentSignalAnnotation        = "apim.operator.io/replicaset-signal"
 	apimDeploymentReplicaSetAnnotation    = "apim.operator.io/last-matched-replicaset"
+	// apimDeploymentTargetAnnotation records the APIMAPI's workload selector the
+	// deployment was last told about; see apimAPITargetSignature.
+	apimDeploymentTargetAnnotation = "apim.operator.io/target"
 )
 
 type apimDeploymentHashInput struct {
@@ -75,6 +84,7 @@ func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apim
 		SubscriptionRequired: apimAPI.Spec.SubscriptionRequired,
 	}
 	desiredOwnerReferences := []metav1.OwnerReference{*metav1.NewControllerRef(apimAPI, apimv1.GroupVersion.WithKind("APIMAPI"))}
+	target := apimAPITargetSignature(apimAPI)
 
 	if apierrors.IsNotFound(getErr) {
 		deployment = &apimv1.APIMAPIDeployment{
@@ -82,6 +92,7 @@ func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apim
 				Name:            apimAPI.Name,
 				Namespace:       apimAPI.Namespace,
 				OwnerReferences: desiredOwnerReferences,
+				Annotations:     map[string]string{apimDeploymentTargetAnnotation: target},
 			},
 			Spec: desiredSpec,
 		}
@@ -94,7 +105,18 @@ func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apim
 	updated := deployment.DeepCopy()
 	updated.Spec = desiredSpec
 	updated.OwnerReferences = desiredOwnerReferences
-	if equality.Semantic.DeepEqual(deployment.Spec, updated.Spec) && equality.Semantic.DeepEqual(deployment.OwnerReferences, updated.OwnerReferences) {
+	if updated.Annotations[apimDeploymentTargetAnnotation] != target {
+		// The workload selector is not part of the deployment's spec, so changing it bumps
+		// no generation; the signal annotation makes the deployment look for its pods again.
+		if updated.Annotations == nil {
+			updated.Annotations = map[string]string{}
+		}
+		updated.Annotations[apimDeploymentTargetAnnotation] = target
+		updated.Annotations[apimDeploymentSignalAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if equality.Semantic.DeepEqual(deployment.Spec, updated.Spec) &&
+		equality.Semantic.DeepEqual(deployment.OwnerReferences, updated.OwnerReferences) &&
+		equality.Semantic.DeepEqual(deployment.Annotations, updated.Annotations) {
 		return deployment, nil
 	}
 	if err := c.Patch(ctx, updated, client.MergeFrom(deployment)); err != nil {
@@ -102,7 +124,21 @@ func ensureAPIMAPIDeployment(ctx context.Context, c client.Client, apimAPI *apim
 	}
 	deployment.Spec = updated.Spec
 	deployment.OwnerReferences = updated.OwnerReferences
+	deployment.Annotations = updated.Annotations
 	return deployment, nil
+}
+
+// apimAPITargetSignature is the APIMAPI's workload selector in a comparable form; empty
+// when it selects by the legacy app.kubernetes.io/name label.
+func apimAPITargetSignature(apimAPI *apimv1.APIMAPI) string {
+	if !hasAPIMAPITargetSelector(apimAPI) {
+		return ""
+	}
+	encoded, err := json.Marshal(apimAPI.Spec.Target.Selector)
+	if err != nil {
+		return ""
+	}
+	return sha256Hex(encoded)
 }
 
 func touchAPIMAPIDeployment(ctx context.Context, c client.Client, deployment *apimv1.APIMAPIDeployment, replicaSetName string) error {
@@ -232,6 +268,48 @@ func findMatchingReplicaSetsForAPIMAPI(ctx context.Context, c client.Client, api
 	return matches, nil
 }
 
+const (
+	// requeueWaitingForWorkload is how often a deployment without a matching ReplicaSet or
+	// a ready pod looks again, besides the ReplicaSet signals.
+	requeueWaitingForWorkload = 2 * time.Minute
+	// requeueWaitingForRollout is how often a deployment waiting out a rolling update
+	// looks again. Nothing signals the end of one: the old ReplicaSet scaled to 0 is
+	// ignored by the watcher.
+	requeueWaitingForRollout = 30 * time.Second
+)
+
+// replicaSetRevisionAnnotation is the Deployment revision a ReplicaSet belongs to.
+const replicaSetRevisionAnnotation = "deployment.kubernetes.io/revision"
+
+// replicaSetsStillRollingOut returns the matched ReplicaSets that belong to an older
+// revision of their Deployment than another matched one and still have ready pods: a
+// rolling update that has not finished. ReplicaSets without an owner or a revision are
+// never counted.
+func replicaSetsStillRollingOut(replicaSets []appsv1.ReplicaSet) []string {
+	newest := map[types.UID]int64{}
+	revisions := make([]int64, len(replicaSets))
+	owners := make([]types.UID, len(replicaSets))
+	for i := range replicaSets {
+		owner := metav1.GetControllerOf(&replicaSets[i])
+		revision, err := strconv.ParseInt(replicaSets[i].Annotations[replicaSetRevisionAnnotation], 10, 64)
+		if owner == nil || err != nil {
+			revisions[i] = -1
+			continue
+		}
+		owners[i], revisions[i] = owner.UID, revision
+		if revision > newest[owner.UID] {
+			newest[owner.UID] = revision
+		}
+	}
+	var old []string
+	for i := range replicaSets {
+		if revisions[i] >= 0 && revisions[i] < newest[owners[i]] && replicaSets[i].Status.ReadyReplicas > 0 {
+			old = append(old, replicaSets[i].Name)
+		}
+	}
+	return old
+}
+
 func findReadyPodForReplicaSets(ctx context.Context, c client.Client, replicaSets []appsv1.ReplicaSet) (*corev1.Pod, error) {
 	if len(replicaSets) == 0 {
 		return nil, nil
@@ -295,4 +373,46 @@ func resolveAPIMServiceLocation(ctx context.Context, c client.Client, apimServic
 	}
 
 	return apimService.Spec.Subscription, apimService.Spec.ResourceGroup, nil
+}
+
+// Values of APIMAPI status.status. The ArgoCD health check for APIMAPI reads them: OK is
+// Healthy, Error is Degraded (libs/helm-charts/argo-cd/<version>/values-override-default.yaml
+// in hedin-applications-state).
+const (
+	apimAPIStatusOK    = "OK"
+	apimAPIStatusError = "Error"
+)
+
+// requeueUnrecordedSuccess is how long to wait before checking again when every APIM write
+// succeeded but recording that in the deployment's status failed. The next reconcile finds
+// the applied hash unchanged and writes the API again, so it waits well beyond a backoff
+// step instead of retrying at the rate limiter's pace.
+const requeueUnrecordedSuccess = 5 * time.Minute
+
+// errPendingImportNotRecorded is the write failure counted when APIM accepted an import but
+// the status could not keep its operation (see recordPendingImport). The import may still be
+// running; the retry policy's backoff decides when to try again.
+var errPendingImportNotRecorded = errors.New("APIM accepted the import, but its operation could not be recorded in status.pendingImport")
+
+// setAPIMAPIStatus sets an APIMAPI's status.status, and whatever else also changes, in one
+// merge patch. Best effort: a failure is logged, since the APIMAPIDeployment already records
+// the outcome and the next success or in-sync reconcile writes it again.
+func (r *APIMAPIDeploymentReconciler) setAPIMAPIStatus(
+	ctx context.Context,
+	logger logr.Logger,
+	apimAPI *apimv1.APIMAPI,
+	value string,
+	also ...func(*apimv1.APIMAPIStatus),
+) {
+	base := apimAPI.DeepCopy()
+	apimAPI.Status.Status = value
+	for _, mutate := range also {
+		mutate(&apimAPI.Status)
+	}
+	if equality.Semantic.DeepEqual(base.Status, apimAPI.Status) {
+		return
+	}
+	if err := r.Status().Patch(ctx, apimAPI, client.MergeFrom(base)); err != nil {
+		logger.Error(err, "⚠️ Failed to patch APIMAPI status", "apimapi", apimAPI.Name, "status", value)
+	}
 }

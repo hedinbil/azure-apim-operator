@@ -172,7 +172,9 @@ func buildSoakObjects(plan *soakPlan, run int32) []*soakObject {
 		if i%2 == 0 {
 			o.tagIDs = []string{"t-x"}
 		}
-		o.maxWritesPerAttempt = 3 + len(o.productIDs) + len(o.tagIDs)
+		// The import, then one write per product and tag. serviceUrl and subscriptionRequired
+		// travel in the import.
+		o.maxWritesPerAttempt = 1 + len(o.productIDs) + len(o.tagIDs)
 	}
 	for i := 0; i < plan.products; i++ {
 		o := add(soakProduct, "prd", i)
@@ -191,6 +193,12 @@ func buildSoakObjects(plan *soakPlan, run int32) []*soakObject {
 		}
 	}
 	return objects
+}
+
+// soakHasRevision reports whether a deployment imports a new revision, which skips the
+// GET of the API before the import.
+func soakHasRevision(o *soakObject) bool {
+	return o.kind == soakDeployment && (strings.HasSuffix(o.logical, "4") || strings.HasSuffix(o.logical, "9"))
 }
 
 // soakPolicyContent is the inbound policy XML of a spec version.
@@ -214,7 +222,7 @@ func createSoakObjects(ctx context.Context, plan *soakPlan, objects []*soakObjec
 		case soakDeployment:
 			// Every fifth deployment imports a new revision, which skips the GET of the API.
 			revision := ""
-			if strings.HasSuffix(o.logical, "4") || strings.HasSuffix(o.logical, "9") {
+			if soakHasRevision(o) {
 				revision = "2"
 			}
 			api := &apimv1.APIMAPI{
@@ -493,7 +501,9 @@ func runSoak(ctx context.Context, plan soakPlan) *soakRun {
 		Expect(obs.retry.NextAttemptAt).To(BeEmpty(), "%s %s: a settled object has no next attempt", o.kind, o.logical)
 		switch obs.phase {
 		case phaseStalled:
-			Expect(obs.retry.ConsecutiveFailures).To(Equal(int32(soakMaxAttempts)), "%s %s", o.kind, o.logical)
+			// More than MaxAttempts when failures that waited for a dependency came first.
+			Expect(obs.retry.ConsecutiveFailures).To(BeNumerically(">=", soakMaxAttempts), "%s %s", o.kind, o.logical)
+			Expect(obs.retry.ConsecutiveFailures).To(Equal(o.consecutive), "%s %s", o.kind, o.logical)
 		case phaseInvalid:
 			Expect(obs.retry.ConsecutiveFailures).To(BeNumerically(">=", 1), "%s %s", o.kind, o.logical)
 		default:
@@ -552,7 +562,8 @@ func soakExpectLogLines(r *soakRun) {
 			c.stalled++
 			Expect(line.err).To(BeTrue(), "the stalled line is logged as an error")
 			Expect(line.kv).To(HaveKeyWithValue("namespace", soakNamespace))
-			Expect(line.kv).To(HaveKeyWithValue("attempts", int32(soakMaxAttempts)))
+			Expect(line.kv).To(HaveKey("attempts"))
+			Expect(line.kv["attempts"]).To(BeNumerically(">=", soakMaxAttempts))
 			Expect(line.kv).To(HaveKey("kind"))
 			lastError, _ := line.kv["lastError"].(string)
 			Expect(lastError).NotTo(BeEmpty(), "the stalled line carries lastError")
@@ -599,17 +610,13 @@ var _ = Describe("APIM write soak under chaos", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		DeferCleanup(stubAzureIdentityEnv())
-
-		// Async imports wait milliseconds, not minutes.
-		previousWait, previousPoll := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-		apim.AsyncWaitTimeout = 30 * time.Millisecond
-		apim.AsyncPollInterval = 2 * time.Millisecond
-		DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousWait, previousPoll })
 	})
 
-	It("sets four concurrent workers in the options every APIM writer uses", func() {
+	It("sets four concurrent workers and a reconcile timeout in the options every APIM writer uses", func() {
 		Expect(apimWriterOptions().MaxConcurrentReconciles).To(Equal(4))
 		Expect(maxConcurrentAPIMWrites).To(Equal(4))
+		Expect(apimWriterOptions().ReconciliationTimeout).To(Equal(apimReconcileTimeout))
+		Expect(apimReconcileTimeout).To(Equal(10 * time.Minute))
 	})
 
 	It("settles a healthy APIM in one attempt per object, with spurious events changing nothing", func() {
@@ -645,7 +652,11 @@ var _ = Describe("APIM write soak under chaos", func() {
 				"%s %s: attempts must be spaced by the doubling backoff", o.kind, o.logical)
 		}
 		for _, o := range r.byKind(soakDeployment) {
-			Expect(o.importPuts).To(Equal(soakMaxAttempts), "%s: imports", o.logical)
+			if soakHasRevision(o) {
+				Expect(o.importPuts).To(Equal(soakMaxAttempts), "%s: a new revision is imported without a GET first", o.logical)
+			} else {
+				Expect(o.importPuts).To(BeZero(), "%s: an APIM that fails the GET of the API is never sent the import", o.logical)
+			}
 		}
 		Expect(r.driver.now().Sub(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))).To(Equal(15*time.Minute),
 			"the whole outage costs a quarter of an hour of virtual time and then stops")
@@ -802,14 +813,12 @@ var _ = Describe("APIM write soak under chaos", func() {
 		Expect(held).To(BeNumerically(">", 0))
 	})
 
-	It("still polls once at the deadline when Retry-After is longer than the remaining wait", func() {
-		apim.AsyncWaitTimeout = 40 * time.Millisecond
+	It("returns from a 202 at once with the operation to follow, however long Retry-After is", func() {
 		var polls atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case strings.HasPrefix(r.URL.Path, "/asyncops/"):
 				polls.Add(1)
-				w.Header().Set("Retry-After", "3600")
 				writeARMJSON(w, http.StatusOK, `{"status":"Succeeded"}`)
 			case r.Method == http.MethodGet:
 				writeARMError(w, http.StatusNotFound, "ResourceNotFound", "no API yet")
@@ -823,23 +832,24 @@ var _ = Describe("APIM write soak under chaos", func() {
 		DeferCleanup(apim.UseEndpoint(server.URL, server.Client()))
 
 		started := time.Now()
-		err := apim.ImportOpenAPIDefinitionToAPIM(ctx, apim.APIMDeploymentConfig{
+		written, err := apim.ImportOpenAPIDefinitionToAPIM(ctx, apim.APIMDeploymentConfig{
 			SubscriptionID: soakSubscription, ResourceGroup: soakResourceGroup, ServiceName: "slow",
 			APIID: "slow-api", RoutePrefix: "/slow", BearerToken: soakToken,
 		}, []byte(soakOpenAPIDoc))
 
-		Expect(err).NotTo(HaveOccurred(), "an operation that finished during the wait is a success")
-		Expect(polls.Load()).To(Equal(int32(1)))
-		Expect(time.Since(started)).To(BeNumerically("<", 5*time.Second), "Retry-After is bounded by the wait")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(written.Accepted()).To(BeTrue())
+		Expect(written.OperationURL).To(Equal(server.URL + "/asyncops/slow?api-version=2021-08-01"))
+		Expect(written.RetryAfter).To(Equal(time.Hour))
+		Expect(polls.Load()).To(BeZero(), "the write never reads the operation itself")
+		Expect(time.Since(started)).To(BeNumerically("<", 5*time.Second))
 	})
 
-	It("times out an async import that outlives the wait with a transient, distinguishable error", func() {
-		apim.AsyncWaitTimeout = 20 * time.Millisecond
+	It("follows a Location-only 202 and reads a still running operation as Running, not as a failure", func() {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case strings.HasPrefix(r.URL.Path, "/asyncops/"):
-				w.Header().Set("Retry-After", "0")
-				writeARMJSON(w, http.StatusOK, `{"status":"InProgress"}`)
+				writeARMJSON(w, http.StatusAccepted, `{"status":"InProgress"}`)
 			case r.Method == http.MethodGet:
 				writeARMError(w, http.StatusNotFound, "ResourceNotFound", "no API yet")
 			default:
@@ -850,12 +860,35 @@ var _ = Describe("APIM write soak under chaos", func() {
 		DeferCleanup(server.Close)
 		DeferCleanup(apim.UseEndpoint(server.URL, server.Client()))
 
-		err := apim.ImportOpenAPIDefinitionToAPIM(ctx, apim.APIMDeploymentConfig{
+		written, err := apim.ImportOpenAPIDefinitionToAPIM(ctx, apim.APIMDeploymentConfig{
+			SubscriptionID: soakSubscription, ResourceGroup: soakResourceGroup, ServiceName: "slow",
+			APIID: "slow-api", RoutePrefix: "/slow", BearerToken: soakToken,
+		}, []byte(soakOpenAPIDoc))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(written.OperationURL).To(Equal(server.URL + "/asyncops/forever?api-version=2021-08-01"))
+
+		state, err := apim.GetOperationState(ctx, soakToken, written.OperationURL)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(state.Status).To(Equal(apim.OperationRunning))
+	})
+
+	It("treats a 202 that names no operation as a transient failure", func() {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				writeARMError(w, http.StatusNotFound, "ResourceNotFound", "no API yet")
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		DeferCleanup(server.Close)
+		DeferCleanup(apim.UseEndpoint(server.URL, server.Client()))
+
+		_, err := apim.ImportOpenAPIDefinitionToAPIM(ctx, apim.APIMDeploymentConfig{
 			SubscriptionID: soakSubscription, ResourceGroup: soakResourceGroup, ServiceName: "slow",
 			APIID: "slow-api", RoutePrefix: "/slow", BearerToken: soakToken,
 		}, []byte(soakOpenAPIDoc))
 
-		Expect(errors.Is(err, apim.ErrImportWaitTimeout)).To(BeTrue(), "got %v", err)
+		Expect(errors.Is(err, apim.ErrNoOperationURL)).To(BeTrue(), "got %v", err)
 		var apimErr *apim.Error
 		Expect(errors.As(err, &apimErr)).To(BeTrue())
 		Expect(classifyAPIMError(err)).To(Equal(errorClassTransient))

@@ -178,6 +178,14 @@ spec:
                 description: ImportedAt is the timestamp when the API was successfully
                   imported into APIM.
                 type: string
+              importedHash:
+                description: |-
+                  ImportedHash is the desired hash the API itself (its definition, path, backend and
+                  subscription requirement) was last written for, before the product, tag and host
+                  steps ran. While it equals the desired hash the API is not written again, so a step
+                  that fails after the import (a product that does not exist yet) retries that step
+                  alone instead of importing the whole definition on every attempt.
+                type: string
               lastAttemptAt:
                 description: LastAttemptAt is the timestamp of the most recent reconciliation
                   attempt.
@@ -219,9 +227,9 @@ spec:
                 type: string
               pendingImport:
                 description: |-
-                  PendingImport is an import APIM accepted and had not finished when the operator
-                  stopped waiting for it. While it is set the operator polls it and does not write
-                  the API again, so an API never has two imports running in APIM at once.
+                  PendingImport is an import APIM accepted (202) and runs in the background. The
+                  operator records it the moment APIM accepts it and reads it on later reconciles;
+                  while it is set the operator does not write the API again.
                 properties:
                   desiredHash:
                     description: DesiredHash is the desired state the write was started
@@ -242,7 +250,8 @@ spec:
               phase:
                 description: |-
                   Phase indicates the current reconciliation phase.
-                  Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, Error,
+                  Typical values are WaitingForMatch, WaitingForReadyPod, WaitingForRollout (an older
+                  revision still has ready pods), Importing, Succeeded, Error,
                   Backoff (a failed write waits for nextAttemptAt), Stalled (five transient failures in
                   a row) and Invalid (APIM rejected the request).
                 type: string

@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -171,7 +172,7 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 
 			By("verifying the deployment remains and reports WaitingForMatch")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result).To(BeZero())
+			Expect(result).To(Equal(ctrl.Result{RequeueAfter: requeueWaitingForWorkload}), "it looks again besides the ReplicaSet signals")
 
 			deployment := &apimv1.APIMAPIDeployment{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, deployment)).To(Succeed())
@@ -477,6 +478,13 @@ var _ = Describe("APIMAPIDeployment Controller", func() {
 			deployment.Status.Phase = apimDeploymentPhaseSucceeded
 			deployment.Status.Status = "OK"
 			Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+
+			By("recording the hosts of the earlier import on the APIMAPI")
+			apimAPI := &apimv1.APIMAPI{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, apimAPI)).To(Succeed())
+			apimAPI.Status.ApiHost = "https://gateway.example.com/test-api"
+			apimAPI.Status.DeveloperPortalHost = "https://portal.example.com"
+			Expect(k8sClient.Status().Update(ctx, apimAPI)).To(Succeed())
 
 			By("ensuring Azure credentials are not set")
 			restoreIdentityEnv := unsetAzureIdentityEnvVars()

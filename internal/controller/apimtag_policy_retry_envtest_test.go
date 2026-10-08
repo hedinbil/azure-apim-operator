@@ -441,7 +441,7 @@ var _ = Describe("APIMTag and APIMInboundPolicy retry matrix", func() {
 					Entry("400 without a body code", tpeFail(http.StatusBadRequest, ""), "400"),
 					Entry("400 whose detail code is not transient", tpeFailDetail(http.StatusBadRequest, "ValidationError", "InvalidXml"), "InvalidXml"),
 					Entry("401 InvalidAuthenticationToken", tpeFail(http.StatusUnauthorized, "InvalidAuthenticationToken"), "InvalidAuthenticationToken"),
-					Entry("403 AuthorizationFailed", tpeFail(http.StatusForbidden, "AuthorizationFailed"), "AuthorizationFailed"),
+					Entry("403 LinkedAuthorizationFailed", tpeFail(http.StatusForbidden, "LinkedAuthorizationFailed"), "LinkedAuthorizationFailed"),
 				}
 				if k.kind == "APIMTag" {
 					// The tag's own path: a 404 means the APIM service is not there. A policy's
@@ -485,7 +485,7 @@ var _ = Describe("APIMTag and APIMInboundPolicy retry matrix", func() {
 
 				It("goes Invalid after earlier transient failures, keeping the count", func() {
 					h.failTransiently(2)
-					h.arm.reply(tpeFail(http.StatusForbidden, "AuthorizationFailed"))
+					h.arm.reply(tpeFail(http.StatusForbidden, "LinkedAuthorizationFailed"))
 					Expect(h.reconcile()).To(BeZero())
 					v := h.view()
 					Expect(v.Phase).To(Equal(phaseInvalid))
@@ -534,19 +534,44 @@ var _ = Describe("APIMTag and APIMInboundPolicy retry matrix", func() {
 						Expect(h.puts()).To(Equal(2))
 					})
 
-					It("is still bounded: five 404s in a row make it Stalled", func() {
+					It("never stalls on 404s: past MaxAttempts it waits MaxDelay and keeps one attempt in hand", func() {
 						h.arm.reply(apiMissing)
-						for range 5 {
+						waits := make([]time.Duration, 0, 8)
+						for range 8 {
 							result := h.reconcile()
+							waits = append(waits, result.RequeueAfter)
 							h.clock.advance(result.RequeueAfter)
 						}
+						Expect(waits).To(Equal([]time.Duration{
+							time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
+							30 * time.Minute, 30 * time.Minute, 30 * time.Minute, 30 * time.Minute,
+						}), "past MaxAttempts the wait is MaxDelay")
 						v := h.view()
+						Expect(v.Phase).To(Equal(phaseBackoff))
+						Expect(v.Retry.ConsecutiveFailures).To(Equal(int32(4)), "the count stops one short of the limit")
+						Expect(v.Retry.NextAttemptAt).NotTo(BeEmpty())
+						Expect(h.linesWith(msgWriteStalled)).To(BeEmpty())
+						failed := h.linesWith(msgWriteFailed)
+						Expect(failed).To(HaveLen(8))
+						for i, l := range failed {
+							Expect(l.kv).To(HaveKeyWithValue("attempt", fmt.Sprintf("%d/5", min(i+1, 4))))
+						}
+						Expect(h.puts()).To(Equal(8))
+
+						By("stalling at once on a failure of another kind after the wait")
+						h.arm.reply(tpeFail(http.StatusServiceUnavailable, "ServiceUnavailable"))
+						Expect(h.reconcile()).To(BeZero())
+						v = h.view()
 						Expect(v.Phase).To(Equal(phaseStalled))
 						Expect(v.Retry.ConsecutiveFailures).To(Equal(int32(5)))
-						Expect(h.linesWith(msgWriteStalled)).To(HaveLen(1))
-						h.clock.advance(24 * time.Hour)
+
+						By("the import landing, after the retry annotation")
+						h.arm.reply(tpeOK)
+						h.annotate("api-is-there")
 						Expect(h.reconcile()).To(BeZero())
-						Expect(h.puts()).To(Equal(5))
+						v = h.view()
+						Expect(v.Phase).To(Equal(phaseCreated))
+						Expect(v.Retry.ConsecutiveFailures).To(BeZero())
 					})
 				})
 			}
@@ -671,7 +696,7 @@ var _ = Describe("APIMTag and APIMInboundPolicy retry matrix", func() {
 					Entry("while backing off", func(h *tpeHarness) { h.failNow(tpeFail(http.StatusConflict, "Conflict")) }, true),
 					Entry("while Stalled", func(h *tpeHarness) { h.failTransiently(5) }, false),
 					Entry("while Invalid", func(h *tpeHarness) {
-						h.arm.reply(tpeFail(http.StatusForbidden, "AuthorizationFailed"))
+						h.arm.reply(tpeFail(http.StatusForbidden, "LinkedAuthorizationFailed"))
 						h.reconcile()
 					}, false),
 				)
@@ -755,7 +780,7 @@ var _ = Describe("APIMTag and APIMInboundPolicy retry matrix", func() {
 				})
 
 				It("does not retry when the annotation is removed", func() {
-					h.arm.reply(tpeFail(http.StatusForbidden, "AuthorizationFailed"))
+					h.arm.reply(tpeFail(http.StatusForbidden, "LinkedAuthorizationFailed"))
 					h.annotate("x")
 					h.reconcile()
 					Expect(h.view().Phase).To(Equal(phaseInvalid))

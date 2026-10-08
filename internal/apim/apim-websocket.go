@@ -18,14 +18,17 @@ var defaultWebSocketProtocols = []string{"wss"}
 
 // UpsertWebSocketAPI creates or updates a WebSocket API in Azure APIM from the config
 // alone. It is the websocket counterpart of ImportOpenAPIDefinitionToAPIM: same URL,
-// same If-Match handling, same async completion, but a JSON body with type "websocket"
+// same If-Match handling, same 202 handling (see startAPIWrite), but a JSON body with type "websocket"
 // instead of an OpenAPI import.
-func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) error {
-	etag := ifMatchForUpsert(ctx, apimParams)
-
+func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) (WriteResult, error) {
 	body, err := webSocketAPIBody(apimParams)
 	if err != nil {
-		return err
+		return WriteResult{}, err
+	}
+
+	etag, err := ifMatchForUpsert(ctx, apimParams)
+	if err != nil {
+		return WriteResult{}, err
 	}
 
 	upsertURL := revisionURL(apimParams, apimParams.APIID, apimParams.Revision)
@@ -35,12 +38,12 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) er
 		"url", upsertURL,
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
-		"serviceUrl", apimParams.ServiceURL,
+		"serviceUrl", RedactURL(apimParams.ServiceURL),
 		"protocols", webSocketProtocols(apimParams),
 		"ifMatch", etag,
 	)
 
-	return doAPIUpsert(ctx, apimParams, armRequest{
+	return startAPIWrite(ctx, apimParams, armRequest{
 		operation:   "upsert WebSocket API",
 		method:      http.MethodPut,
 		url:         upsertURL,
@@ -48,7 +51,7 @@ func UpsertWebSocketAPI(ctx context.Context, apimParams APIMDeploymentConfig) er
 		body:        body,
 		contentType: contentTypeJSON,
 		ifMatch:     etag,
-	}, "created WebSocket API in")
+	})
 }
 
 // webSocketAPIBody is the PUT body for a websocket API. Kept separate from the
@@ -60,7 +63,7 @@ func webSocketAPIBody(apimParams APIMDeploymentConfig) ([]byte, error) {
 	}
 
 	// Marshalled, not formatted, so a quote in a display name or URL cannot
-	// change the shape of the request (same reasoning as AssignServiceUrlToApi).
+	// change the shape of the request (APIM-16).
 	body, err := json.Marshal(map[string]any{
 		"properties": map[string]any{
 			"type":        "websocket",

@@ -7,47 +7,66 @@ package identity
 
 import (
 	"context"
-	"time"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// GetManagementToken obtains an Azure AD access token for the Azure Management API
-// using Azure Workload Identity. This method requires the client ID and tenant ID
-// to be provided, and reads the service account token from the standard Kubernetes
-// service account token path.
-//
-// This is the primary authentication method used in Kubernetes environments with
-// workload identity configured.
-func GetManagementToken(ctx context.Context, clientId string, tenantId string) (string, error) {
-	logger := ctrl.Log.WithName("identity")
+// tokenFilePath is where Kubernetes projects the service account token that workload
+// identity exchanges for an Azure AD token.
+const tokenFilePath = "/var/run/secrets/azure/tokens/azure-identity-token"
 
-	// Create a workload identity credential using the provided client ID and tenant ID.
-	// The token file path is the standard location where Kubernetes injects the
-	// service account token for workload identity authentication.
+// managementScope is the Azure Resource Manager scope.
+const managementScope = "https://management.azure.com/.default"
+
+// credentialKey identifies one workload identity.
+type credentialKey struct{ clientID, tenantID string }
+
+// credentials holds one credential per identity for the life of the process. A credential
+// caches the token it obtained and renews it shortly before it expires; building a new one
+// per call, as this package used to, exchanged the service account token with Azure AD on
+// every reconcile of every resource.
+var (
+	credentialsMu sync.Mutex
+	credentials   = map[credentialKey]*azidentity.WorkloadIdentityCredential{}
+)
+
+// credential returns the cached credential for clientID and tenantID, creating it on first use.
+func credential(clientID, tenantID string) (*azidentity.WorkloadIdentityCredential, error) {
+	key := credentialKey{clientID, tenantID}
+	credentialsMu.Lock()
+	defer credentialsMu.Unlock()
+	if cred, ok := credentials[key]; ok {
+		return cred, nil
+	}
 	cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
-		ClientID:      clientId,
-		TenantID:      tenantId,
-		TokenFilePath: "/var/run/secrets/azure/tokens/azure-identity-token",
+		ClientID:      clientID,
+		TenantID:      tenantID,
+		TokenFilePath: tokenFilePath,
 	})
 	if err != nil {
-		logger.Error(err, "❌ Failed to create workload identity credential")
-		return "", err
+		return nil, err
 	}
+	credentials[key] = cred
+	return cred, nil
+}
 
-	// Request a token with the Azure Management API scope.
-	// This scope provides access to Azure Resource Manager APIs.
-	const scope = "https://management.azure.com/.default"
-	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
-		Scopes: []string{scope},
-	})
+// GetManagementToken obtains an Azure AD access token for Azure Resource Manager through
+// Azure Workload Identity. The token comes from the credential's cache while it is valid,
+// so calling this on every reconcile costs a round trip to Azure AD only when the token is
+// due for renewal.
+func GetManagementToken(ctx context.Context, clientID string, tenantID string) (string, error) {
+	cred, err := credential(clientID, tenantID)
 	if err != nil {
-		logger.Error(err, "❌ Failed to get Azure access token")
+		ctrl.Log.WithName("identity").Error(err, "❌ Failed to create workload identity credential")
 		return "", err
 	}
-
-	logger.Info("✅ Successfully acquired Azure token", "expires", token.ExpiresOn.Format(time.RFC3339))
+	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{managementScope}})
+	if err != nil {
+		ctrl.Log.WithName("identity").Error(err, "❌ Failed to get Azure access token")
+		return "", err
+	}
 	return token.Token, nil
 }

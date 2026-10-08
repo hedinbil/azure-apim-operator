@@ -70,7 +70,8 @@ type APIMAPIDeploymentSpec struct {
 // This status tracks the deployment progress and result.
 type APIMAPIDeploymentStatus struct {
 	// Phase indicates the current reconciliation phase.
-	// Typical values are WaitingForMatch, WaitingForReadyPod, Importing, Succeeded, Error,
+	// Typical values are WaitingForMatch, WaitingForReadyPod, WaitingForRollout (an older
+	// revision still has ready pods), Importing, Succeeded, Error,
 	// Backoff (a failed write waits for nextAttemptAt), Stalled (five transient failures in
 	// a row) and Invalid (APIM rejected the request).
 	Phase string `json:"phase,omitempty"`
@@ -90,15 +91,21 @@ type APIMAPIDeploymentStatus struct {
 	DesiredHash string `json:"desiredHash,omitempty"`
 	// AppliedHash is the desired hash that was last successfully reconciled in APIM.
 	AppliedHash string `json:"appliedHash,omitempty"`
+	// ImportedHash is the desired hash the API itself (its definition, path, backend and
+	// subscription requirement) was last written for, before the product, tag and host
+	// steps ran. While it equals the desired hash the API is not written again, so a step
+	// that fails after the import (a product that does not exist yet) retries that step
+	// alone instead of importing the whole definition on every attempt.
+	ImportedHash string `json:"importedHash,omitempty"`
 	// ImportedAt is the timestamp when the API was successfully imported into APIM.
 	ImportedAt string `json:"importedAt,omitempty"`
 	// Status indicates the current deployment status (e.g., "OK", "Error").
 	Status string `json:"status,omitempty"`
 	// RetryStatus tracks backing off from failed APIM writes.
 	RetryStatus `json:",inline"`
-	// PendingImport is an import APIM accepted and had not finished when the operator
-	// stopped waiting for it. While it is set the operator polls it and does not write
-	// the API again, so an API never has two imports running in APIM at once.
+	// PendingImport is an import APIM accepted (202) and runs in the background. The
+	// operator records it the moment APIM accepts it and reads it on later reconciles;
+	// while it is set the operator does not write the API again.
 	PendingImport *APIMPendingImport `json:"pendingImport,omitempty"`
 }
 

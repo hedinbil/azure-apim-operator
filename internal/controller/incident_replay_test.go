@@ -234,11 +234,6 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 		GinkgoWriter.TeeTo(tee)
 		DeferCleanup(GinkgoWriter.ClearTeeWriters)
 
-		By("shortening the async wait to milliseconds; the fake ARM moves the clock instead")
-		previousTimeout, previousInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-		apim.AsyncWaitTimeout, apim.AsyncPollInterval = 25*time.Millisecond, time.Millisecond
-		DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousTimeout, previousInterval })
-
 		By("serving the OpenAPI document and a fake ARM")
 		doc.Store(incidentSmallDoc)
 		docServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -248,7 +243,6 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 		DeferCleanup(docServer.Close)
 		clock = newIncidentClock()
 		arm = newIncidentImportARM(clock, subscription, resourceGroup, apimService, apiID)
-		arm.waitCost = previousTimeout
 		DeferCleanup(arm.server.Close)
 		DeferCleanup(apim.UseEndpoint(arm.server.URL, arm.server.Client()))
 
@@ -329,13 +323,18 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 			Expect(statuses).To(Equal(sc.wantAnswers))
 			etagGets, polls, others := arm.counts()
 			Expect(etagGets).To(Equal(len(answers)), "the API is read only right before an import, never while held back")
+			Expect(arm.overlapCount()).To(BeZero(), "no import may be sent while one APIM accepted is still running")
+			if sc.busyFor == 0 {
+				Expect(statuses).NotTo(ContainElement(http.StatusPreconditionFailed),
+					"a 412 here would mean an import overlapped a running one")
+			}
 			accepted := 0
 			for _, s := range statuses {
 				if s == http.StatusAccepted {
 					accepted++
 				}
 			}
-			Expect(polls).To(BeNumerically(">=", accepted), "every accepted import is polled")
+			Expect(polls).To(BeNumerically(">=", accepted), "every accepted import is read")
 
 			By("being far below what 0.30.0 sent against the same APIM")
 			// Analytic, see oldImportPUTsFloor and oldImportPUTsForScript: at least 1035
@@ -353,7 +352,7 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 			previousFailures := int32(0)
 			for i, s := range steps {
 				Expect(s.realDuration).To(BeNumerically("<", 5*time.Second),
-					"reconcile %d: a Retry-After must never stretch the wait beyond AsyncWaitTimeout", i)
+					"reconcile %d: a reconcile never waits for an accepted import", i)
 				if s.wrote {
 					Expect(s.at.Before(notBefore)).To(BeFalse(), "reconcile %d wrote at %s, before %s", i, s.at, notBefore)
 				}
@@ -424,7 +423,7 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 				Expect(deployment.Status.ConsecutiveFailures).To(BeZero())
 				Expect(deployment.Status.NextAttemptAt).To(BeEmpty())
 				Expect(deployment.Status.AppliedHash).To(Equal(deployment.Status.DesiredHash))
-				Expect(others).To(Equal([]string{"patch", "patch", "service details"}))
+				Expect(others).To(Equal([]string{"service details"}), "no PATCH of the API: the import sets serviceUrl and subscriptionRequired")
 				last := 0
 				for i, s := range steps {
 					if s.wrote {
@@ -466,7 +465,8 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 			}
 		},
 		// Before status.pendingImport every import after the first overlapped a running one
-		// and drew a 412; now each waits for the one before it to end.
+		// and drew a 412; now each 202 is recorded at once and followed on later reconciles,
+		// and the next import waits for the one before it to end.
 		Entry("the Sep 2026 mix: 1.75 MB import, 202 beyond the wait, 412 on overlap, 422 timeouts", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, fullDoc: true,
 			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
@@ -515,7 +515,7 @@ var _ = Describe("Incident replay 25-28 Sep 2026: APIMAPIDeployment import loop"
 				http.StatusPreconditionFailed, http.StatusPreconditionFailed},
 			wantPhase: phaseStalled, wantLastErr: "PreconditionFailed", stallsWithin: 15 * time.Minute,
 		}),
-		Entry("Retry-After: 60 on every 202 and poll, bounded by the wait", incidentScenario{
+		Entry("Retry-After: 60 on every 202 and reading, followed for the first reading", incidentScenario{
 			opDuration: 10 * time.Minute, every3rd422: true, retryAfter: "60",
 			wantAnswers: []int{http.StatusAccepted, http.StatusAccepted, http.StatusUnprocessableEntity,
 				http.StatusAccepted, http.StatusAccepted},

@@ -54,15 +54,8 @@ type APIMInboundPolicyReconciler struct {
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apiminboundpolicies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apiminboundpolicies/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the APIMInboundPolicy object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
+// Reconcile sets the inbound policy on the API (or one of its operations) in APIM when the
+// retry policy allows a write (see retry.go).
 func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -152,6 +145,10 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	write.starting()
 	upsertErr := apim.UpsertInboundPolicy(ctx, cfg)
 
+	// Record the outcome even when the reconcile has timed out or the operator is stopping.
+	outCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+
 	// Take the patch base before touching the status, so the patch carries the changes.
 	statusPatch := client.MergeFrom(policy.DeepCopy())
 	policy.Status.ObservedGeneration = policy.Generation
@@ -163,7 +160,7 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		policy.Status.Phase = outcome.Phase
 		// APIMInboundPolicyStatus has no lastError, so the error itself goes into the message.
 		policy.Status.Message = outcome.statusMessage("Failed to create or update inbound policy in APIM", upsertErr)
-		if err := r.Status().Patch(ctx, &policy, statusPatch); err != nil {
+		if err := r.Status().Patch(outCtx, &policy, statusPatch); err != nil {
 			// The failure count is lost without the patch, but the requeue still waits out
 			// this attempt's backoff instead of retrying at once.
 			logger.Error(err, "❌ Failed to patch APIMInboundPolicy status", "apiID", cfg.APIID)
@@ -180,9 +177,12 @@ func (r *APIMInboundPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	policy.Status.Phase = phaseCreated
 
 	// Use Patch to update only status without touching spec fields.
-	if err := r.Status().Patch(ctx, &policy, statusPatch); err != nil {
+	if err := r.Status().Patch(outCtx, &policy, statusPatch); err != nil {
 		logger.Error(err, "❌ Failed to patch APIMInboundPolicy status", "apiID", cfg.APIID)
-		return ctrl.Result{}, err
+		// APIM has the write; only recording it failed. Never hand the error back: that
+		// would put controller-runtime's rate limiter, with no attempt limit, in charge of
+		// writing to APIM again. Check again after one backoff step instead.
+		return ctrl.Result{RequeueAfter: write.policy.BaseDelay}, nil
 	}
 
 	return ctrl.Result{}, nil

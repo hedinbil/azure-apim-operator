@@ -11,7 +11,8 @@ package v1
 // path) makes it Invalid at once. Neither is retried until the spec changes or the
 // apim.operator.io/retry annotation is set to a new value. A 404 because something the
 // write hangs off is not in APIM yet (the product or tag an API is assigned to, the API a
-// policy is set on) counts as transient: it usually clears once that resource is written.
+// policy is set on) never makes it Stalled: it clears once that resource is written, so the
+// write keeps backing off, at most 30 minutes apart, until then.
 type RetryStatus struct {
 	// ConsecutiveFailures counts the failed APIM writes in a row since the last success,
 	// spec change or retry annotation.

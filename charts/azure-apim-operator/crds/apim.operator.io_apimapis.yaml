@@ -219,12 +219,15 @@ spec:
             description: Status reflects the observed state of the API in APIM.
             properties:
               apiHost:
-                description: ApiHost is the full URL to access the API through APIM
-                  (e.g., "https://api.example.com/myapi").
+                description: |-
+                  ApiHost is the full URL to access the API through APIM (e.g., "https://api.example.com/myapi").
+                  Empty until the API has been imported once: an API whose first import fails still
+                  gets status Error.
                 type: string
               developerPortalHost:
-                description: DeveloperPortalHost is the URL of the APIM developer
-                  portal.
+                description: |-
+                  DeveloperPortalHost is the URL of the APIM developer portal. Empty until the API has
+                  been imported once.
                 type: string
               importedAt:
                 description: ImportedAt is the timestamp when the API was successfully
@@ -234,9 +237,6 @@ spec:
                 description: Status indicates the current status of the API (e.g.,
                   "OK", "Error").
                 type: string
-            required:
-            - apiHost
-            - developerPortalHost
             type: object
         type: object
     served: true

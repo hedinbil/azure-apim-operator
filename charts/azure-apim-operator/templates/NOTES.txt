@@ -1,6 +1,7 @@
 {{ .Chart.Name }} {{ .Chart.Version }} is installed in namespace {{ .Release.Namespace }}.
 
-The operator has no Service: it serves only its health probes on port 8081.
+The operator has no Service. It serves its health probes on port 8081{{ if .Values.metrics.enabled }} and Prometheus
+metrics as plain HTTP on port {{ .Values.metrics.port }} (metrics.enabled){{ end }}.
 
   kubectl --namespace {{ .Release.Namespace }} get pods -l app.kubernetes.io/name={{ include "azure-apim-operator.name" . }}
   kubectl --namespace {{ .Release.Namespace }} get apimservices,apimapis,apimapideployments,apimproducts,apimtags,apiminboundpolicies

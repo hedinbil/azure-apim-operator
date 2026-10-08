@@ -103,8 +103,13 @@ const (
 	soakOK soakOutcome = iota
 	soakTransient
 	soakPermanent
-	// soakPending: APIM accepted the import and was still running it when the wait
-	// ended; the deployment waits for that import (status.pendingImport).
+	// soakDependency: a 404 on a write under a resource another custom resource creates
+	// (the product, tag or API it hangs off). Transient, and it never stalls: it keeps
+	// backing off at most MaxDelay apart until that resource is in APIM.
+	soakDependency
+	// soakPending: APIM accepted the import (202). The deployment records the operation
+	// (status.pendingImport) and reads it on later reconciles; how it ends decides the
+	// outcome of the attempt.
 	soakPending
 )
 
@@ -116,6 +121,8 @@ func (o soakOutcome) String() string {
 		return "transient"
 	case soakPending:
 		return "pending"
+	case soakDependency:
+		return "dependency"
 	default:
 		return "permanent"
 	}
@@ -175,12 +182,12 @@ var (
 	soakPermanentHTTP = []soakFault{
 		{name: "400 ValidationError", status: http.StatusBadRequest, body: soakARMError("ValidationError", "One or more fields contain incorrect values"), expected: soakPermanent},
 		{name: "401 InvalidAuthenticationToken", status: http.StatusUnauthorized, body: soakARMError("InvalidAuthenticationToken", "expired"), expected: soakPermanent},
-		{name: "403 AuthorizationFailed", status: http.StatusForbidden, body: soakARMError("AuthorizationFailed", "no access"), expected: soakPermanent},
+		{name: "403 LinkedAuthorizationFailed", status: http.StatusForbidden, body: soakARMError("LinkedAuthorizationFailed", "no access"), expected: soakPermanent},
 	}
 	soakNotFound        = soakFault{name: "404 ResourceNotFound", status: http.StatusNotFound, body: soakARMError("ResourceNotFound", "not found")}
 	soakHangUp          = soakFault{name: "connection closed", mode: soakModeHangUp, expected: soakTransient}
 	soakAcceptedTimeout = soakFault{name: "202 never finishes", mode: soakModeAcceptedTimeout, expected: soakPending}
-	soakAcceptedFailed  = soakFault{name: "202 then DeadOperationMonitor", mode: soakModeAcceptedFailed, expected: soakTransient}
+	soakAcceptedFailed  = soakFault{name: "202 then DeadOperationMonitor", mode: soakModeAcceptedFailed, expected: soakPending}
 	soakGarbage200      = soakFault{name: "200 not JSON", mode: soakModeGarbage200, expected: soakTransient}
 	soakUnavailable     = soakTransientHTTP[6]
 	soakValidationError = soakPermanentHTTP[0]
@@ -190,8 +197,6 @@ var (
 const (
 	soakStepGetAPI         = "get API"
 	soakStepImport         = "import"
-	soakStepServiceURL     = "patch serviceUrl"
-	soakStepSubscription   = "patch subscriptionRequired"
 	soakStepAssignProduct  = "assign product"
 	soakStepAssignTag      = "assign tag"
 	soakStepServiceDetails = "service details"
@@ -218,7 +223,8 @@ func soakFaultsFor(step string) (transient, permanent []soakFault) {
 	permanent = append([]soakFault(nil), soakPermanentHTTP...)
 	switch step {
 	case soakStepGetAPI:
-		// Whatever happens here, the import goes ahead with If-Match: *.
+		// A 404 (the API does not exist yet) or any 200 lets the import go ahead; every
+		// other failure ends the attempt before the import is sent.
 		transient = append(transient, soakGarbage200)
 		permanent = append(permanent, soakNotFound)
 	case soakStepServiceDetails:
@@ -231,7 +237,7 @@ func soakFaultsFor(step string) (transient, permanent []soakFault) {
 		// 404 on a delete means already gone: a success.
 		transient = append(transient, soakHangUp)
 		permanent = append(permanent, soakNotFound)
-	case soakStepServiceURL, soakStepSubscription, soakStepAssignProduct, soakStepAssignTag, soakStepPolicyUpsert:
+	case soakStepAssignProduct, soakStepAssignTag, soakStepPolicyUpsert:
 		// These write under a resource another custom resource creates (the API, the
 		// product, the tag); a 404 means it is not in APIM yet and is retried.
 		transient = append(transient, soakHangUp, soakNotFound)
@@ -244,9 +250,17 @@ func soakFaultsFor(step string) (transient, permanent []soakFault) {
 
 // soakExpectedOutcome is what the agreed design makes of fault on step.
 func soakExpectedOutcome(step string, fault *soakFault) soakOutcome {
-	if fault == nil || step == soakStepGetAPI {
-		// ifMatchForUpsert falls back to If-Match: * on any error.
+	if fault == nil {
 		return soakOK
+	}
+	if step == soakStepGetAPI {
+		// A 404 means the API does not exist yet (If-Match: *); a 200 whatever its body
+		// means it does. Any other failure of the existence check fails the attempt: an
+		// APIM that cannot answer a GET is not sent the import.
+		if (fault.mode == soakModeHTTP && fault.status == http.StatusNotFound) || fault.mode == soakModeGarbage200 {
+			return soakOK
+		}
+		return fault.expected
 	}
 	if fault.status == http.StatusNotFound && fault.mode == soakModeHTTP {
 		switch step {
@@ -254,9 +268,9 @@ func soakExpectedOutcome(step string, fault *soakFault) soakOutcome {
 			return soakOK
 		case soakStepServiceDetails:
 			return soakTransient
-		case soakStepServiceURL, soakStepSubscription, soakStepAssignProduct, soakStepAssignTag, soakStepPolicyUpsert:
+		case soakStepAssignProduct, soakStepAssignTag, soakStepPolicyUpsert:
 			// The API, product or tag this write hangs off is not in APIM yet.
-			return soakTransient
+			return soakDependency
 		default:
 			return soakPermanent
 		}
@@ -275,7 +289,8 @@ type soakPlan struct {
 	// failures that are permanent.
 	failRate       float64
 	permanentShare float64
-	// asyncShare is the share of successful imports answered 202 and then polled.
+	// asyncShare is the share of successful imports answered 202 and then read on later
+	// reconciles: once InProgress, then Succeeded.
 	asyncShare float64
 	// force, when set, decides every request's fault instead of failRate (nil = success).
 	force func(step string) *soakFault
@@ -345,14 +360,34 @@ type soakObject struct {
 	epoch             int
 	attemptsInEpoch   int
 	successesInEpoch  int
+	// dependencyInEpoch counts the attempts of this spec version that failed only because
+	// a resource the write hangs off is not in APIM yet; they do not count to the limit.
+	dependencyInEpoch int
 	runTimes          []time.Time // attempt times of the current run of failures
-	pendingStartedAt  string      // status.pendingImport.startedAt of an import APIM is still running
-	runGaps           [][]time.Duration
-	stalls            int
-	rejections        int
-	successes         int
-	importPuts        int
-	trace             []string
+	pendingStartedAt  string      // status.pendingImport.startedAt of an import APIM accepted
+	pendingOp         *soakOp     // the operation of that import
+	// pendingSpecVersion is the spec version the pending import was sent for, and
+	// reconcileSpecVersion the one the reconcile in progress started with.
+	pendingSpecVersion   int
+	reconcileSpecVersion int
+	// prePolls is how often the pending operation had been read before this reconcile.
+	prePolls int
+	// importedFor is one more than the spec version the API itself was last written for
+	// (status.importedHash), zero before any import. An attempt for that version skips the
+	// GET and the import and starts at the products.
+	importedFor int
+	// waitFloor is the least wait the backoff after this attempt may have:
+	// unknownWriteRetryFloor after an import whose outcome is unknown.
+	waitFloor time.Duration
+	// dependencyCapped is set when a missing dependency kept the count at MaxAttempts-1:
+	// the wait is then exactly MaxDelay.
+	dependencyCapped bool
+	runGaps          [][]time.Duration
+	stalls           int
+	rejections       int
+	successes        int
+	importPuts       int
+	trace            []string
 }
 
 // soakObserved is the status a reconcile left behind.
@@ -372,6 +407,8 @@ type soakServed struct {
 	path    string
 	fault   *soakFault
 	outcome soakOutcome
+	// opURL is the operation an import answered with 202 started.
+	opURL string
 }
 
 // soakOp is an async operation the fake ARM started with a 202.
@@ -479,17 +516,15 @@ func soakSplitPath(path string) (svc, rest string, ok bool) {
 // soakRoutes maps a request's shape (method, path below the service with every id
 // replaced by "*", and a marker for what tells two PUTs or PATCHes apart) to its step.
 var soakRoutes = map[string]string{
-	"GET ":                                    soakStepServiceDetails,
-	"PUT products/*":                          soakStepProductUpsert,
-	"DELETE products/*":                       soakStepProductDelete,
-	"PUT products/*/apis/*":                   soakStepAssignProduct,
-	"PUT tags/*":                              soakStepTagUpsert,
-	"GET apis/*":                              soakStepGetAPI,
-	"PUT apis/* import":                       soakStepImport,
-	"PATCH apis/* serviceUrl":                 soakStepServiceURL,
-	"PATCH apis/* subscriptionRequired":       soakStepSubscription,
-	"PUT apis/*/tags/*":                       soakStepAssignTag,
-	"PUT apis/*/policies/policy":              soakStepPolicyUpsert,
+	"GET ":                       soakStepServiceDetails,
+	"PUT products/*":             soakStepProductUpsert,
+	"DELETE products/*":          soakStepProductDelete,
+	"PUT products/*/apis/*":      soakStepAssignProduct,
+	"PUT tags/*":                 soakStepTagUpsert,
+	"GET apis/*":                 soakStepGetAPI,
+	"PUT apis/* import":          soakStepImport,
+	"PUT apis/*/tags/*":          soakStepAssignTag,
+	"PUT apis/*/policies/policy": soakStepPolicyUpsert,
 	"PUT apis/*/operations/*/policies/policy": soakStepPolicyUpsert,
 }
 
@@ -506,13 +541,10 @@ func soakClassify(method, rest string, body []byte) string {
 		}
 	}
 	shape := method + " " + strings.Join(parts, "/")
-	switch {
-	case method == http.MethodPut && isImportEnvelope(body):
+	// A PATCH of the API is unrouted: serviceUrl and subscriptionRequired travel in the
+	// import itself, so any PATCH is a violation.
+	if method == http.MethodPut && isImportEnvelope(body) {
 		shape += " import"
-	case method == http.MethodPatch && strings.Contains(string(body), "serviceUrl"):
-		shape += " serviceUrl"
-	case method == http.MethodPatch && strings.Contains(string(body), "subscriptionRequired"):
-		shape += " subscriptionRequired"
 	}
 	if step, ok := soakRoutes[shape]; ok {
 		return step
@@ -623,15 +655,20 @@ func (a *soakARM) admit(r *http.Request, body []byte) (*soakRequest, bool) {
 		(req.fault.mode == soakModeAcceptedTimeout || req.fault.mode == soakModeAcceptedFailed) {
 		req.fault = nil
 	}
+	if req.step == soakStepImport {
+		a.startOpLocked(req)
+	}
+	outcome := soakExpectedOutcome(req.step, req.fault)
+	if req.opURL != "" {
+		// Accepted: how the operation ends is learned on later reconciles.
+		outcome = soakPending
+	}
 	a.served[svc] = append(a.served[svc], soakServed{
-		step: req.step, method: r.Method, path: rest, fault: req.fault, outcome: soakExpectedOutcome(req.step, req.fault),
+		step: req.step, method: r.Method, path: rest, fault: req.fault, outcome: outcome, opURL: req.opURL,
 	})
 	if soakIsWrite(req.step) && a.hooks[svc] != nil {
 		req.hook = a.hooks[svc]
 		delete(a.hooks, svc)
-	}
-	if req.step == soakStepImport {
-		a.startOpLocked(req)
 	}
 	return req, true
 }
@@ -653,6 +690,20 @@ func (a *soakARM) startOpLocked(req *soakRequest) {
 	a.ops[req.opURL] = &soakOp{mode: mode}
 }
 
+// op returns the operation an import started, by the URL it was answered with.
+func (a *soakARM) op(opURL string) *soakOp {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ops[opURL]
+}
+
+// opPolls is how often op has been read so far.
+func (a *soakARM) opPolls(op *soakOp) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return op.polls
+}
+
 // respond writes the answer admit decided on.
 func (a *soakARM) respond(w http.ResponseWriter, req *soakRequest) {
 	switch {
@@ -668,9 +719,9 @@ func (a *soakARM) respond(w http.ResponseWriter, req *soakRequest) {
 	}
 }
 
-// soakRespondPoll answers a poll of an async operation: one that never finishes stays
-// InProgress, one that fails dies like the Sep 2026 imports did, and one that succeeds
-// is InProgress once and then Succeeded.
+// soakRespondPoll answers a reading of an async operation: one that never finishes stays
+// InProgress, one that fails dies like the Sep 2026 imports did, and one that succeeds is
+// InProgress on the first reading and Succeeded from the second on.
 func soakRespondPoll(w http.ResponseWriter, req *soakRequest) {
 	switch {
 	case req.op == nil:
@@ -956,6 +1007,10 @@ func (d *soakDriver) process(ctx context.Context, o *soakObject) {
 	idx := o.reconciles
 	o.reconciles++
 	now := d.now()
+	o.reconcileSpecVersion = o.specVersion
+	if o.pendingOp != nil {
+		o.prePolls = d.arm.opPolls(o.pendingOp)
+	}
 	expectWrite := o.expectWrite(now)
 	if d.plan.events && expectWrite && o.midFlightAt > 0 && o.attempts+1 == o.midFlightAt {
 		o.midFlightAt = 0
@@ -1060,6 +1115,7 @@ func (o *soakObject) startEpochLocked() {
 	o.epoch++
 	o.attemptsInEpoch = 0
 	o.successesInEpoch = 0
+	o.dependencyInEpoch = 0
 }
 
 // expectWrite is the oracle's answer to "may this reconcile write to APIM?".
@@ -1068,7 +1124,8 @@ func (o *soakObject) expectWrite(now time.Time) bool {
 		return false
 	}
 	if o.pendingStartedAt != "" {
-		// The running import is read, never written over, whatever else happened.
+		// The accepted import is read, never written over, whatever else happened; what
+		// follows the reading is checked by checkPending.
 		return false
 	}
 	if o.resetPending {
@@ -1106,19 +1163,19 @@ func soakBaseDelay(n int32) time.Duration {
 
 // check compares one reconcile with the model and moves the model on.
 func (d *soakDriver) check(o *soakObject, idx int, now time.Time, expectWrite bool, served []soakServed, res ctrl.Result, obs soakObserved) {
-	wrote := false
-	for _, s := range served {
-		wrote = wrote || soakIsWrite(s.step)
-	}
-	if wrote != expectWrite {
+	wrote := soakAttempted(served)
+	// A deployment with an accepted import reads it whenever the gate lets it through.
+	pendingRead := o.pendingStartedAt != "" &&
+		(o.resetPending || o.phase == apimDeploymentPhaseImporting || (o.phase == phaseBackoff && !now.Before(o.next)))
+	if !pendingRead && wrote != expectWrite {
 		d.violate(o, idx, "wrote to APIM = %v, the design says %v (model phase %q, consecutive %d, next %s, now %s, resetPending %v, steps %v)",
 			wrote, expectWrite, o.phase, o.consecutive, o.next.Format(time.RFC3339), now.Format(time.RFC3339), o.resetPending, soakSteps(served))
 	}
 	switch {
+	case pendingRead:
+		d.checkPending(o, idx, now, served, res, obs)
 	case wrote:
 		d.checkAttempt(o, idx, now, served, res, obs)
-	case o.pendingStartedAt != "":
-		d.checkPending(o, idx, now, served, res, obs)
 	default:
 		d.checkHeld(o, idx, now, served, res, obs)
 	}
@@ -1142,6 +1199,11 @@ func (d *soakDriver) checkHeld(o *soakObject, idx int, now time.Time, served []s
 		o.resetPending = false
 	}
 	o.trace = append(o.trace, fmt.Sprintf("%d:held:%s:%d", idx, o.phase, o.consecutive))
+	if o.pendingOp != nil {
+		if polls := d.arm.opPolls(o.pendingOp); polls != o.prePolls {
+			d.violate(o, idx, "read the accepted import while held (%d readings)", polls-o.prePolls)
+		}
+	}
 	if o.gone {
 		if obs.found {
 			d.violate(o, idx, "still exists after its product was removed")
@@ -1187,14 +1249,39 @@ func (d *soakDriver) checkAttempt(o *soakObject, idx int, now time.Time, served 
 		}
 		break
 	}
+	o.waitFloor = 0
+	for _, s := range served {
+		if s.step != soakStepImport {
+			continue
+		}
+		switch {
+		case s.outcome == soakOK:
+			o.importedFor = o.reconcileSpecVersion + 1
+		case s.fault != nil && (s.fault.mode == soakModeHangUp ||
+			(s.fault.mode == soakModeHTTP && (s.fault.status == http.StatusBadGateway || s.fault.status == http.StatusGatewayTimeout))):
+			// No answer saying how the import ended: APIM may be running it.
+			o.waitFloor = unknownWriteRetryFloor
+		}
+	}
 	o.applyOutcome(outcome, now)
+	if outcome == soakPending {
+		for _, s := range served {
+			if s.opURL != "" {
+				o.pendingOp = d.arm.op(s.opURL)
+			}
+		}
+		if o.pendingOp == nil {
+			d.violate(o, idx, "an accepted import without an operation: %v", soakSteps(served))
+		}
+		o.pendingSpecVersion = o.reconcileSpecVersion
+	}
 
-	if o.consecutive > soakMaxAttempts {
+	if o.consecutive > soakMaxAttempts && outcome != soakDependency && o.phase != phaseStalled && o.phase != phaseInvalid {
 		d.violate(o, idx, "%d consecutive failed attempts, the cap is %d", o.consecutive, soakMaxAttempts)
 	}
-	limit := soakMaxAttempts + o.successesInEpoch
+	limit := soakMaxAttempts + o.successesInEpoch + o.dependencyInEpoch
 	if o.kind == soakDeployment {
-		limit = soakMaxAttempts
+		limit = soakMaxAttempts + o.dependencyInEpoch
 	}
 	if o.attemptsInEpoch > limit {
 		d.violate(o, idx, "%d attempts for one spec version (%d successes), at most %d allowed", o.attemptsInEpoch, o.successesInEpoch, limit)
@@ -1222,15 +1309,16 @@ func (d *soakDriver) checkAttempt(o *soakObject, idx int, now time.Time, served 
 	d.expectStatus(o, idx, obs)
 }
 
-// checkPending checks a reconcile of a deployment whose import APIM is still running: it
-// reads the operation and writes nothing. Only an import older than maxPendingImportAge
-// changes the retry state, as one failed write.
+// checkPending checks a reconcile of a deployment with an import APIM accepted: it reads
+// the operation once, before anything else. Still running (and younger than
+// maxPendingImportAge): it waits and writes nothing. Finished for the spec it was sent
+// for: the steps after the import run in this reconcile. Anything else (failed, still
+// running past maxPendingImportAge, finished for an older spec) is one failed write and
+// the import is forgotten.
 func (d *soakDriver) checkPending(o *soakObject, idx int, now time.Time, served []soakServed, res ctrl.Result, obs soakObserved) {
-	if len(served) > 0 {
-		d.violate(o, idx, "called APIM while an import was still running: %v", soakSteps(served))
-	}
+	retrying := o.phase != apimDeploymentPhaseImporting
 	if o.resetPending {
-		// The gate's reset is persisted before the running import is read.
+		// The gate's reset is persisted with whatever the reading leads to.
 		o.consecutive = 0
 		o.runTimes = nil
 		o.resetPending = false
@@ -1241,22 +1329,79 @@ func (d *soakDriver) checkPending(o *soakObject, idx int, now time.Time, served 
 		d.violate(o, idx, "unreadable pending startedAt %q", o.pendingStartedAt)
 		return
 	}
-	if now.Sub(startedAt) > maxPendingImportAge {
-		o.pendingStartedAt = ""
-		o.applyOutcome(soakTransient, now)
-		o.trace = append(o.trace, fmt.Sprintf("%d:import-lost:%s:%d", idx, o.phase, o.consecutive))
-		switch {
-		case o.phase == phaseBackoff:
-			d.checkBackoff(o, idx, now, res, obs)
-		case !res.IsZero():
-			d.violate(o, idx, "phase %s must not requeue: %+v", o.phase, res)
+	polls := d.arm.opPolls(o.pendingOp)
+	if polls != o.prePolls+1 {
+		d.violate(o, idx, "read the accepted import %d times in one reconcile, want once", polls-o.prePolls)
+	}
+	state := "running"
+	switch o.pendingOp.mode {
+	case soakModeAcceptedFailed:
+		state = "failed"
+	case soakModeAcceptedTimeout:
+	default:
+		if polls >= 2 {
+			state = "succeeded"
+		}
+	}
+	followUp := state == "succeeded" && o.pendingSpecVersion == o.reconcileSpecVersion
+	if !followUp && len(served) > 0 {
+		d.violate(o, idx, "called APIM although the accepted import is not done for this spec: %v", soakSteps(served))
+	}
+
+	switch {
+	case followUp:
+		if retrying {
+			// The steps after the import failed before; this is their next attempt.
+			o.attempts++
+			o.attemptsInEpoch++
+		}
+		for _, s := range served {
+			if s.step == soakStepImport || s.step == soakStepGetAPI {
+				d.violate(o, idx, "%s after the accepted import finished: %v", s.step, soakSteps(served))
+			}
+		}
+		outcome := soakOK
+		for i, s := range served {
+			if s.outcome == soakOK {
+				continue
+			}
+			outcome = s.outcome
+			if i != len(served)-1 {
+				d.violate(o, idx, "kept calling APIM after %s failed (%s): %v", s.step, s.fault.name, soakSteps(served))
+			}
+			break
+		}
+		// The finished import is recorded (status.importedHash) and forgotten; a failure here
+		// is retried from the products on, without importing again.
+		o.importedFor = o.pendingSpecVersion + 1
+		o.pendingStartedAt, o.pendingOp = "", nil
+		o.waitFloor = 0
+		o.applyOutcome(outcome, now)
+		o.trace = append(o.trace, fmt.Sprintf("%d:import-done:%s:%s:%d", idx, outcome, o.phase, o.consecutive))
+	case state == "running" && now.Sub(startedAt) <= maxPendingImportAge:
+		o.trace = append(o.trace, fmt.Sprintf("%d:waiting:%s:%d", idx, o.phase, o.consecutive))
+		if o.phase != apimDeploymentPhaseImporting {
+			d.violate(o, idx, "waiting for an accepted import in phase %q", o.phase)
+		}
+		if want := pendingImportPollDelay(o.pendingStartedAt, now); res.RequeueAfter != want {
+			d.violate(o, idx, "waiting for a running import: RequeueAfter %s, want %s", res.RequeueAfter, want)
 		}
 		d.expectStatus(o, idx, obs)
 		return
+	default:
+		o.pendingStartedAt, o.pendingOp = "", nil
+		o.waitFloor = 0
+		o.applyOutcome(soakTransient, now)
+		o.trace = append(o.trace, fmt.Sprintf("%d:import-%s:%s:%d", idx, state, o.phase, o.consecutive))
 	}
-	o.trace = append(o.trace, fmt.Sprintf("%d:waiting:%s:%d", idx, o.phase, o.consecutive))
-	if want := pendingImportPollDelay(o.pendingStartedAt, now); res.RequeueAfter != want {
-		d.violate(o, idx, "waiting for a running import: RequeueAfter %s, want %s", res.RequeueAfter, want)
+	if o.attemptsInEpoch > soakMaxAttempts+o.dependencyInEpoch {
+		d.violate(o, idx, "%d attempts for one spec version, at most %d allowed", o.attemptsInEpoch, soakMaxAttempts+o.dependencyInEpoch)
+	}
+	switch {
+	case o.phase == phaseBackoff:
+		d.checkBackoff(o, idx, now, res, obs)
+	case !res.IsZero():
+		d.violate(o, idx, "phase %s must not requeue: %+v", o.phase, res)
 	}
 	d.expectStatus(o, idx, obs)
 }
@@ -1277,8 +1422,25 @@ func (d *soakDriver) checkWrites(o *soakObject, idx int, served []soakServed) {
 		}
 	}
 	o.importPuts += imports
-	if o.kind == soakDeployment && imports != 1 {
-		d.violate(o, idx, "%d import PUTs in one attempt, want exactly 1 (steps %v)", imports, soakSteps(served))
+	wantImports := 1
+	if o.importedFor == o.reconcileSpecVersion+1 {
+		// status.importedHash: the API is written for this desired state; only the steps
+		// after it are retried.
+		wantImports = 0
+		for _, s := range served {
+			if s.step == soakStepGetAPI {
+				d.violate(o, idx, "read the API although it was imported for this spec already: %v", soakSteps(served))
+			}
+		}
+	}
+	for _, s := range served {
+		if s.step == soakStepGetAPI && s.outcome != soakOK {
+			// The existence check failed: the import is not sent.
+			wantImports = 0
+		}
+	}
+	if o.kind == soakDeployment && imports != wantImports {
+		d.violate(o, idx, "%d import PUTs in one attempt, want exactly %d (steps %v)", imports, wantImports, soakSteps(served))
 	}
 	if writes > o.maxWritesPerAttempt {
 		d.violate(o, idx, "%d writes in one attempt, at most %d expected: %v", writes, o.maxWritesPerAttempt, soakSteps(served))
@@ -1297,6 +1459,7 @@ func (o *soakObject) applyOutcome(outcome soakOutcome, now time.Time) {
 	o.runTimes = append(o.runTimes, now)
 	switch outcome {
 	case soakOK:
+		o.pendingStartedAt, o.pendingOp = "", nil
 		o.consecutive = 0
 		o.next = time.Time{}
 		o.successesInEpoch++
@@ -1313,9 +1476,20 @@ func (o *soakObject) applyOutcome(outcome soakOutcome, now time.Time) {
 		o.phase = phaseInvalid
 		o.rejections++
 		o.runTimes = nil
-	case soakTransient:
+	case soakTransient, soakDependency:
 		o.consecutive++
 		o.phase = phaseBackoff
+		o.dependencyCapped = false
+		if outcome == soakDependency {
+			// Waiting for another resource never stalls: past the limit the count stays one
+			// short of it and the wait is MaxDelay.
+			o.dependencyInEpoch++
+			if o.consecutive >= soakMaxAttempts {
+				o.consecutive = soakMaxAttempts - 1
+				o.dependencyCapped = true
+			}
+			break
+		}
 		if o.consecutive >= soakMaxAttempts {
 			o.phase = phaseStalled
 			o.next = time.Time{}
@@ -1346,6 +1520,10 @@ func (d *soakDriver) checkBackoff(o *soakObject, idx int, now time.Time, res ctr
 	base := soakBaseDelay(o.consecutive)
 	low := time.Duration(float64(base) * (1 - d.plan.jitter))
 	high := time.Duration(float64(base)*(1+d.plan.jitter)) + time.Second
+	if o.dependencyCapped {
+		low, high = 30*time.Minute, 30*time.Minute+time.Second
+	}
+	low, high = max(low, o.waitFloor), max(high, o.waitFloor+time.Second)
 	if wait < low || wait > high {
 		d.violate(o, idx, "backoff after failure %d is %s, want %s..%s", o.consecutive, wait, low, high)
 	}
@@ -1367,12 +1545,12 @@ func (d *soakDriver) expectStatus(o *soakObject, idx int, obs soakObserved) {
 	if obs.retry.ConsecutiveFailures != o.consecutive {
 		d.violate(o, idx, "consecutiveFailures %d, the model says %d", obs.retry.ConsecutiveFailures, o.consecutive)
 	}
-	switch {
-	case o.phase == phaseBackoff:
+	switch o.phase {
+	case phaseBackoff:
 		if obs.retry.NextAttemptAt == "" {
 			d.violate(o, idx, "phase %q with nextAttemptAt %q", o.phase, obs.retry.NextAttemptAt)
 		}
-	case o.pendingStartedAt != "":
+	case apimDeploymentPhaseImporting:
 		// A failure before the running import leaves its nextAttemptAt behind, already
 		// due. It must stay: the gate reads failures without one as Stalled or Invalid.
 		if (o.consecutive > 0) != (obs.retry.NextAttemptAt != "") {
@@ -1397,12 +1575,7 @@ func (d *soakDriver) pickEvents(o *soakObject, idx int, served []soakServed) []s
 	if o.gone || d.stopped {
 		return nil
 	}
-	wrote := false
-	for _, s := range served {
-		if soakIsWrite(s.step) {
-			wrote = true
-		}
-	}
+	wrote := soakAttempted(served)
 	seed := d.plan.seed
 	var events []soakEvent
 	if d.plan.events && !o.deleting {
@@ -1431,6 +1604,17 @@ func (d *soakDriver) pickEvents(o *soakObject, idx int, served []soakServed) []s
 		events = append(events, soakEventNoise)
 	}
 	return events
+}
+
+// soakAttempted reports whether a reconcile started an attempt to write to APIM: it sent a
+// write, or the deployment's existence check of the API that precedes the import.
+func soakAttempted(served []soakServed) bool {
+	for _, s := range served {
+		if soakIsWrite(s.step) || s.step == soakStepGetAPI || s.step == soakStepServiceDetails {
+			return true
+		}
+	}
+	return false
 }
 
 // soakSteps lists the steps of served requests with their faults.

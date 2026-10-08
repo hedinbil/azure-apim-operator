@@ -54,15 +54,8 @@ type APIMTagReconciler struct {
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimtags/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimtags/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the APIMTag object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
+// Reconcile creates or updates the tag in APIM when the retry policy allows a write (see
+// retry.go). Deleting an APIMTag leaves the tag in APIM.
 func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -147,6 +140,10 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	w.starting()
 	upsertErr := apim.UpsertTag(ctx, cfg)
 
+	// Record the outcome even when the reconcile has timed out or the operator is stopping.
+	outCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+
 	// Take the patch base before changing the status, so the patch carries the changes.
 	statusPatch := client.MergeFrom(tag.DeepCopy())
 	tag.Status.ObservedGeneration = tag.Generation
@@ -158,7 +155,7 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		tag.Status.Phase = out.Phase
 		// APIMTagStatus has no lastError, so the error itself goes into the message.
 		tag.Status.Message = out.statusMessage("Failed to create or update tag in APIM", upsertErr)
-		if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
+		if err := r.Status().Patch(outCtx, &tag, statusPatch); err != nil {
 			// The failure count is lost without the patch, but the requeue still waits out
 			// this attempt's backoff instead of retrying at once.
 			logger.Error(err, "❌ Failed to patch APIMTag status", "tagID", cfg.TagID)
@@ -171,9 +168,12 @@ func (r *APIMTagReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	tag.Status.Message = "Tag created or updated"
 
 	// Use Patch to update only status without touching spec fields.
-	if err := r.Status().Patch(ctx, &tag, statusPatch); err != nil {
+	if err := r.Status().Patch(outCtx, &tag, statusPatch); err != nil {
 		logger.Error(err, "❌ Failed to patch APIMTag status")
-		return ctrl.Result{}, err
+		// APIM has the write; only recording it failed. Never hand the error back: that
+		// would put controller-runtime's rate limiter, with no attempt limit, in charge of
+		// writing to APIM again. Check again after one backoff step instead.
+		return ctrl.Result{RequeueAfter: w.policy.BaseDelay}, nil
 	}
 
 	return ctrl.Result{}, nil

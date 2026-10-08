@@ -1,11 +1,13 @@
 package apim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,14 +52,6 @@ func (f *fakeARM) request(i int) *http.Request {
 	return f.requests[i]
 }
 
-// withAsyncTiming shortens the async wait for one test.
-func withAsyncTiming(t *testing.T, timeout, interval time.Duration) {
-	t.Helper()
-	previousTimeout, previousInterval := AsyncWaitTimeout, AsyncPollInterval
-	AsyncWaitTimeout, AsyncPollInterval = timeout, interval
-	t.Cleanup(func() { AsyncWaitTimeout, AsyncPollInterval = previousTimeout, previousInterval })
-}
-
 func deploymentConfig() APIMDeploymentConfig {
 	return APIMDeploymentConfig{
 		SubscriptionID: "sub-1", ResourceGroup: "rg-1", ServiceName: "apim-1",
@@ -99,12 +93,9 @@ func TestEveryCallGoesThroughTheSharedClient(t *testing.T) {
 		want int // requests the fake must see
 	}{
 		{"GetAPI", func(ctx context.Context) error { _, _, err := GetAPI(ctx, deploymentConfig()); return err }, 1},
-		{"ImportOpenAPIDefinitionToAPIM", func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{"openapi":"3.0.0"}`))
-		}, 2}, // GET for the etag, then the PUT
-		{"UpsertWebSocketAPI", func(ctx context.Context) error { return UpsertWebSocketAPI(ctx, deploymentConfig()) }, 2},
-		{"AssignServiceUrlToApi", func(ctx context.Context) error { return AssignServiceUrlToApi(ctx, deploymentConfig()) }, 1},
-		{"SetSubscriptionRequired", func(ctx context.Context) error { return SetSubscriptionRequired(ctx, deploymentConfig()) }, 1},
+		// GET for the etag, then the PUT
+		{"ImportOpenAPIDefinitionToAPIM", hcDropResult(hcImport), 2},
+		{"UpsertWebSocketAPI", hcDropResult(hcUpsertWebSocket), 2},
 		{"AssignProductsToAPI", func(ctx context.Context) error { return AssignProductsToAPI(ctx, deploymentConfig()) }, 2},
 		{"AssignTagsToAPI", func(ctx context.Context) error { return AssignTagsToAPI(ctx, deploymentConfig()) }, 1},
 		{"UpsertProduct", func(ctx context.Context) error {
@@ -222,18 +213,14 @@ func TestNonSuccessStatusesAreTypedErrors(t *testing.T) {
 // untyped fmt.Errorf of its own.
 func TestEachWriteReturnsTypedErrors(t *testing.T) {
 	writes := map[string]func(ctx context.Context) error{
-		"AssignServiceUrlToApi":   func(ctx context.Context) error { return AssignServiceUrlToApi(ctx, deploymentConfig()) },
-		"SetSubscriptionRequired": func(ctx context.Context) error { return SetSubscriptionRequired(ctx, deploymentConfig()) },
-		"AssignProductsToAPI":     func(ctx context.Context) error { return AssignProductsToAPI(ctx, deploymentConfig()) },
-		"AssignTagsToAPI":         func(ctx context.Context) error { return AssignTagsToAPI(ctx, deploymentConfig()) },
-		"UpsertProduct":           func(ctx context.Context) error { return UpsertProduct(ctx, productConfig()) },
-		"DeleteProduct":           func(ctx context.Context) error { return DeleteProduct(ctx, productConfig()) },
-		"UpsertTag":               func(ctx context.Context) error { return UpsertTag(ctx, tagConfig()) },
-		"UpsertInboundPolicy":     func(ctx context.Context) error { return UpsertInboundPolicy(ctx, policyConfig()) },
-		"ImportOpenAPIDefinitionToAPIM": func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{}`))
-		},
-		"UpsertWebSocketAPI": func(ctx context.Context) error { return UpsertWebSocketAPI(ctx, deploymentConfig()) },
+		"AssignProductsToAPI":           func(ctx context.Context) error { return AssignProductsToAPI(ctx, deploymentConfig()) },
+		"AssignTagsToAPI":               func(ctx context.Context) error { return AssignTagsToAPI(ctx, deploymentConfig()) },
+		"UpsertProduct":                 func(ctx context.Context) error { return UpsertProduct(ctx, productConfig()) },
+		"DeleteProduct":                 func(ctx context.Context) error { return DeleteProduct(ctx, productConfig()) },
+		"UpsertTag":                     func(ctx context.Context) error { return UpsertTag(ctx, tagConfig()) },
+		"UpsertInboundPolicy":           func(ctx context.Context) error { return UpsertInboundPolicy(ctx, policyConfig()) },
+		"ImportOpenAPIDefinitionToAPIM": hcDropResult(hcImport),
+		"UpsertWebSocketAPI":            hcDropResult(hcUpsertWebSocket),
 		"GetAPIMServiceDetails": func(ctx context.Context) error {
 			_, _, err := GetAPIMServiceDetails(ctx, deploymentConfig())
 			return err
@@ -359,8 +346,12 @@ func TestImportRequestShape(t *testing.T) {
 	fake, puts := importFakeARM(t, http.StatusOK)
 	cfg := deploymentConfig()
 	doc := `{"openapi":"3.0.0","info":{"title":"Orders"}}`
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
+	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc))
+	if err != nil {
 		t.Fatalf("import = %v", err)
+	}
+	if result.Accepted() {
+		t.Errorf("a 200 import = %+v, want an empty WriteResult (APIM finished it)", result)
 	}
 	put := fake.request(1)
 	if put.Method != http.MethodPut {
@@ -390,7 +381,7 @@ func TestImportRequestShape(t *testing.T) {
 	// A revision skips the GET and addresses "orders;rev=3" with a literal separator.
 	fake, _ = importFakeARM(t, http.StatusCreated)
 	cfg.Revision = "3"
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{}`)); err != nil {
+	if _, err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{}`)); err != nil {
 		t.Fatalf("revision import = %v", err)
 	}
 	put = fake.request(0)
@@ -410,7 +401,7 @@ func TestImportSetsServiceURLOverTheDocumentsServers(t *testing.T) {
 	cfg := deploymentConfig()
 	cfg.ServiceURL = "https://sharc-api.crm-dev.external.hedinit.io"
 	doc := `{"openapi":"3.0.1","servers":[{"url":"http://crm-sharc-api.crm-sharc-dev.svc.cluster.local/"}]}`
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
+	if _, err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
 		t.Fatalf("import = %v", err)
 	}
 	b := decodeImportBody(t, (*puts)[0])
@@ -422,7 +413,9 @@ func TestImportSetsServiceURLOverTheDocumentsServers(t *testing.T) {
 	}
 }
 
-// TestImportFormat pins the format chosen per document and the YAML-to-JSON conversion.
+// TestImportFormat pins the format chosen per document. Only Swagger 2.0 YAML is converted
+// (APIM has no Swagger-YAML format); everything else is sent byte for byte, since a YAML 1.1
+// conversion changes an OpenAPI 3 definition (version 1.0 becomes the number 1).
 func TestImportFormat(t *testing.T) {
 	cases := []struct {
 		name, doc, format string
@@ -431,10 +424,22 @@ func TestImportFormat(t *testing.T) {
 		{"openapi 3 json", `{"openapi":"3.0.2","info":{}}`, "openapi+json", ""},
 		{"openapi 3.1 json", `{"openapi":"3.1.0"}`, "openapi+json", ""},
 		{"swagger 2 json", `{"swagger":"2.0","host":"svc.cluster.local"}`, "swagger-json", ""},
-		{"openapi 3 yaml", "openapi: 3.0.0\ninfo:\n  title: x\n", "openapi+json", `{"info":{"title":"x"},"openapi":"3.0.0"}`},
+		{"openapi 3 yaml is sent as is", "openapi: 3.0.0\ninfo:\n  title: x\n", "openapi", ""},
+		{"openapi 3 yaml keeps YAML 1.1 lookalikes", "openapi: 3.0.0\ninfo:\n  version: 1.0\n  x-flag: yes\n", "openapi", ""},
+		{"openapi 3 yaml with a quoted key", "\"openapi\": \"3.1.0\"\npaths: {}\n", "openapi", ""},
+		{"openapi 3 flow-mapping yaml", "{openapi: 3.0.0, paths: {}}\n", "openapi", ""},
+		{"yaml without version is sent as openapi", "info:\n  title: x\n", "openapi", ""},
 		{"swagger 2 yaml", "swagger: '2.0'\nbasePath: /v1\n", "swagger-json", `{"basePath":"/v1","swagger":"2.0"}`},
+		{"swagger 2 yaml with a quoted key", "'swagger': '2.0'\nhost: svc\n", "swagger-json", `{"host":"svc","swagger":"2.0"}`},
 		{"json without version falls back", `{}`, "openapi+json", ""},
 		{"json keeps key order and spacing", "{ \"openapi\": \"3.0.0\",  \"a\": 1 }", "openapi+json", ""},
+		{"json swagger keeps key order", `{"swagger":"2.0","info":{},"basePath":"/v1"}`, "swagger-json", ""},
+		// Fuzz findings of 2026-10-08 (fuzz_test.go): none of these is Swagger 2.0.
+		{"JSON-F1 Swagger in another case is not swagger", `{"Swagger":"2.0","openapi":"3.0.0"}`, "openapi+json", ""},
+		{"YAML-F3 colon in a key is not swagger", "swagger:v2: true\nopenapi: 3.0.0\n", "openapi", ""},
+		{"YAML-F2 second document is not read", "openapi: 3.0.0\n---\nswagger: '2.0'\n", "openapi", ""},
+		{"YAML-F5 null swagger is not swagger", "swagger: ~\nopenapi: 3.0.0\n", "openapi", ""},
+		{"YAML-F1 swagger after a lone CR", "info: x\rswagger: '2.0'\r", "swagger-json", `{"info":"x","swagger":"2.0"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -466,23 +471,26 @@ func TestImportFormat(t *testing.T) {
 // request reaches ARM.
 func TestImportBadDocumentSendsNothing(t *testing.T) {
 	fake, _ := importFakeARM(t, http.StatusOK)
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte("[1,2]")); err == nil {
-		t.Fatal("import of a JSON array succeeded, want an error")
+	for _, bad := range []string{"[1,2]", "- a\n- b\n", "key: [unclosed\n"} {
+		if _, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(bad)); err == nil {
+			t.Errorf("import of %q succeeded, want an error", bad)
+		}
 	}
 	if n := fake.count(); n != 0 {
 		t.Errorf("ARM saw %d requests, want 0", n)
 	}
 }
 
-// asyncARM answers the import PUT with 202 and an operation URL, then the operation
-// polls with whatever poll returns.
-func asyncARM(t *testing.T, accepted http.Header, poll func(n int, w http.ResponseWriter)) *atomic.Int32 {
+// asyncARM answers the etag GET with 404 and the API PUT with 202 plus accepted, and
+// counts every request to /operations/: none may come, since a write never waits.
+func asyncARM(t *testing.T, accepted http.Header) (*fakeARM, *atomic.Int32) {
 	t.Helper()
 	var polls atomic.Int32
-	newFakeARM(t, func(w http.ResponseWriter, r *http.Request) {
+	fake := newFakeARM(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/operations/"):
-			poll(int(polls.Add(1)), w)
+			polls.Add(1)
+			writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
 		case r.Method == http.MethodGet:
 			writeJSON(w, http.StatusNotFound, `{"error":{"code":"ResourceNotFound"}}`)
 		default:
@@ -492,70 +500,107 @@ func asyncARM(t *testing.T, accepted http.Header, poll func(n int, w http.Respon
 			writeJSON(w, http.StatusAccepted, ``)
 		}
 	})
-	return &polls
+	return fake, &polls
 }
 
-func TestAsyncImportSucceeds(t *testing.T) {
-	withAsyncTiming(t, 5*time.Second, 5*time.Millisecond)
+// TestAsyncImportReturnsTheOperation: a 202 hands the operation to the caller at once; the
+// import does not read it.
+func TestAsyncImportReturnsTheOperation(t *testing.T) {
 	// A relative operation URL is resolved against the ARM host.
-	polls := asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op1"}}, func(n int, w http.ResponseWriter) {
-		if n < 3 {
-			writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
-			return
-		}
-		writeJSON(w, http.StatusOK, `{"status":"Succeeded"}`)
-	})
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`)); err != nil {
+	fake, polls := asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op1"}})
+	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+	if err != nil {
 		t.Fatalf("import = %v, want nil", err)
 	}
-	if got := polls.Load(); got != 3 {
-		t.Errorf("polled %d times, want 3", got)
+	if !result.Accepted() || result.OperationURL != hcUnroutableHost+"/operations/op1" {
+		t.Errorf("WriteResult = %+v, want Accepted with %s/operations/op1", result, hcUnroutableHost)
+	}
+	if result.RetryAfter != 0 {
+		t.Errorf("RetryAfter = %s, want 0 without a Retry-After header", result.RetryAfter)
+	}
+	if got := polls.Load(); got != 0 {
+		t.Errorf("read the operation %d times, want 0: the caller follows it", got)
+	}
+	if got := fake.count(); got != 2 {
+		t.Errorf("requests = %d, want the etag GET and the PUT", got)
 	}
 }
 
-func TestAsyncImportViaLocationHeader(t *testing.T) {
-	withAsyncTiming(t, 5*time.Second, 5*time.Millisecond)
-	var location atomic.Value // the fake's own absolute URL, known only once it runs
-	var polls atomic.Int32
-	fake := newFakeARM(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/operations/"):
-			if polls.Add(1) < 2 {
-				writeJSON(w, http.StatusAccepted, ``)
-				return
-			}
-			// A terminal status without a status field counts as done.
-			writeJSON(w, http.StatusOK, `{}`)
-		case r.Method == http.MethodGet:
-			writeJSON(w, http.StatusNotFound, `{"error":{"code":"ResourceNotFound"}}`)
-		default:
-			w.Header().Set("Location", location.Load().(string))
-			writeJSON(w, http.StatusAccepted, ``)
-		}
-	})
-	location.Store(fake.server.URL + "/operations/op2")
-
-	if err := UpsertWebSocketAPI(context.Background(), deploymentConfig()); err != nil {
+func TestAsyncUpsertViaLocationHeader(t *testing.T) {
+	_, polls := asyncARM(t, http.Header{"Location": {hcUnroutableHost + "/operations/op2"}})
+	result, err := UpsertWebSocketAPI(context.Background(), deploymentConfig())
+	if err != nil {
 		t.Fatalf("websocket upsert = %v, want nil", err)
 	}
-	if got := polls.Load(); got != 2 {
-		t.Errorf("polled %d times, want 2", got)
+	if result.OperationURL != hcUnroutableHost+"/operations/op2" {
+		t.Errorf("OperationURL = %q, want the Location", result.OperationURL)
+	}
+	if got := polls.Load(); got != 0 {
+		t.Errorf("read the operation %d times, want 0", got)
 	}
 }
 
-func TestAsyncImportFailedCarriesTheAzureCode(t *testing.T) {
-	withAsyncTiming(t, 5*time.Second, 5*time.Millisecond)
-	asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op3"}}, func(_ int, w http.ResponseWriter) {
+// TestAsyncImportNeverWaits: neither a Retry-After of an hour nor a context without a
+// deadline holds the write; the Retry-After goes back to the caller.
+func TestAsyncImportNeverWaits(t *testing.T) {
+	_, polls := asyncARM(t, http.Header{
+		"Azure-Asyncoperation": {"/operations/op7"},
+		"Retry-After":          {"3600"},
+	})
+	start := time.Now()
+	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("import = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("import took %s; a 202 must return at once", elapsed)
+	}
+	if result.RetryAfter != time.Hour {
+		t.Errorf("RetryAfter = %s, want 1h from the 202", result.RetryAfter)
+	}
+	if got := polls.Load(); got != 0 {
+		t.Errorf("read the operation %d times, want 0", got)
+	}
+}
+
+// TestAsync202WithoutOperationURLIsAnError: a 202 that names nothing to follow leaves the
+// write running in APIM with no way to tell when it ends; it is not reported as done.
+func TestAsync202WithoutOperationURLIsAnError(t *testing.T) {
+	asyncARM(t, nil)
+	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+	if !errors.Is(err, ErrNoOperationURL) {
+		t.Fatalf("import = %+v, %v; want ErrNoOperationURL", result, err)
+	}
+	var apimErr *Error
+	if !errors.As(err, &apimErr) || apimErr.StatusCode != http.StatusAccepted ||
+		apimErr.Method != http.MethodPut || apimErr.Operation != "import API" {
+		t.Errorf("err = %+v, want an *apim.Error for the import PUT with status 202", apimErr)
+	}
+	if result.Accepted() {
+		t.Errorf("WriteResult = %+v, want empty with the error", result)
+	}
+}
+
+// TestGetOperationStateFailedCarriesTheAzureCode: an operation that ended Failed reports the
+// Azure codes of its result, not an HTTP status.
+func TestGetOperationStateFailedCarriesTheAzureCode(t *testing.T) {
+	newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK,
 			`{"status":"Failed","error":{"code":"InternalServerError","message":"DeadOperationMonitor","details":[{"code":"DeadOperationMonitor"}]}}`)
 	})
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	var apimErr *Error
-	if !errors.As(err, &apimErr) {
-		t.Fatalf("import = %v (%T), want *apim.Error", err, err)
+	state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/op3")
+	if err != nil {
+		t.Fatalf("GetOperationState() error = %v, want the failure in the state", err)
 	}
-	if !errors.Is(err, ErrAsyncOperationFailed) {
-		t.Errorf("errors.Is(err, ErrAsyncOperationFailed) = false for %v", err)
+	if state.Status != OperationFailed {
+		t.Fatalf("Status = %s, want Failed", state.Status)
+	}
+	var apimErr *Error
+	if !errors.As(state.Err, &apimErr) {
+		t.Fatalf("Err = %v (%T), want *apim.Error", state.Err, state.Err)
+	}
+	if !errors.Is(state.Err, ErrAsyncOperationFailed) {
+		t.Errorf("errors.Is(Err, ErrAsyncOperationFailed) = false for %v", state.Err)
 	}
 	if apimErr.Code != "InternalServerError" || apimErr.DetailCode != "DeadOperationMonitor" {
 		t.Errorf("codes = %q/%q, want InternalServerError/DeadOperationMonitor", apimErr.Code, apimErr.DetailCode)
@@ -563,117 +608,114 @@ func TestAsyncImportFailedCarriesTheAzureCode(t *testing.T) {
 	if apimErr.StatusCode != 0 {
 		t.Errorf("StatusCode = %d, want 0 for an async result", apimErr.StatusCode)
 	}
-	if !strings.Contains(err.Error(), "DeadOperationMonitor") {
-		t.Errorf("Error() = %q, want the Azure message", err.Error())
+	if !strings.Contains(state.Err.Error(), "DeadOperationMonitor") {
+		t.Errorf("Error() = %q, want the Azure message", state.Err.Error())
 	}
 }
 
-func TestAsyncImportCanceled(t *testing.T) {
-	withAsyncTiming(t, 5*time.Second, 5*time.Millisecond)
-	asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op4"}}, func(_ int, w http.ResponseWriter) {
-		writeJSON(w, http.StatusOK, `{"status":"Canceled"}`)
-	})
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, ErrAsyncOperationFailed) {
-		t.Fatalf("import = %v, want ErrAsyncOperationFailed", err)
-	}
-}
-
-func TestAsyncPollHTTPErrorIsTyped(t *testing.T) {
-	withAsyncTiming(t, 5*time.Second, 5*time.Millisecond)
-	asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op5"}}, func(_ int, w http.ResponseWriter) {
+func TestGetOperationStateHTTPErrorIsTyped(t *testing.T) {
+	newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, `{"error":{"code":"InternalServerError","message":"boom"}}`)
 	})
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+	state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/op5")
 	var apimErr *Error
 	if !errors.As(err, &apimErr) || apimErr.StatusCode != http.StatusInternalServerError || apimErr.Method != http.MethodGet {
-		t.Fatalf("import = %v, want *apim.Error 500 from the GET poll", err)
+		t.Fatalf("GetOperationState() = %+v, %v; want *apim.Error 500 from the GET", state, err)
+	}
+	if errors.Is(err, ErrAsyncOperationFailed) {
+		t.Errorf("a failed read is not a failed operation: %v", err)
 	}
 }
 
-func TestAsyncImportTimesOut(t *testing.T) {
-	withAsyncTiming(t, 80*time.Millisecond, 10*time.Millisecond)
-	polls := asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op6"}}, func(_ int, w http.ResponseWriter) {
+func TestGetOperationStateStopsWithTheContext(t *testing.T) {
+	fake := newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
 	})
-	start := time.Now()
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, ErrImportWaitTimeout) {
-		t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := GetOperationState(ctx, "tok", hcUnroutableHost+"/operations/op9"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetOperationState() = %v, want context.Canceled", err)
 	}
-	var apimErr *Error
-	if !errors.As(err, &apimErr) || apimErr.Operation != "import API" {
-		t.Errorf("timeout = %v, want *apim.Error for the import", err)
-	}
-	if elapsed := time.Since(start); elapsed < 80*time.Millisecond || elapsed > 2*time.Second {
-		t.Errorf("gave up after %s, want about the 80ms wait", elapsed)
-	}
-	if polls.Load() < 2 {
-		t.Errorf("polled %d times, want several before giving up", polls.Load())
+	if got := fake.count(); got != 0 {
+		t.Errorf("sent %d requests with a cancelled context", got)
 	}
 }
 
-// TestRetryAfterIsHonouredAndBounded: a Retry-After far beyond the remaining wait must
-// not hold the reconcile past AsyncWaitTimeout; the operation is polled once at the end.
-func TestRetryAfterIsHonouredAndBounded(t *testing.T) {
-	withAsyncTiming(t, 150*time.Millisecond, time.Millisecond)
-	polls := asyncARM(t, http.Header{
-		"Azure-Asyncoperation": {"/operations/op7"},
-		"Retry-After":          {"3600"},
-	}, func(_ int, w http.ResponseWriter) {
-		w.Header().Set("Retry-After", "3600")
-		writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
-	})
-	start := time.Now()
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, ErrImportWaitTimeout) {
-		t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
+// TestIfMatchForUpsert pins the existence check before an API upsert: a 404 means a new API
+// (If-Match: *), an existing one is updated on its etag, and any other failure of the GET
+// stops the write before it is sent.
+func TestIfMatchForUpsert(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		etag    string
+		want    string
+		wantErr int // the status of the returned *Error; 0 for none
+	}{
+		{name: "absent", status: http.StatusNotFound, want: "*"},
+		{name: "existing", status: http.StatusOK, etag: `W/"e1"`, want: `"e1"`},
+		{name: "existing without etag", status: http.StatusOK, want: "*"},
+		{name: "server error", status: http.StatusInternalServerError, wantErr: http.StatusInternalServerError},
+		{name: "throttled", status: http.StatusTooManyRequests, wantErr: http.StatusTooManyRequests},
+		{name: "forbidden", status: http.StatusForbidden, wantErr: http.StatusForbidden},
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("waited %s; Retry-After must be bounded by the remaining wait", elapsed)
-	}
-	// With a 1 ms poll interval and no Retry-After this would have polled ~150 times.
-	if got := polls.Load(); got != 1 {
-		t.Errorf("polled %d times, want exactly 1 (Retry-After replaces the interval)", got)
-	}
-}
-
-// TestRetryAfterShortensTheInterval: a Retry-After of one second beats an interval of
-// an hour.
-func TestRetryAfterShortensTheInterval(t *testing.T) {
-	withAsyncTiming(t, 10*time.Second, time.Hour)
-	asyncARM(t, http.Header{
-		"Azure-Asyncoperation": {"/operations/op8"},
-		"Retry-After":          {"1"},
-	}, func(_ int, w http.ResponseWriter) {
-		writeJSON(w, http.StatusOK, `{"status":"Succeeded"}`)
-	})
-	start := time.Now()
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`)); err != nil {
-		t.Fatalf("import = %v, want nil", err)
-	}
-	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
-		t.Errorf("finished after %s, want about the 1s Retry-After", elapsed)
-	}
-}
-
-func TestAsyncWaitStopsWithTheContext(t *testing.T) {
-	withAsyncTiming(t, time.Minute, time.Minute)
-	asyncARM(t, http.Header{"Azure-Asyncoperation": {"/operations/op9"}}, func(_ int, w http.ResponseWriter) {
-		writeJSON(w, http.StatusOK, `{"status":"InProgress"}`)
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	err := ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("import = %v, want context.DeadlineExceeded", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) {
+				if tc.etag != "" {
+					w.Header().Set("ETag", tc.etag)
+				}
+				writeJSON(w, tc.status, `{"error":{"code":"Whatever"}}`)
+			})
+			got, err := ifMatchForUpsert(context.Background(), deploymentConfig())
+			if tc.wantErr != 0 {
+				var apimErr *Error
+				if !errors.As(err, &apimErr) || apimErr.StatusCode != tc.wantErr || apimErr.Method != http.MethodGet {
+					t.Fatalf("ifMatchForUpsert() = %q, %v; want the GET's %d", got, err, tc.wantErr)
+				}
+				if got != "" {
+					t.Errorf("If-Match = %q alongside an error, want \"\"", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Errorf("ifMatchForUpsert() = %q, %v; want %q, nil", got, err, tc.want)
+			}
+		})
 	}
 }
 
-func TestAsync202WithoutPollURLIsAccepted(t *testing.T) {
-	asyncARM(t, nil, func(_ int, w http.ResponseWriter) {})
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`)); err != nil {
-		t.Fatalf("import = %v, want nil (nothing to poll)", err)
+// TestFailedExistenceCheckSendsNoUpsert: an APIM that cannot answer the GET is not sent the
+// import (or websocket upsert) after it. Before, the GET failure was logged and the PUT went
+// out with If-Match: *, overwriting whatever was there.
+func TestFailedExistenceCheckSendsNoUpsert(t *testing.T) {
+	upserts := map[string]func(ctx context.Context) (WriteResult, error){
+		"import":    hcImport,
+		"websocket": hcUpsertWebSocket,
+	}
+	for name, upsert := range upserts {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeARM(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					writeJSON(w, http.StatusInternalServerError, `{"error":{"code":"InternalServerError"}}`)
+					return
+				}
+				writeJSON(w, http.StatusOK, `{}`)
+			})
+			result, err := upsert(context.Background())
+			var apimErr *Error
+			if !errors.As(err, &apimErr) || apimErr.StatusCode != http.StatusInternalServerError || apimErr.Operation != "get API" {
+				t.Fatalf("%s = %+v, %v; want the GET's 500", name, result, err)
+			}
+			for i := range fake.count() {
+				if m := fake.request(i).Method; m != http.MethodGet {
+					t.Errorf("request %d = %s, want only the GET", i, m)
+				}
+			}
+			if got := fake.count(); got != 1 {
+				t.Errorf("requests = %d, want the GET alone", got)
+			}
+		})
 	}
 }
 
@@ -723,6 +765,19 @@ func TestParseARMError(t *testing.T) {
 		{"empty", ``, "", "", ""},
 		{"json without error", `{"status":"Failed"}`, "", "", `{"status":"Failed"}`},
 		{"long text is truncated", long, "", "", strings.Repeat("x", maxErrorBodyInMessage) + "…"},
+		{"long JSON message is truncated", `{"error":{"code":"ValidationError","message":"` + long + `"}}`,
+			"ValidationError", "", strings.Repeat("x", maxErrorBodyInMessage) + "…"},
+		{"long detail message is truncated", `{"error":{"code":"ValidationError","message":"bad:","details":[{"code":"InvalidFormat","message":"` + long + `"}]}}`,
+			"ValidationError", "InvalidFormat", "bad: " + strings.Repeat("x", maxErrorBodyInMessage-len("bad: ")) + "…"},
+		{"top-level long JSON message is truncated", `{"code":"PreconditionFailed","message":"` + long + `"}`,
+			"PreconditionFailed", "", strings.Repeat("x", maxErrorBodyInMessage) + "…"},
+		{"JSON message at the limit is kept", `{"error":{"code":"C","message":"` + long[:maxErrorBodyInMessage] + `"}}`,
+			"C", "", long[:maxErrorBodyInMessage]},
+		{"long JSON message is cut on a rune boundary", `{"error":{"code":"C","message":"x` + strings.Repeat("é", 1000) + `"}}`,
+			"C", "", "x" + strings.Repeat("é", (maxErrorBodyInMessage-1)/2) + "…"},
+		// ARM-F1 (fuzz finding of 2026-10-08): a short body keeps no invalid UTF-8.
+		{"ARM-F1 invalid UTF-8 in a short body", "\xff\xfe not UTF-8", "", "", "\uFFFD not UTF-8"},
+		{"ARM-F1 invalid UTF-8 in the middle", "a\xc3b", "", "", "a\uFFFDb"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -768,14 +823,12 @@ func TestIsNotFound(t *testing.T) {
 // hangs off is not in APIM yet" (ErrDependencyNotFound), which the controllers retry,
 // and which report it as a plain 404, which they give up on. The marked ones write under
 // a resource another custom resource creates: the product or tag an API is assigned to,
-// the API (or operation) a policy is set on, the imported API the patches change.
+// the API (or operation) a policy is set on.
 func TestDependentWritesMarkA404(t *testing.T) {
 	dependent := map[string]bool{
-		"AssignServiceUrlToApi":   true,
-		"SetSubscriptionRequired": true,
-		"AssignProductsToAPI":     true,
-		"AssignTagsToAPI":         true,
-		"UpsertInboundPolicy":     true,
+		"AssignProductsToAPI": true,
+		"AssignTagsToAPI":     true,
+		"UpsertInboundPolicy": true,
 	}
 	operationPolicy := hcCall{"UpsertInboundPolicy (operation)", http.MethodPut, true, false, func(ctx context.Context) error {
 		cfg := policyConfig()
@@ -829,5 +882,433 @@ func TestDependencyNotFoundOnlyOn404(t *testing.T) {
 				t.Errorf("a %d was marked ErrDependencyNotFound: %v", status, err)
 			}
 		})
+	}
+}
+
+// TestAPIWriteSurvivesTheCallersContext: once the PUT of an API is sent it comes back with
+// APIM's answer, even when the reconcile's context is cancelled or runs out meanwhile. Cut
+// off, it would leave APIM running a write nobody recorded, and the next attempt would write
+// on top of it.
+func TestAPIWriteSurvivesTheCallersContext(t *testing.T) {
+	stops := map[string]func() (context.Context, context.CancelFunc, func()){
+		"cancelled": func() (context.Context, context.CancelFunc, func()) {
+			ctx, cancel := context.WithCancel(context.Background())
+			return ctx, cancel, cancel
+		},
+		"deadline": func() (context.Context, context.CancelFunc, func()) {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			return ctx, cancel, func() { <-ctx.Done() }
+		},
+	}
+	for _, upsert := range hcAsyncUpserts {
+		for stopName, newContext := range stops {
+			t.Run(upsert.name+"/"+stopName, func(t *testing.T) {
+				putSeen := make(chan struct{})
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+				var cutOff atomic.Bool
+				newHCFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					if r.Method == http.MethodGet {
+						hcRespond(w, http.StatusNotFound, nil, `{"error":{"code":"ResourceNotFound"}}`)
+						return
+					}
+					close(putSeen)
+					select {
+					case <-release:
+					case <-time.After(10 * time.Second):
+					}
+					// The client hanging up shows here as a cancelled request context.
+					cutOff.Store(r.Context().Err() != nil)
+					hcRespond(w, http.StatusAccepted, http.Header{"Azure-Asyncoperation": {"/operations/survivor"}}, ``)
+				})
+
+				ctx, cancel, stop := newContext()
+				defer cancel()
+				type outcome struct {
+					result WriteResult
+					err    error
+				}
+				done := make(chan outcome, 1)
+				go func() {
+					result, err := upsert.run(ctx)
+					done <- outcome{result, err}
+				}()
+
+				select {
+				case <-putSeen:
+				case o := <-done:
+					t.Fatalf("%s returned %+v, %v before sending the PUT", upsert.name, o.result, o.err)
+				case <-time.After(10 * time.Second):
+					t.Fatal("the PUT never reached the fake ARM")
+				}
+				stop()
+				// Time for a write bound to the caller's context to give up.
+				select {
+				case o := <-done:
+					t.Fatalf("%s returned %+v, %v before APIM answered", upsert.name, o.result, o.err)
+				case <-time.After(150 * time.Millisecond):
+				}
+				releaseOnce.Do(func() { close(release) })
+
+				var o outcome
+				select {
+				case o = <-done:
+				case <-time.After(10 * time.Second):
+					t.Fatal("the write never returned after APIM answered")
+				}
+				if o.err != nil {
+					t.Fatalf("%s = %v, want APIM's answer", upsert.name, o.err)
+				}
+				if want := hcUnroutableHost + "/operations/survivor"; o.result.OperationURL != want {
+					t.Errorf("OperationURL = %q, want %q", o.result.OperationURL, want)
+				}
+				if cutOff.Load() {
+					t.Error("the PUT was cut off when the caller's context ended")
+				}
+				if ctx.Err() == nil {
+					t.Error("the caller's context is still live; the test did not stop it")
+				}
+			})
+		}
+	}
+}
+
+// resetConnection hijacks the connection of a request and closes it with a TCP reset, as a
+// load balancer dropping the connection does.
+func resetConnection(t *testing.T, w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		t.Error("fake ARM cannot hijack")
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		t.Errorf("hijack: %v", err)
+		return
+	}
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.SetLinger(0)
+	}
+	_ = conn.Close()
+}
+
+// TestAPIWriteOutcomeUnknown: a write of an API that got no answer saying how it ended (the
+// connection failed or timed out after the PUT went out, or a gateway in front of ARM
+// answered 502 or 504) is marked ErrWriteOutcomeUnknown, so the controller does not take it
+// for a write APIM refused. A 502 or 504 is still the *Error with its status. Any other
+// answer is APIM's and is returned unmarked.
+func TestAPIWriteOutcomeUnknown(t *testing.T) {
+	cases := []struct {
+		name string
+		// answer answers the PUT.
+		answer func(t *testing.T, w http.ResponseWriter, r *http.Request)
+		// clientTimeout, when set, is the timeout of the client the package uses.
+		clientTimeout time.Duration
+		unknown       bool
+		status        int // the *Error's status; 0 for a transport failure
+	}{
+		{name: "connection reset", unknown: true, answer: func(t *testing.T, w http.ResponseWriter, _ *http.Request) {
+			resetConnection(t, w)
+		}},
+		{name: "connection closed without an answer", unknown: true, answer: func(t *testing.T, w http.ResponseWriter, _ *http.Request) {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("fake ARM cannot hijack")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.Close()
+		}},
+		{name: "timeout", unknown: true, clientTimeout: 100 * time.Millisecond, answer: func(_ *testing.T, w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+			}
+			hcRespond(w, http.StatusOK, nil, `{}`)
+		}},
+		{name: "502", unknown: true, status: http.StatusBadGateway},
+		{name: "504", unknown: true, status: http.StatusGatewayTimeout},
+		{name: "400", status: http.StatusBadRequest},
+		{name: "409", status: http.StatusConflict},
+		{name: "412", status: http.StatusPreconditionFailed},
+		{name: "429", status: http.StatusTooManyRequests},
+		{name: "500", status: http.StatusInternalServerError},
+		{name: "503", status: http.StatusServiceUnavailable},
+	}
+	for _, upsert := range hcAsyncUpserts {
+		for _, tc := range cases {
+			t.Run(upsert.name+"/"+tc.name, func(t *testing.T) {
+				fake := newHCFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					switch {
+					case r.Method == http.MethodGet:
+						hcRespond(w, http.StatusNotFound, nil, `{"error":{"code":"ResourceNotFound"}}`)
+					case tc.answer != nil:
+						tc.answer(t, w, r)
+					default:
+						hcRespond(w, tc.status, nil, fmt.Sprintf(`{"error":{"code":"Code%d","message":"m"}}`, tc.status))
+					}
+				})
+				if tc.clientTimeout != 0 {
+					t.Cleanup(UseEndpoint(hcUnroutableHost, &http.Client{Transport: fake.router, Timeout: tc.clientTimeout}))
+				}
+
+				result, err := upsert.run(context.Background())
+				if err == nil {
+					t.Fatalf("%s = %+v, nil; want an error", upsert.name, result)
+				}
+				if result != (WriteResult{}) {
+					t.Errorf("WriteResult = %+v alongside the error, want empty", result)
+				}
+				if puts := len(fake.requests()) - 1; puts != 1 {
+					t.Errorf("sent %d PUTs, want 1", puts)
+				}
+				if got := errors.Is(err, ErrWriteOutcomeUnknown); got != tc.unknown {
+					t.Errorf("errors.Is(%v, ErrWriteOutcomeUnknown) = %v, want %v", err, got, tc.unknown)
+				}
+				if !strings.Contains(err.Error(), upsert.operation) {
+					t.Errorf("Error() = %q, want it to name %q", err.Error(), upsert.operation)
+				}
+				var apimErr *Error
+				if tc.status == 0 {
+					if errors.As(err, &apimErr) {
+						t.Errorf("a transport failure came back as *apim.Error: %v", err)
+					}
+					if tc.clientTimeout != 0 {
+						var netErr net.Error
+						if !errors.As(err, &netErr) || !netErr.Timeout() {
+							t.Errorf("err = %v, want the timeout itself to stay visible", err)
+						}
+					}
+					return
+				}
+				if !errors.As(err, &apimErr) {
+					t.Fatalf("err = %v (%T), want an *apim.Error", err, err)
+				}
+				if apimErr.StatusCode != tc.status || apimErr.Code != fmt.Sprintf("Code%d", tc.status) ||
+					apimErr.Method != http.MethodPut || apimErr.Operation != upsert.operation {
+					t.Errorf("*Error = %+v, want the PUT's %d", apimErr, tc.status)
+				}
+			})
+		}
+	}
+}
+
+// TestNoWriteNoUnknownOutcome: ErrWriteOutcomeUnknown is for a write that went out. A failed
+// existence check stops the upsert before its PUT, and the other writes are not API writes.
+func TestNoWriteNoUnknownOutcome(t *testing.T) {
+	newHCFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		if r.Method == http.MethodGet {
+			resetConnection(t, w)
+			return
+		}
+		hcRespond(w, http.StatusBadGateway, nil, ``)
+	})
+	for _, upsert := range hcAsyncUpserts {
+		if _, err := upsert.run(context.Background()); err == nil || errors.Is(err, ErrWriteOutcomeUnknown) {
+			t.Errorf("%s with a failed existence check = %v, want an error without ErrWriteOutcomeUnknown", upsert.name, err)
+		}
+	}
+	if err := UpsertTag(context.Background(), tagConfig()); err == nil || errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Errorf("UpsertTag with a 502 = %v, want an *apim.Error without ErrWriteOutcomeUnknown", err)
+	}
+}
+
+// TestResponseBodyIsBounded: a response body is read up to maxResponseBody; a larger one is
+// an error, and the read stops there instead of taking in whatever the endpoint sends.
+func TestResponseBodyIsBounded(t *testing.T) {
+	const endless = 64 << 20 // what the fake offers when asked for "more than the limit"
+	cases := []struct {
+		name    string
+		status  int
+		size    int
+		wantErr bool
+	}{
+		{"at the limit", http.StatusOK, maxResponseBody, false},
+		{"one byte over", http.StatusOK, maxResponseBody + 1, true},
+		{"far over", http.StatusOK, endless, true},
+		{"far over on an error status", http.StatusInternalServerError, endless, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var written atomic.Int64
+			newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				chunk := bytes.Repeat([]byte(" "), 32<<10)
+				for left := tc.size; left > 0; {
+					n := min(left, len(chunk))
+					if _, err := w.Write(chunk[:n]); err != nil {
+						return // the client hung up
+					}
+					written.Add(int64(n))
+					left -= n
+				}
+			})
+			err := UpsertTag(context.Background(), tagConfig())
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("UpsertTag() with a %d byte body = %v, want nil", tc.size, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("UpsertTag() with a %d byte body = nil, want an error", tc.size)
+			}
+			if !strings.Contains(err.Error(), "upsert tag t1: read response body") ||
+				!strings.Contains(err.Error(), fmt.Sprint(maxResponseBody)) {
+				t.Errorf("Error() = %q, want it to name the operation and the limit", err.Error())
+			}
+			var apimErr *Error
+			if errors.As(err, &apimErr) {
+				t.Errorf("an oversized body came back as *apim.Error: %v", err)
+			}
+			if tc.size == endless {
+				if got := written.Load(); got >= endless/2 {
+					t.Errorf("the fake wrote %d bytes before the client hung up; the read is not bounded", got)
+				}
+			}
+		})
+	}
+}
+
+// TestImportEnvelopeKeepsTheDocument: the document travels in the envelope as is. <, > and &
+// are not escaped (json.Marshal would grow a document full of them by half), the body is
+// valid JSON without a trailing newline, and properties.value decodes back to the document
+// byte for byte, whatever it holds.
+func TestImportEnvelopeKeepsTheDocument(t *testing.T) {
+	cfg := deploymentConfig()
+	cfg.ServiceURL = "https://orders.internal/api?a=1&b=<2>"
+	docs := map[string]string{
+		"html in json": `{"openapi":"3.0.0","info":{"title":"A & B","description":"<b>bold</b> -> x < y && y > z"},"paths":{}}`,
+		"html in yaml": "openapi: 3.0.0\ninfo:\n  title: A & B\n  description: <b>bold</b> -> x < y && y > z\n",
+		"escapes in yaml": "openapi: 3.0.0\ninfo:\n  title: \"quote \\\" backslash \\\\ tab\\t\"\n  " +
+			"description: 'line\u2028separator, é, \U0001F600, \x7f'\n",
+		"swagger json": `{"swagger":"2.0","info":{"description":"<script>alert('&')</script>"}}`,
+	}
+	for name, doc := range docs {
+		t.Run(name, func(t *testing.T) {
+			body, format, err := importEnvelope(cfg, []byte(doc))
+			if err != nil {
+				t.Fatalf("importEnvelope() error = %v", err)
+			}
+			if !json.Valid(body) {
+				t.Fatalf("envelope is not valid JSON: %s", body)
+			}
+			if bytes.HasSuffix(body, []byte("\n")) {
+				t.Error("envelope ends in a newline")
+			}
+			for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+				if bytes.Contains(body, []byte(escape)) {
+					t.Errorf("envelope escapes HTML characters as %s: %s", escape, body)
+				}
+			}
+			var decoded importBody
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("decode envelope: %v", err)
+			}
+			if decoded.Properties.Value != doc {
+				t.Errorf("properties.value = %q, want the document %q", decoded.Properties.Value, doc)
+			}
+			if decoded.Properties.Format != format || decoded.Properties.ServiceURL != cfg.ServiceURL ||
+				decoded.Properties.Path != cfg.RoutePrefix {
+				t.Errorf("properties = %+v, want format %s and the config's path and serviceUrl", decoded.Properties, format)
+			}
+			if !bytes.Contains(body, []byte(cfg.ServiceURL)) {
+				t.Errorf("serviceUrl is escaped in %s", body)
+			}
+		})
+	}
+
+	// A document of nothing but HTML characters costs no more than the document itself.
+	doc := `{"openapi":"3.0.0","info":{"description":"` + strings.Repeat("<&>", 10000) + `"}}`
+	body, _, err := importEnvelope(cfg, []byte(doc))
+	if err != nil {
+		t.Fatalf("importEnvelope() error = %v", err)
+	}
+	// Room for the other properties and the escaped quotes of the document; with \u003c
+	// escapes the body would be 30000 bytes larger.
+	if limit := len(doc) + 512; len(body) > limit {
+		t.Errorf("envelope is %d bytes for a %d byte document, want at most %d", len(body), len(doc), limit)
+	}
+}
+
+// TestImportSendsTheEnvelopeUnescaped: what reaches ARM is the envelope itself.
+func TestImportSendsTheEnvelopeUnescaped(t *testing.T) {
+	_, puts := importFakeARM(t, http.StatusOK)
+	cfg := deploymentConfig()
+	doc := `{"openapi":"3.0.0","info":{"description":"<b>a & b</b>"}}`
+	if _, err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
+		t.Fatalf("import = %v", err)
+	}
+	want, _, err := importEnvelope(cfg, []byte(doc))
+	if err != nil {
+		t.Fatalf("importEnvelope() error = %v", err)
+	}
+	if len(*puts) != 1 || (*puts)[0] != string(want) {
+		t.Fatalf("PUT bodies = %q, want exactly %s", *puts, want)
+	}
+	if !strings.Contains((*puts)[0], `<b>a & b</b>`) {
+		t.Errorf("PUT body %s escapes the document", (*puts)[0])
+	}
+}
+
+// bigSwaggerYAML builds a block-style Swagger 2.0 YAML document of at least size bytes.
+func bigSwaggerYAML(size int, version string) []byte {
+	var b bytes.Buffer
+	b.Grow(size + 256)
+	b.WriteString(version + "\ninfo:\n  title: big\n  version: '1'\npaths:\n")
+	for i := 0; b.Len() < size; i++ {
+		fmt.Fprintf(&b, "  /items/%d:\n    get:\n      responses:\n        '200':\n          description: ok %d\n", i, i)
+	}
+	return b.Bytes()
+}
+
+// TestImportRefusesLargeSwaggerYAML: converting Swagger 2.0 YAML to JSON builds the whole
+// document in memory at many times its size, so one over maxSwaggerYAMLConversion is
+// refused with ErrUnsupportedDocument, before any request. The fetcher still accepts it as a
+// document; only its conversion is refused. OpenAPI 3 YAML and JSON of that size are sent
+// as they are.
+func TestImportRefusesLargeSwaggerYAML(t *testing.T) {
+	doc := bigSwaggerYAML(maxSwaggerYAMLConversion+1, "swagger: '2.0'")
+	if len(doc) <= maxSwaggerYAMLConversion {
+		t.Fatalf("document is %d bytes, want over %d", len(doc), maxSwaggerYAMLConversion)
+	}
+	if err := ValidateOpenAPIDocument(doc); err != nil {
+		t.Errorf("ValidateOpenAPIDocument() = %v, want nil: the document itself is fine", err)
+	}
+
+	fake, _ := importFakeARM(t, http.StatusOK)
+	result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), doc)
+	if !errors.Is(err, ErrUnsupportedDocument) {
+		t.Fatalf("import = %+v, %v; want ErrUnsupportedDocument", result, err)
+	}
+	if errors.Is(err, ErrNotOpenAPIDocument) {
+		t.Errorf("err = %v, want it not to claim the document is not OpenAPI", err)
+	}
+	if !strings.Contains(err.Error(), "JSON") {
+		t.Errorf("Error() = %q, want it to say to serve the document as JSON", err.Error())
+	}
+	if n := fake.count(); n != 0 {
+		t.Errorf("ARM saw %d requests, want 0", n)
+	}
+	if result.Accepted() {
+		t.Errorf("WriteResult = %+v, want empty", result)
+	}
+
+	// Same size, OpenAPI 3: sent as is, nothing converted.
+	openAPI := bigSwaggerYAML(maxSwaggerYAMLConversion+1, "openapi: 3.0.0")
+	if format, out, err := importFormat(openAPI); err != nil || format != "openapi" || len(out) != len(openAPI) {
+		t.Errorf("importFormat(large OpenAPI 3 YAML) = %q, %d bytes, %v; want openapi, unchanged", format, len(out), err)
+	}
+	// Swagger 2.0 as JSON is never converted, whatever its size.
+	swaggerJSON := append([]byte(`{"swagger":"2.0","x":"`), bytes.Repeat([]byte("a"), maxSwaggerYAMLConversion)...)
+	swaggerJSON = append(swaggerJSON, `"}`...)
+	if format, _, err := importFormat(swaggerJSON); err != nil || format != "swagger-json" {
+		t.Errorf("importFormat(large Swagger JSON) = %q, %v; want swagger-json", format, err)
 	}
 }

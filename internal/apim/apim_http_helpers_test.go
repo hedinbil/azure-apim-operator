@@ -159,26 +159,34 @@ type hcCall struct {
 	method string
 	// write is false for the two reads (GetAPI, GetAPIMServiceDetails).
 	write bool
-	// polls is true for the API upserts, which wait for a 202.
-	polls bool
+	// async is true for the API upserts, which answer a 202 with a WriteResult naming the
+	// operation instead of waiting for it.
+	async bool
 	run   func(ctx context.Context) error
+}
+
+// hcDropResult adapts an API upsert to hcCall.run, which only looks at the error.
+func hcDropResult(upsert func(ctx context.Context) (WriteResult, error)) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := upsert(ctx)
+		return err
+	}
+}
+
+// hcImport and hcUpsertWebSocket are the two API upserts with the shared test config.
+func hcImport(ctx context.Context) (WriteResult, error) {
+	return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{"openapi":"3.0.0"}`))
+}
+
+func hcUpsertWebSocket(ctx context.Context) (WriteResult, error) {
+	return UpsertWebSocketAPI(ctx, deploymentConfig())
 }
 
 // hcCalls lists every ARM call the package makes, reads included.
 func hcCalls() []hcCall {
 	return []hcCall{
-		{"ImportOpenAPIDefinitionToAPIM", http.MethodPut, true, true, func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{"openapi":"3.0.0"}`))
-		}},
-		{"UpsertWebSocketAPI", http.MethodPut, true, true, func(ctx context.Context) error {
-			return UpsertWebSocketAPI(ctx, deploymentConfig())
-		}},
-		{"AssignServiceUrlToApi", http.MethodPatch, true, false, func(ctx context.Context) error {
-			return AssignServiceUrlToApi(ctx, deploymentConfig())
-		}},
-		{"SetSubscriptionRequired", http.MethodPatch, true, false, func(ctx context.Context) error {
-			return SetSubscriptionRequired(ctx, deploymentConfig())
-		}},
+		{"ImportOpenAPIDefinitionToAPIM", http.MethodPut, true, true, hcDropResult(hcImport)},
+		{"UpsertWebSocketAPI", http.MethodPut, true, true, hcDropResult(hcUpsertWebSocket)},
 		{"AssignProductsToAPI", http.MethodPut, true, false, func(ctx context.Context) error {
 			return AssignProductsToAPI(ctx, deploymentConfig())
 		}},

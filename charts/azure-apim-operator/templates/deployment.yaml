@@ -71,6 +71,12 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.goMemLimit }}
+          env:
+            # Makes the Go GC work harder before the container's memory limit is reached.
+            - name: GOMEMLIMIT
+              value: {{ . | quote }}
+          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -95,4 +101,6 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      terminationGracePeriodSeconds: 10
+      # Above the manager's 150 s graceful shutdown, which lets a write already sent to
+      # APIM come back and be recorded before the pod goes.
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}

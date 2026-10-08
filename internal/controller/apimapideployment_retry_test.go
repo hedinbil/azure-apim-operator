@@ -51,15 +51,16 @@ import (
 
 // ARM steps of one deployment reconcile, as deploymentFakeARM names them.
 const (
-	armStepGetAPI               = "get API"
-	armStepImport               = "import"
-	armStepWebSocket            = "websocket upsert"
-	armStepServiceURL           = "serviceUrl"
-	armStepSubscriptionRequired = "subscriptionRequired"
-	armStepProduct              = "product"
-	armStepTag                  = "tag"
-	armStepServiceDetails       = "service details"
-	armStepPoll                 = "poll"
+	armStepGetAPI    = "get API"
+	armStepImport    = "import"
+	armStepWebSocket = "websocket upsert"
+	// armStepPatchAPI is a PATCH of the API itself. The controller no longer sends one: the
+	// backend serviceUrl and subscriptionRequired travel in the import (or websocket) PUT.
+	armStepPatchAPI       = "patch API"
+	armStepProduct        = "product"
+	armStepTag            = "tag"
+	armStepServiceDetails = "service details"
+	armStepPoll           = "poll"
 )
 
 // armResponder answers one request in place of the fake's default success.
@@ -143,10 +144,8 @@ func (f *deploymentFakeARM) classify(r *http.Request, body []byte) string {
 		return armStepImport
 	case r.URL.Path == apiPath && r.Method == http.MethodPut:
 		return armStepWebSocket
-	case r.URL.Path == apiPath && r.Method == http.MethodPatch && strings.Contains(string(body), "serviceUrl"):
-		return armStepServiceURL
-	case r.URL.Path == apiPath && r.Method == http.MethodPatch && strings.Contains(string(body), "subscriptionRequired"):
-		return armStepSubscriptionRequired
+	case r.URL.Path == apiPath && r.Method == http.MethodPatch:
+		return armStepPatchAPI
 	case strings.HasPrefix(r.URL.Path, f.servicePath+"/products/") && strings.HasSuffix(r.URL.Path, "/apis/"+f.apiID) &&
 		r.Method == http.MethodPut:
 		return armStepProduct
@@ -201,6 +200,17 @@ func writeARMJSON(w http.ResponseWriter, status int, body string) {
 
 func writeARMError(w http.ResponseWriter, status int, code, message string) {
 	writeARMJSON(w, status, fmt.Sprintf(`{"error":{"code":%q,"message":%q}}`, code, message))
+}
+
+// countOf is how often step occurs in steps.
+func countOf(steps []string, step string) int {
+	n := 0
+	for _, s := range steps {
+		if s == step {
+			n++
+		}
+	}
+	return n
 }
 
 // armFails answers with an ARM error body.
@@ -444,7 +454,7 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 
 		Expect(result).To(BeZero())
 		Expect(arm.stepsSince(0)).To(Equal([]string{
-			armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired,
+			armStepGetAPI, armStepImport,
 			armStepProduct, armStepTag, armStepServiceDetails,
 		}))
 		Expect(arm.lastAuth()).To(Equal("Bearer fake-token"))
@@ -505,24 +515,29 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 
 	It("stalls after five transient failures and stops calling APIM", func() {
 		By("failing the async import the way APIM did in Sep 2026")
-		previousTimeout, previousInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-		apim.AsyncWaitTimeout, apim.AsyncPollInterval = 5*time.Second, time.Millisecond
-		DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousTimeout, previousInterval })
 		arm.set(armStepImport, armAccepted())
 		arm.set(armStepPoll, func(w http.ResponseWriter, _ *http.Request) {
 			writeARMJSON(w, http.StatusOK, `{"status":"Failed","error":{"code":"InternalServerError",`+
 				`"message":"DeadOperationMonitor"}}`)
 		})
 
+		// Every attempt takes two reconciles: one sends the import and records the 202, the
+		// next reads the operation and counts its failure.
 		var requeues []time.Duration
 		for i := 0; i < 5; i++ {
 			if next := getDeployment().Status.NextAttemptAt; next != "" {
 				clock.setTo(next)
 			}
+			Expect(reconcileOnce()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}), "attempt %d records the 202", i+1)
+			Expect(getDeployment().Status.PendingImport).NotTo(BeNil())
 			requeues = append(requeues, reconcileOnce().RequeueAfter)
+			Expect(getDeployment().Status.PendingImport).To(BeNil(), "a failed import is forgotten")
 		}
 
 		Expect(requeues).To(Equal([]time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 0}))
+		steps := arm.stepsSince(0)
+		Expect(countOf(steps, armStepImport)).To(Equal(5), "one import per attempt")
+		Expect(countOf(steps, armStepPoll)).To(Equal(5), "one reading per attempt")
 		deployment := getDeployment()
 		Expect(deployment.Status.Phase).To(Equal(phaseStalled))
 		Expect(deployment.Status.ConsecutiveFailures).To(Equal(int32(5)))
@@ -538,7 +553,7 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 	})
 
 	It("goes Invalid at once on a permanent error and stays there", func() {
-		arm.set(armStepServiceURL, armFails(http.StatusBadRequest, "ValidationError"))
+		arm.set(armStepProduct, armFails(http.StatusBadRequest, "ValidationError"))
 
 		Expect(reconcileOnce()).To(BeZero())
 
@@ -546,9 +561,9 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 		Expect(deployment.Status.Phase).To(Equal(phaseInvalid))
 		Expect(deployment.Status.ConsecutiveFailures).To(Equal(int32(1)))
 		Expect(deployment.Status.NextAttemptAt).To(BeEmpty())
-		Expect(deployment.Status.Message).To(HavePrefix("Failed to patch service URL in APIM: APIM rejected the write"))
+		Expect(deployment.Status.Message).To(HavePrefix("Failed to assign API to products: APIM rejected the write"))
 		Expect(deployment.Status.LastError).To(ContainSubstring("ValidationError"))
-		Expect(arm.stepsSince(0)).To(Equal([]string{armStepGetAPI, armStepImport, armStepServiceURL}))
+		Expect(arm.stepsSince(0)).To(Equal([]string{armStepGetAPI, armStepImport, armStepProduct}))
 
 		clock.advance(time.Hour)
 		Expect(expectNoAPIMCall()).To(BeZero())
@@ -585,61 +600,72 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 			"Failed to import API into APIM", []string{armStepGetAPI, armStepImport}),
 		Entry("import 401", armStepImport, http.StatusUnauthorized, "InvalidAuthenticationToken", phaseInvalid,
 			"Failed to import API into APIM", []string{armStepGetAPI, armStepImport}),
-		Entry("serviceUrl 429", armStepServiceURL, http.StatusTooManyRequests, "TooManyRequests", phaseBackoff,
-			"Failed to patch service URL in APIM", []string{armStepGetAPI, armStepImport, armStepServiceURL}),
-		Entry("subscriptionRequired 403", armStepSubscriptionRequired, http.StatusForbidden, "AuthorizationFailed", phaseInvalid,
-			"Failed to patch subscription requirement in APIM",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired}),
-		Entry("subscriptionRequired 500", armStepSubscriptionRequired, http.StatusInternalServerError, "InternalServerError", phaseBackoff,
-			"Failed to patch subscription requirement in APIM",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired}),
 		// The product is not in APIM yet (its APIMProduct is new or backing off): retried.
 		Entry("product 404, product not written yet", armStepProduct, http.StatusNotFound, "ResourceNotFound", phaseBackoff,
 			"Failed to assign API to products",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct}),
-		Entry("product 403 on a write", armStepProduct, http.StatusForbidden, "AuthorizationFailed", phaseInvalid,
+			[]string{armStepGetAPI, armStepImport, armStepProduct}),
+		Entry("product 403 on a write", armStepProduct, http.StatusForbidden, "LinkedAuthorizationFailed", phaseInvalid,
 			"Failed to assign API to products",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct}),
 		Entry("product 412", armStepProduct, http.StatusPreconditionFailed, "PreconditionFailed", phaseBackoff,
 			"Failed to assign API to products",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct}),
 		Entry("tag 503", armStepTag, http.StatusServiceUnavailable, "ServiceUnavailable", phaseBackoff,
 			"Failed to assign API to tags",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag}),
 		Entry("tag 404, tag not written yet", armStepTag, http.StatusNotFound, "ResourceNotFound", phaseBackoff,
 			"Failed to assign API to tags",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag}),
-		Entry("serviceUrl 404 on the imported API", armStepServiceURL, http.StatusNotFound, "ResourceNotFound", phaseBackoff,
-			"Failed to patch service URL in APIM", []string{armStepGetAPI, armStepImport, armStepServiceURL}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag}),
 		Entry("tag 400", armStepTag, http.StatusBadRequest, "ValidationError", phaseInvalid,
 			"Failed to assign API to tags",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag}),
 		Entry("service details 500", armStepServiceDetails, http.StatusInternalServerError, "InternalServerError", phaseBackoff,
 			"Failed to fetch APIM service details",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag, armStepServiceDetails}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag, armStepServiceDetails}),
 		Entry("service details 404 on a read", armStepServiceDetails, http.StatusNotFound, "ResourceNotFound", phaseBackoff,
 			"Failed to fetch APIM service details",
-			[]string{armStepGetAPI, armStepImport, armStepServiceURL, armStepSubscriptionRequired, armStepProduct, armStepTag, armStepServiceDetails}),
+			[]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag, armStepServiceDetails}),
 	)
 
-	It("waits for an import that outlives the async wait instead of counting it as a failure", func() {
-		previousTimeout, previousInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-		apim.AsyncWaitTimeout, apim.AsyncPollInterval = 50*time.Millisecond, 5*time.Millisecond
-		DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousTimeout, previousInterval })
+	It("records an accepted import at once and follows it on later reconciles without counting a failure", func() {
 		arm.set(armStepImport, armAccepted())
 		arm.set(armStepPoll, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = io.WriteString(w, `{"status":"InProgress"}`)
 		})
 
+		By("answering the import with 202")
 		Expect(reconcileOnce()).To(Equal(ctrl.Result{RequeueAfter: minPendingImportPoll}))
+		Expect(arm.stepsSince(0)).To(Equal([]string{armStepGetAPI, armStepImport}),
+			"the reconcile neither waits for the operation nor runs anything after the import")
 
 		deployment := getDeployment()
 		Expect(deployment.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
 		Expect(deployment.Status.ConsecutiveFailures).To(BeZero())
 		Expect(deployment.Status.PendingImport).NotTo(BeNil())
+		Expect(deployment.Status.PendingImport.DesiredHash).To(Equal(deployment.Status.DesiredHash))
 		Expect(deployment.Status.AppliedHash).To(BeEmpty())
-		Expect(arm.stepsSince(0)).NotTo(ContainElement(armStepServiceURL), "nothing after the import may run")
+
+		By("reading the operation while APIM still runs it")
+		clock.advance(4 * time.Minute)
+		calls := arm.count()
+		Expect(reconcileOnce()).To(Equal(ctrl.Result{RequeueAfter: 2 * time.Minute}), "half the import's age")
+		Expect(arm.stepsSince(calls)).To(Equal([]string{armStepPoll}), "no second import while the first runs")
+		deployment = getDeployment()
+		Expect(deployment.Status.Phase).To(Equal(apimDeploymentPhaseImporting))
+		Expect(deployment.Status.ConsecutiveFailures).To(BeZero())
+		Expect(deployment.Status.PendingImport).NotTo(BeNil())
+
+		By("running the remaining steps once APIM reports the import finished")
+		arm.set(armStepPoll, nil)
+		calls = arm.count()
+		Expect(reconcileOnce()).To(BeZero())
+		Expect(arm.stepsSince(calls)).To(Equal([]string{armStepPoll, armStepProduct, armStepTag, armStepServiceDetails}))
+		deployment = getDeployment()
+		Expect(deployment.Status.Phase).To(Equal(apimDeploymentPhaseSucceeded))
+		Expect(deployment.Status.PendingImport).To(BeNil())
+		Expect(deployment.Status.AppliedHash).To(Equal(deployment.Status.DesiredHash))
+		Expect(countOf(arm.stepsSince(0), armStepImport)).To(Equal(1))
 	})
 
 	It("sends a websocket upsert through the same handling", func() {
@@ -754,24 +780,16 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 	})
 
 	It("resets once per value of the retry annotation", func() {
-		arm.set(armStepProduct, armFails(http.StatusForbidden, "AuthorizationFailed"))
+		arm.set(armStepProduct, armFails(http.StatusForbidden, "LinkedAuthorizationFailed"))
 		Expect(reconcileOnce()).To(BeZero())
 		Expect(getDeployment().Status.Phase).To(Equal(phaseInvalid))
 
 		By("setting the annotation while the operator still may not assign the product")
 		setRetryAnnotation("1")
-		var persisted apimv1.APIMAPIDeploymentStatus
-		arm.setOnImport(func() {
-			current := &apimv1.APIMAPIDeployment{}
-			if err := k8sClient.Get(ctx, key, current); err == nil {
-				persisted = current.Status
-			}
-		})
 		calls := arm.count()
 		Expect(reconcileOnce()).To(BeZero())
-		Expect(arm.stepsSince(calls)).To(ContainElement(armStepProduct))
-		Expect(persisted.ConsecutiveFailures).To(BeZero(), "the Importing patch persists the reset")
-		Expect(persisted.LastRetryAnnotation).To(Equal("1"))
+		Expect(arm.stepsSince(calls)).To(Equal([]string{armStepProduct}),
+			"the API was imported for this desired state already: only the failed step is retried")
 		deployment := getDeployment()
 		Expect(deployment.Status.Phase).To(Equal(phaseInvalid))
 		Expect(deployment.Status.ConsecutiveFailures).To(Equal(int32(1)))
@@ -809,25 +827,32 @@ var _ = Describe("APIMAPIDeployment APIM write retries", func() {
 		Expect(expectNoAPIMCall()).To(BeZero())
 	})
 
-	It("clears the failures without calling APIM when the spec returns to the applied state", func() {
+	It("imports again when the spec returns to the applied state after a change failed partway", func() {
 		By("applying the first spec")
 		Expect(reconcileOnce()).To(BeZero())
 		applied := getDeployment().Status.AppliedHash
+		Expect(applied).NotTo(BeEmpty())
 
-		By("failing a change")
+		By("failing a change after its import went through")
 		updateDeployment(func(d *apimv1.APIMAPIDeployment) { d.Spec.ServiceURL = "https://broken.example.net" })
-		arm.set(armStepServiceURL, armFails(http.StatusBadRequest, "ValidationError"))
-		Expect(reconcileOnce()).To(BeZero())
-		Expect(getDeployment().Status.Phase).To(Equal(phaseInvalid))
-
-		By("reverting the change")
-		updateDeployment(func(d *apimv1.APIMAPIDeployment) { d.Spec.ServiceURL = "https://backend.example.net" })
+		arm.set(armStepProduct, armFails(http.StatusBadRequest, "ValidationError"))
 		calls := arm.count()
 		Expect(reconcileOnce()).To(BeZero())
-		Expect(arm.stepsSince(calls)).To(BeEmpty())
+		Expect(arm.stepsSince(calls)).To(Equal([]string{armStepGetAPI, armStepImport, armStepProduct}))
 		deployment := getDeployment()
+		Expect(deployment.Status.Phase).To(Equal(phaseInvalid))
+		Expect(deployment.Status.AppliedHash).To(BeEmpty(), "APIM now holds part of the change")
+
+		By("reverting the change: APIM holds the broken backend, so it must be imported again")
+		arm.set(armStepProduct, nil)
+		updateDeployment(func(d *apimv1.APIMAPIDeployment) { d.Spec.ServiceURL = "https://backend.example.net" })
+		calls = arm.count()
+		Expect(reconcileOnce()).To(BeZero())
+		Expect(arm.stepsSince(calls)).To(Equal([]string{armStepGetAPI, armStepImport, armStepProduct, armStepTag, armStepServiceDetails}))
+		deployment = getDeployment()
 		Expect(deployment.Status.Phase).To(Equal(apimDeploymentPhaseSucceeded))
 		Expect(deployment.Status.DesiredHash).To(Equal(applied))
+		Expect(deployment.Status.AppliedHash).To(Equal(applied))
 		Expect(deployment.Status.ConsecutiveFailures).To(BeZero())
 		Expect(deployment.Status.NextAttemptAt).To(BeEmpty())
 	})

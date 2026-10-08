@@ -112,9 +112,14 @@ type APIMAPIStatus struct {
 	// Status indicates the current status of the API (e.g., "OK", "Error").
 	Status string `json:"status,omitempty"`
 	// ApiHost is the full URL to access the API through APIM (e.g., "https://api.example.com/myapi").
-	ApiHost string `json:"apiHost"`
-	// DeveloperPortalHost is the URL of the APIM developer portal.
-	DeveloperPortalHost string `json:"developerPortalHost"`
+	// Empty until the API has been imported once: an API whose first import fails still
+	// gets status Error.
+	// +optional
+	ApiHost string `json:"apiHost,omitempty"`
+	// DeveloperPortalHost is the URL of the APIM developer portal. Empty until the API has
+	// been imported once.
+	// +optional
+	DeveloperPortalHost string `json:"developerPortalHost,omitempty"`
 }
 
 // +kubebuilder:object:root=true

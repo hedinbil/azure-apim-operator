@@ -15,9 +15,9 @@ import (
 	"strings"
 )
 
-// ErrImportWaitTimeout is what a write returns when APIM accepted it (202) but did not
-// finish within AsyncWaitTimeout. The operation may still complete in APIM; the caller
-// treats it as transient and comes back later. Test with errors.Is.
+// ErrImportWaitTimeout marks an operation APIM accepted (202) and still reported as running
+// after the caller stopped waiting for it. It may still complete in APIM; the caller treats
+// it as transient. Test with errors.Is.
 var ErrImportWaitTimeout = errors.New("timed out waiting for APIM async operation")
 
 // ErrAsyncOperationFailed marks an *Error that came from the result of an asynchronous
@@ -35,9 +35,13 @@ var ErrDependencyNotFound = errors.New("a resource this write depends on is not 
 // contentTypeJSON is the content type of every JSON body this package sends.
 const contentTypeJSON = "application/json"
 
-// maxErrorBodyInMessage bounds how much of a non-JSON error body ends up in an error
-// message, and from there in the resource status.
+// maxErrorBodyInMessage bounds how much of an error body or Azure error message ends up in
+// an error message, and from there in the resource status and the logs.
 const maxErrorBodyInMessage = 1024
+
+// maxResponseBody bounds an ARM response read into memory. Nothing this package reads comes
+// near it; it only keeps a misbehaving endpoint from filling the operator's memory.
+const maxResponseBody = 4 << 20
 
 // Error is a failed ARM call: a non-2xx answer, an async operation that ended Failed or
 // Canceled, or an async wait that timed out. Transport failures (DNS, TLS, connection
@@ -56,13 +60,9 @@ type Error struct {
 	DetailCode string
 	// Message is the Azure error message, or the raw body when it was not ARM's JSON shape.
 	Message string
-	// Err is a sentinel this error wraps: ErrImportWaitTimeout, ErrAsyncOperationFailed or
-	// ErrDependencyNotFound.
+	// Err is a sentinel this error wraps: ErrImportWaitTimeout, ErrAsyncOperationFailed,
+	// ErrDependencyNotFound or ErrNoOperationURL.
 	Err error
-	// OperationURL is where the asynchronous operation behind this error can be polled.
-	// Set when the wait for an operation APIM accepted ended without learning its outcome:
-	// the wait timed out (ErrImportWaitTimeout) or a poll failed. See RunningOperation.
-	OperationURL string
 }
 
 // Error renders the operation, status and Azure code first so a status message or log
@@ -117,8 +117,8 @@ type armRequest struct {
 	// ifMatch is set when non-empty.
 	ifMatch string
 	// dependent marks a write to a path under a resource another custom resource creates
-	// (a product assignment, a tag assignment, a policy, a patch of the imported API). A
-	// 404 on it wraps ErrDependencyNotFound, so it is retried instead of given up on.
+	// (a product assignment, a tag assignment, a policy). A 404 on it wraps
+	// ErrDependencyNotFound, so it is retried instead of given up on.
 	dependent bool
 }
 
@@ -153,7 +153,10 @@ func (r armRequest) send(ctx context.Context) (*armResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", r.operation, err)
 	}
-	respBody, readErr := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	if readErr == nil && len(respBody) > maxResponseBody {
+		readErr = fmt.Errorf("response larger than %d bytes", maxResponseBody)
+	}
 	if closeErr := resp.Body.Close(); closeErr != nil {
 		logger.Error(closeErr, "⚠️ Failed to close response body", "operation", r.operation)
 	}
@@ -223,12 +226,19 @@ func parseARMError(body []byte) (code, detailCode, message string) {
 					message = strings.TrimSpace(message + " " + detail.Details[0].Message)
 				}
 			}
-			return code, detailCode, message
+			return code, detailCode, truncateMessage(message)
 		}
 	}
-	message = strings.TrimSpace(string(body))
-	if len(message) > maxErrorBodyInMessage {
-		message = strings.ToValidUTF8(message[:maxErrorBodyInMessage], "") + "…"
+	return "", "", truncateMessage(strings.TrimSpace(string(body)))
+}
+
+// truncateMessage cuts message to maxErrorBodyInMessage bytes, on a rune boundary.
+func truncateMessage(message string) string {
+	// Replace invalid bytes first: each run becomes a three-byte U+FFFD, which can make the
+	// message longer than the body it came from.
+	message = strings.ToValidUTF8(message, "\uFFFD")
+	if len(message) <= maxErrorBodyInMessage {
+		return message
 	}
-	return "", "", message
+	return strings.ToValidUTF8(message[:maxErrorBodyInMessage], "") + "…"
 }

@@ -118,7 +118,7 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 		if deleting {
-			logger.Info("⚠️ APIMService is gone, cannot remove the product from APIM; releasing the finalizer",
+			logger.Error(err, "⚠️ APIMService is gone, cannot remove the product from APIM; releasing the finalizer and leaving the product in place",
 				"name", req.NamespacedName, "apimService", product.Spec.APIMService, "productId", product.Spec.ProductID)
 			return r.releaseFinalizer(ctx, &product)
 		}
@@ -134,9 +134,11 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	tenantID := os.Getenv("AZURE_TENANT_ID")
 	if clientID == "" || tenantID == "" {
 		if deleting {
-			// Without an identity this operator can never have created the product, so
-			// there is nothing to remove; holding the resource would only wedge deletes.
-			logger.Info("⚠️ No Azure identity configured, releasing the finalizer without touching APIM",
+			// Without an identity this operator cannot remove the product. Holding the
+			// resource would wedge the delete (of the namespace, too) until someone fixes
+			// the operator's configuration, so it lets go and leaves the product in APIM.
+			logger.Error(fmt.Errorf("no Azure identity configured"),
+				"⚠️ Cannot remove the product from APIM; releasing the finalizer and leaving the product in place",
 				"name", req.NamespacedName, "productId", product.Spec.ProductID)
 			return r.releaseFinalizer(ctx, &product)
 		}
@@ -184,13 +186,7 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if deleting {
 		logger.Info("🗑️ APIMProduct is being deleted", "name", req.NamespacedName, "productId", cfg.ProductID)
-		w.starting()
-		if err := r.remove(ctx, cfg); err != nil {
-			return r.writeFailed(ctx, &product, w, err, "Failed to delete product in APIM")
-		}
-		// The resource is about to go, so the cleared retry state is only logged, not patched.
-		w.succeeded(&product.Status.RetryStatus)
-		return r.releaseFinalizer(ctx, &product)
+		return r.removeFromAPIM(ctx, &product, w, cfg)
 	}
 
 	w.starting()
@@ -202,11 +198,37 @@ func (r *APIMProductReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	product.Status.ObservedGeneration = product.Generation
 	product.Status.Phase = phaseCreated
 	product.Status.Message = "Product created successfully"
-	if err := r.Status().Patch(ctx, &product, patch); err != nil {
+	outCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	if err := r.Status().Patch(outCtx, &product, patch); err != nil {
 		logger.Error(err, "❌ Failed to patch APIMProduct status")
-		return ctrl.Result{}, err
+		// APIM has the write; only recording it failed. Never hand the error back: that
+		// would put controller-runtime's rate limiter, with no attempt limit, in charge of
+		// writing to APIM again. Check again after one backoff step instead.
+		return ctrl.Result{RequeueAfter: w.policy.BaseDelay}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// removeFromAPIM deletes the product from APIM and then lets the resource go.
+func (r *APIMProductReconciler) removeFromAPIM(ctx context.Context, product *apimv1.APIMProduct, w *apimWrite, cfg apim.APIMProductConfig) (ctrl.Result, error) {
+	w.starting()
+	if err := r.remove(ctx, cfg); err != nil {
+		return r.writeFailed(ctx, product, w, err, "Failed to delete product in APIM")
+	}
+	// The resource is about to go, so the cleared retry state is only logged, not patched.
+	w.succeeded(&product.Status.RetryStatus)
+	// Released even when the reconcile has timed out or the operator is stopping. A failure
+	// is retried after one backoff step, never through the rate limiter; the DELETE that
+	// comes with the retry is harmless, as a 404 counts as removed.
+	outCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	result, err := r.releaseFinalizer(outCtx, product)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "❌ Product removed from APIM but releasing the finalizer failed", "productID", cfg.ProductID)
+		return ctrl.Result{RequeueAfter: w.policy.BaseDelay}, nil
+	}
+	return result, nil
 }
 
 // writeFailed records a failed APIM write: Backoff until the next attempt time, Stalled
@@ -226,7 +248,10 @@ func (r *APIMProductReconciler) writeFailed(ctx context.Context, product *apimv1
 		product.Status.Message += fmt.Sprintf("; or set spec.deletionPolicy to %s to delete the resource and keep the product",
 			apimv1.DeletionPolicyRetain)
 	}
-	if patchErr := r.Status().Patch(ctx, product, patch); patchErr != nil {
+	// Record the failure even when the reconcile has timed out or the operator is stopping.
+	outCtx, cancel := outcomeContext(ctx)
+	defer cancel()
+	if patchErr := r.Status().Patch(outCtx, product, patch); patchErr != nil {
 		log.FromContext(ctx).Error(patchErr, "❌ Failed to patch APIMProduct status")
 	}
 	return out.Result, nil

@@ -391,7 +391,7 @@ func TestLPFailureLineClassPerError(t *testing.T) {
 	}{
 		{"400 on PUT", apimErr(http.MethodPut, 400, "ValidationError"), lpMsgRejected, "permanent"},
 		{"401 on PUT", apimErr(http.MethodPut, 401, "AuthenticationFailed"), lpMsgRejected, "permanent"},
-		{"403 on PATCH", apimErr(http.MethodPatch, 403, "AuthorizationFailed"), lpMsgRejected, "permanent"},
+		{"403 on PATCH", apimErr(http.MethodPatch, 403, "LinkedAuthorizationFailed"), lpMsgRejected, "permanent"},
 		{"404 on PUT", apimErr(http.MethodPut, 404, "ResourceNotFound"), lpMsgRejected, "permanent"},
 		{"404 on DELETE", apimErr(http.MethodDelete, 404, "ResourceNotFound"), lpMsgRejected, "permanent"},
 		{"404 on GET", apimErr(http.MethodGet, 404, "ResourceNotFound"), lpMsgFailed, "transient"},

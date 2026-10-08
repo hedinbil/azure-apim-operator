@@ -25,6 +25,10 @@ func TestCheckPendingImport(t *testing.T) {
 	recent := pendingFor(operationURL, now.Add(-5*time.Minute))
 	failure := &apim.Error{Operation: "import API", Code: "InternalServerError", Err: apim.ErrAsyncOperationFailed}
 
+	old := pendingFor(operationURL, now.Add(-maxPendingImportAge-time.Minute))
+	readFailure := &apim.Error{Operation: "read APIM operation", Method: http.MethodGet, StatusCode: http.StatusConflict,
+		Code: "ManagementApiRequestFailed"}
+
 	tests := []struct {
 		name        string
 		pending     *apimv1.APIMPendingImport
@@ -45,8 +49,13 @@ func TestCheckPendingImport(t *testing.T) {
 			// A failed reading is not a failed import: importing again here is what piled
 			// imports on top of each other in the Sep 2026 incident.
 			name: "reading the state fails", pending: recent, desiredHash: "hash-1",
-			readErr:  errors.New("import API (poll) failed: 422 Unprocessable Entity: Timeout"),
+			readErr:  errors.New("read APIM operation failed: 422 Unprocessable Entity: Timeout"),
 			wantStep: pendingImportWait, wantRead: true, wantDetail: "Timeout",
+		},
+		{
+			name: "reading the state answers 409", pending: recent, desiredHash: "hash-1",
+			readErr:  readFailure,
+			wantStep: pendingImportWait, wantRead: true, wantDetail: "ManagementApiRequestFailed",
 		},
 		{
 			name: "finished for the desired state", pending: recent, desiredHash: "hash-1",
@@ -54,9 +63,11 @@ func TestCheckPendingImport(t *testing.T) {
 			wantStep: pendingImportDone, wantRead: true,
 		},
 		{
+			// Counted against the retry policy: a document that differs on every fetch
+			// must end Stalled, not import without end (fix B).
 			name: "finished for an older desired state", pending: recent, desiredHash: "hash-2",
 			state:    apim.OperationState{Status: apim.OperationSucceeded},
-			wantStep: pendingImportRestart, wantRead: true,
+			wantStep: pendingImportFailed, wantRead: true, wantErr: errPendingImportOutdated,
 		},
 		{
 			name: "failed", pending: recent, desiredHash: "hash-1",
@@ -64,20 +75,51 @@ func TestCheckPendingImport(t *testing.T) {
 			wantStep: pendingImportFailed, wantRead: true, wantErr: apim.ErrAsyncOperationFailed,
 		},
 		{
-			name: "forgotten by APIM", pending: recent, desiredHash: "hash-1",
-			state:    apim.OperationState{Status: apim.OperationGone},
-			wantStep: pendingImportRestart, wantRead: true,
+			name: "failed without a reason", pending: recent, desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationFailed},
+			wantStep: pendingImportFailed, wantRead: true,
 		},
 		{
+			name: "forgotten by APIM", pending: recent, desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationGone},
+			wantStep: pendingImportFailed, wantRead: true, wantErr: errPendingImportGone,
+		},
+		{
+			// Never read: reading it would send the operator's ARM token elsewhere.
 			name: "not an ARM URL", pending: pendingFor("https://attacker.example/op-1", now.Add(-5*time.Minute)), desiredHash: "hash-1",
-			wantStep: pendingImportRestart,
+			wantStep: pendingImportFailed, wantErr: errPendingImportUnusable,
+		},
+		{
+			// Fix C: the operation is read before its age counts against it, so an import
+			// that finished just before the limit counts as finished.
+			name: "older than the limit but finished", pending: old, desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationSucceeded},
+			wantStep: pendingImportDone, wantRead: true,
+		},
+		{
+			name: "older than the limit and failed", pending: old, desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationFailed, Err: failure},
+			wantStep: pendingImportFailed, wantRead: true, wantErr: apim.ErrAsyncOperationFailed,
 		},
 		{
 			// Counted as a timed-out wait, so the retry policy backs off and eventually stalls.
-			name: "older than the limit", pending: pendingFor(operationURL, now.Add(-maxPendingImportAge-time.Minute)), desiredHash: "hash-1",
-			wantStep: pendingImportFailed, wantErr: apim.ErrImportWaitTimeout,
+			name: "older than the limit and still running", pending: old, desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationRunning},
+			wantStep: pendingImportFailed, wantRead: true, wantErr: apim.ErrImportWaitTimeout,
+		},
+		{
+			name: "older than the limit and unreadable", pending: old, desiredHash: "hash-1",
+			readErr:  readFailure,
+			wantStep: pendingImportFailed, wantRead: true, wantErr: apim.ErrImportWaitTimeout,
+		},
+		{
+			// An unparseable StartedAt has no age to wait out: it counts as expired.
+			name: "unreadable start time counts as expired", pending: pendingFor(operationURL, now), desiredHash: "hash-1",
+			state:    apim.OperationState{Status: apim.OperationRunning},
+			wantStep: pendingImportFailed, wantRead: true, wantErr: apim.ErrImportWaitTimeout,
 		},
 	}
+	tests[len(tests)-1].pending = &apimv1.APIMPendingImport{OperationURL: operationURL, DesiredHash: "hash-1", StartedAt: "yesterday"}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			read := false
@@ -101,6 +143,12 @@ func TestCheckPendingImport(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(outcome.err, tt.wantErr) {
 				t.Errorf("err = %v, want it to wrap %v", outcome.err, tt.wantErr)
+			}
+			if tt.wantStep == pendingImportFailed && outcome.err == nil {
+				t.Error("a failed outcome must carry an error for the retry policy")
+			}
+			if tt.wantStep != pendingImportFailed && outcome.err != nil {
+				t.Errorf("err = %v, want none for step %d", outcome.err, outcome.step)
 			}
 			if tt.wantStep == pendingImportFailed && classifyAPIMError(outcome.err) != errorClassTransient {
 				t.Errorf("err %v classifies as %s, want transient", outcome.err, classifyAPIMError(outcome.err))

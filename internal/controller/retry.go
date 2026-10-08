@@ -38,7 +38,8 @@ import (
 // few calls: gate before writing, then succeeded or failed afterwards. Between them they
 // back off exponentially, stop after five transient failures in a row (Stalled), stop at
 // once on a request APIM will never accept (Invalid), and start over on a spec change or
-// a new value of the retry annotation.
+// a new value of the retry annotation. A write that fails only because another resource
+// is not in APIM yet keeps backing off instead of stalling.
 //
 // It exists because of the 25-28 Sep 2026 incident, when one deployment re-imported a
 // 1.75 MB OpenAPI document about 800 times in 69 hours: every error path requeued after a
@@ -75,9 +76,30 @@ const (
 // unrelated resources proceed while one waits on a slow import.
 const maxConcurrentAPIMWrites = 4
 
+// apimReconcileTimeout bounds one reconcile of a controller that writes to APIM. Every ARM
+// call is bounded on its own (see internal/apim/url.go); this bounds the sequence, so a
+// worker can never hang on one resource. The outcome of a write cut short is still recorded:
+// see outcomeContext.
+const apimReconcileTimeout = 10 * time.Minute
+
 // apimWriterOptions are the controller options of every controller that writes to APIM.
 func apimWriterOptions() controller.Options {
-	return controller.Options{MaxConcurrentReconciles: maxConcurrentAPIMWrites}
+	return controller.Options{
+		MaxConcurrentReconciles: maxConcurrentAPIMWrites,
+		ReconciliationTimeout:   apimReconcileTimeout,
+	}
+}
+
+// outcomeWriteTimeout bounds a status write that records the outcome of an APIM write.
+const outcomeWriteTimeout = 15 * time.Second
+
+// outcomeContext is the context to record the outcome of an APIM write in: ctx without its
+// cancellation, bounded by outcomeWriteTimeout. A reconcile that hit apimReconcileTimeout,
+// or an operator that is shutting down, still records the failure or the import APIM just
+// accepted. Losing that record is what lets the next reconcile write again at once: no
+// backoff, no failure count, no Stalled, or a second import on top of a running one.
+func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), outcomeWriteTimeout)
 }
 
 // latestReader is where a controller that writes to APIM reads its own resource at the
@@ -116,13 +138,30 @@ var transientAzureCodes = map[string]bool{
 	"Timeout":                    true,
 	"ManagementApiRequestFailed": true,
 	"Conflict":                   true,
+	// A token can expire between being handed out and being used: azidentity returns a
+	// cached one with as little as five minutes left, and a reconcile runs up to ten.
+	"ExpiredAuthenticationToken": true,
+	// A role assignment takes minutes to reach every ARM front end after it is made.
+	"AuthorizationFailed": true,
+}
+
+// permanentAsyncCodes are Azure error codes of an operation APIM accepted (202) and then
+// failed that mean APIM rejected the document itself. Such a failure carries no HTTP
+// status of its own, so without this list it would read as transient and be imported
+// again up to five times. Any other code of a failed operation stays transient: APIM also
+// fails operations it could not finish for reasons of its own.
+var permanentAsyncCodes = map[string]bool{
+	"ValidationError":       true,
+	"InvalidRequestContent": true,
+	"BadRequest":            true,
 }
 
 // classifyAPIMError sorts a failed write. Permanent is 400, 401, 403, or 404 on a write,
 // unless the Azure code marks it transient or the 404 is on a write that depends on
-// another resource (apim.ErrDependencyNotFound: a product or tag assignment, a policy, a
-// patch of the imported API); everything else, including errors this function does not
-// recognise, is transient. A wrong guess towards transient costs at most five bounded
+// another resource (apim.ErrDependencyNotFound: a product or tag assignment, a policy).
+// A document this operator will not send in the form it was served is permanent, and so is
+// an operation APIM accepted and then failed with a code in permanentAsyncCodes.
+// Everything else, including errors this function does not recognise, is transient. A wrong guess towards transient costs at most five bounded
 // attempts before Stalled; a wrong guess towards permanent would stop a write that would
 // have succeeded.
 func classifyAPIMError(err error) apimErrorClass {
@@ -133,10 +172,17 @@ func classifyAPIMError(err error) apimErrorClass {
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return errorClassTransient
 	}
+	if errors.Is(err, apim.ErrUnsupportedDocument) {
+		return errorClassPermanent
+	}
 	var apimErr *apim.Error
 	if errors.As(err, &apimErr) {
 		if transientAzureCodes[apimErr.Code] || transientAzureCodes[apimErr.DetailCode] {
 			return errorClassTransient
+		}
+		if errors.Is(err, apim.ErrAsyncOperationFailed) && apimErr.StatusCode == 0 &&
+			(permanentAsyncCodes[apimErr.Code] || permanentAsyncCodes[apimErr.DetailCode]) {
+			return errorClassPermanent
 		}
 		switch apimErr.StatusCode {
 		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
@@ -393,6 +439,13 @@ func (o writeOutcome) statusMessage(step string, err error) string {
 // status patch is logged, not returned, for the same reason: the failure count is lost
 // for that attempt, but the next one still waits out the backoff.
 func (w *apimWrite) failed(st *apimv1.RetryStatus, err error) writeOutcome {
+	return w.failedNotBefore(st, err, 0)
+}
+
+// failedNotBefore is failed with the next attempt at least floor away. A write whose outcome
+// is unknown (no answer, or an answer that names no operation) may still be running in
+// APIM; trying again after the usual minute would start a second one on top of it.
+func (w *apimWrite) failedNotBefore(st *apimv1.RetryStatus, err error, floor time.Duration) writeOutcome {
 	w.prepare(st)
 	st.ConsecutiveFailures++
 	n := st.ConsecutiveFailures
@@ -409,6 +462,19 @@ func (w *apimWrite) failed(st *apimv1.RetryStatus, err error) writeOutcome {
 		}
 	}
 
+	// A missing dependency (the product, tag or API the write hangs off) is not this
+	// resource's failure. It clears up once that resource's own controller writes it,
+	// however long that takes, and nothing tells this controller when, so it keeps backing
+	// off, MaxDelay apart, instead of stalling for good. Its count stops one short of the
+	// limit, so the wait does not use up the attempts of a later failure of another kind.
+	delay := w.policy.delay(n)
+	if errors.Is(err, apim.ErrDependencyNotFound) && n >= w.policy.MaxAttempts {
+		n = w.policy.MaxAttempts - 1
+		st.ConsecutiveFailures = n
+		w.attempt = n
+		delay = w.policy.effective().MaxDelay
+	}
+	delay = max(delay, floor)
 	if n >= w.policy.MaxAttempts {
 		st.NextAttemptAt = ""
 		w.log.Error(err, msgWriteStalled, w.with("attempts", n, "lastError", err.Error())...)
@@ -422,7 +488,7 @@ func (w *apimWrite) failed(st *apimv1.RetryStatus, err error) writeOutcome {
 	now := w.policy.Now()
 	// Rounded up to the second RFC3339 keeps, so the requeue never lands before the time
 	// written to the status and is then turned away by gate.
-	next := now.Add(w.policy.delay(n))
+	next := now.Add(delay)
 	if rounded := next.Truncate(time.Second); !rounded.Equal(next) {
 		next = rounded.Add(time.Second)
 	}

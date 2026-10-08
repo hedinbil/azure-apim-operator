@@ -64,19 +64,21 @@ const (
 
 // Steps of one deployment reconcile, as depEnvARM names the requests it receives.
 const (
-	depEnvGetAPI               = "GET api"
-	depEnvImport               = "PUT import"
-	depEnvWebSocket            = "PUT websocket"
-	depEnvServiceURL           = "PATCH serviceUrl"
-	depEnvSubscriptionRequired = "PATCH subscriptionRequired"
-	depEnvProduct              = "PUT product"
-	depEnvTag                  = "PUT tag"
-	depEnvServiceDetails       = "GET service"
-	depEnvPoll                 = "GET poll"
-	depEnvUnknown              = "unknown"
+	depEnvGetAPI    = "GET api"
+	depEnvImport    = "PUT import"
+	depEnvWebSocket = "PUT websocket"
+	// depEnvPatchAPI is a PATCH of the API itself, which the controller no longer sends:
+	// serviceUrl and subscriptionRequired travel in the import (or websocket) PUT.
+	depEnvPatchAPI       = "PATCH api"
+	depEnvProduct        = "PUT product"
+	depEnvTag            = "PUT tag"
+	depEnvServiceDetails = "GET service"
+	depEnvPoll           = "GET poll"
+	depEnvUnknown        = "unknown"
 )
 
-// depEnvAsyncPath is where the fake's 202 answers point the poll.
+// depEnvAsyncPath is where the fake's 202 answers point the operation. The controller
+// reads it on the reconciles after the one that sent the write, never within it.
 const depEnvAsyncPath = "/depenv-asyncops/op-1"
 
 // depEnvStart is the fake clock's starting point, on a whole second so the delays the
@@ -198,6 +200,12 @@ func importedDocument(body string) string {
 	return env.Properties.Value
 }
 
+// importedServiceURL returns the backend serviceUrl an import envelope sets.
+func importedServiceURL(body string) string {
+	env, _ := decodeImportEnvelope([]byte(body))
+	return env.Properties.ServiceURL
+}
+
 func (f *depEnvARM) classify(r *http.Request, body string) string {
 	p := r.URL.Path
 	isAPI := p == f.apiPath || strings.HasPrefix(p, f.apiPath+";rev=")
@@ -212,10 +220,8 @@ func (f *depEnvARM) classify(r *http.Request, body string) string {
 		return depEnvImport
 	case isAPI && r.Method == http.MethodPut:
 		return depEnvWebSocket
-	case p == f.apiPath && r.Method == http.MethodPatch && strings.Contains(body, "serviceUrl"):
-		return depEnvServiceURL
-	case p == f.apiPath && r.Method == http.MethodPatch && strings.Contains(body, "subscriptionRequired"):
-		return depEnvSubscriptionRequired
+	case isAPI && r.Method == http.MethodPatch:
+		return depEnvPatchAPI
 	case strings.HasPrefix(p, f.servicePath+"/products/") && strings.HasSuffix(p, strings.TrimPrefix(f.apiPath, f.servicePath)) &&
 		r.Method == http.MethodPut:
 		return depEnvProduct
@@ -352,6 +358,21 @@ func depEnvAccepted(retryAfter string) depEnvResponder {
 			w.Header().Set("Retry-After", retryAfter)
 		}
 		w.WriteHeader(http.StatusAccepted)
+		return true
+	}
+}
+
+// depEnvHangUp closes the connection without answering, as a dropped connection or a
+// timed-out gateway would.
+func depEnvHangUp() depEnvResponder {
+	return func(w http.ResponseWriter, _ *http.Request) bool {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return false
+		}
+		if conn, _, err := hj.Hijack(); err == nil {
+			_ = conn.Close()
+		}
 		return true
 	}
 }
@@ -504,10 +525,6 @@ func newDepEnvFixture(opts depEnvOptions) *depEnvFixture {
 	DeferCleanup(f.arm.server.Close)
 	DeferCleanup(apim.UseEndpoint(f.arm.server.URL, f.arm.server.Client()))
 
-	// Any 202 in these specs is answered within milliseconds; a spec that wants the
-	// wait to time out shortens AsyncWaitTimeout itself.
-	depEnvAsync(2*time.Second, time.Millisecond)
-
 	By("setting placeholder workload identity variables")
 	DeferCleanup(unsetAzureIdentityEnvVars())
 	Expect(os.Setenv("AZURE_CLIENT_ID", "depenv-client-id")).To(Succeed())
@@ -573,13 +590,6 @@ func newDepEnvFixture(opts depEnvOptions) *depEnvFixture {
 		retry: &retryPolicy{BaseDelay: time.Minute, MaxDelay: 30 * time.Minute, MaxAttempts: 5, Now: f.clock.now},
 	}
 	return f
-}
-
-// depEnvAsync shortens the async import wait for one spec.
-func depEnvAsync(timeout, interval time.Duration) {
-	previousTimeout, previousInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-	apim.AsyncWaitTimeout, apim.AsyncPollInterval = timeout, interval
-	DeferCleanup(func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = previousTimeout, previousInterval })
 }
 
 // depEnvEnsureService creates the APIMService in the operator namespace unless it exists.

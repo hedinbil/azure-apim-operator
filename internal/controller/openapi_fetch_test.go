@@ -19,12 +19,16 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hedinit/azure-apim-operator/internal/apim"
 )
 
 const openAPIJSON = `{"openapi":"3.0.0","info":{"title":"test","version":"1.0.0"},"paths":{}}`
@@ -66,10 +70,10 @@ func TestOpenAPIFetcherRejectsBadResponses(t *testing.T) {
 	})
 	f := testOpenAPIFetcher()
 
-	if _, err := f.Fetch(context.Background(), html.URL); err == nil || !strings.Contains(err.Error(), "not a JSON or YAML") {
+	if _, err := f.Fetch(context.Background(), html.URL); err == nil || !strings.Contains(err.Error(), "neither JSON nor a YAML mapping") {
 		t.Fatalf("html must be rejected, got %v", err)
 	}
-	if _, err := f.Fetch(context.Background(), notOpenAPI.URL); !errors.Is(err, errNotOpenAPI) {
+	if _, err := f.Fetch(context.Background(), notOpenAPI.URL); !errors.Is(err, apim.ErrNotOpenAPIDocument) {
 		t.Fatalf("non-OpenAPI JSON must be rejected, got %v", err)
 	}
 	_, err := f.Fetch(context.Background(), teapot.URL)
@@ -141,5 +145,95 @@ func TestBlockedDestination(t *testing.T) {
 	}
 	if !blockedDestination(nil, true) {
 		t.Error("an unparseable address must be blocked")
+	}
+}
+
+// TestBlockedDestinationAzureWireServer: the Azure host agent is not link-local, so it is
+// refused by address, even with loopback allowed.
+func TestBlockedDestinationAzureWireServer(t *testing.T) {
+	for _, allowLoopback := range []bool{false, true} {
+		if !blockedDestination(net.ParseIP("168.63.129.16"), allowLoopback) {
+			t.Errorf("168.63.129.16 must be blocked (allowLoopback %t)", allowLoopback)
+		}
+	}
+	if blockedDestination(net.ParseIP("168.63.129.17"), false) {
+		t.Error("only the wire server itself is blocked, not its neighbours")
+	}
+}
+
+// TestOpenAPIFetcherFollowsAtMostThreeRedirects: up to maxOpenAPIRedirects hops are
+// followed, one more fails.
+func TestOpenAPIFetcherFollowsAtMostThreeRedirects(t *testing.T) {
+	var srv *httptest.Server
+	srv = serve(t, func(w http.ResponseWriter, r *http.Request) {
+		var hops int
+		_, _ = fmt.Sscanf(r.URL.Path, "/hop/%d", &hops)
+		if hops > 0 {
+			http.Redirect(w, r, fmt.Sprintf("%s/hop/%d", srv.URL, hops-1), http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(openAPIJSON))
+	})
+	f := testOpenAPIFetcher()
+	for hops := 0; hops <= maxOpenAPIRedirects; hops++ {
+		if got, err := f.Fetch(context.Background(), fmt.Sprintf("%s/hop/%d", srv.URL, hops)); err != nil || string(got) != openAPIJSON {
+			t.Errorf("%d redirects: got %q, %v; want the document", hops, got, err)
+		}
+	}
+	_, err := f.Fetch(context.Background(), fmt.Sprintf("%s/hop/%d", srv.URL, maxOpenAPIRedirects+1))
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("stopped after %d redirects", maxOpenAPIRedirects)) {
+		t.Fatalf("%d redirects: got %v, want the redirect limit", maxOpenAPIRedirects+1, err)
+	}
+}
+
+// TestOpenAPIFetcherRefusesRedirectsToOtherSchemesAndBlockedHosts: every hop is checked
+// like the first URL.
+func TestOpenAPIFetcherRefusesRedirectsToOtherSchemesAndBlockedHosts(t *testing.T) {
+	for name, target := range map[string]string{
+		"file scheme":     "file:///etc/passwd",
+		"credentials":     "http://user:pw@example.com/x",
+		"IMDS":            "http://169.254.169.254/metadata/instance",
+		"Azure wire host": "http://168.63.129.16/machine",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := serve(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target, http.StatusFound) })
+			if _, err := testOpenAPIFetcher().Fetch(context.Background(), srv.URL); err == nil {
+				t.Fatalf("a redirect to %s must be refused", target)
+			}
+		})
+	}
+}
+
+// TestOpenAPIFetcherRedactsTheURLInErrors: a key in the query string never reaches an
+// error (and with it the status), neither for a bad status nor for a transport failure,
+// whose *url.Error would repeat the full URL.
+func TestOpenAPIFetcherRedactsTheURLInErrors(t *testing.T) {
+	const secret = "code=s3cr3t-function-key"
+	teapot := serve(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+
+	f := newOpenAPIFetcher(500*time.Millisecond, maxOpenAPIBytes, true)
+	for name, raw := range map[string]string{
+		"bad status":         teapot.URL + "/openapi.json?" + secret,
+		"connection refused": closedURL + "/openapi.json?" + secret,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := f.Fetch(context.Background(), raw)
+			if err == nil {
+				t.Fatal("the fetch must fail")
+			}
+			if strings.Contains(err.Error(), "s3cr3t") {
+				t.Fatalf("error leaks the query string: %v", err)
+			}
+			if !strings.Contains(err.Error(), apim.RedactURL(raw)) {
+				t.Errorf("error %q does not name the redacted URL %q", err, apim.RedactURL(raw))
+			}
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) {
+				t.Errorf("error still wraps a *url.Error that carries the full URL: %v", urlErr)
+			}
+		})
 	}
 }

@@ -4,12 +4,40 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
-// httpClient is the client every ARM call in this package goes through. A
-// package variable rather than http.DefaultClient inline so a test can swap the
-// transport and see the exact request without a network.
-var httpClient = http.DefaultClient
+// armResponseHeaderTimeout bounds the wait for ARM to start answering one request, and
+// armRequestTimeout the whole request including the body. Without them a half-open
+// connection blocks a reconcile worker for good; with four workers per controller, four such
+// requests stop every APIM write. No ARM call this package makes waits for an operation: a
+// write that takes longer is answered with 202 at once (see startAPIWrite).
+const (
+	armResponseHeaderTimeout = 90 * time.Second
+	armRequestTimeout        = 2 * time.Minute
+)
+
+// httpClient is the client every ARM call in this package goes through. A package variable
+// so a test can swap the transport and see the exact request without a network.
+var httpClient = newARMClient()
+
+// newARMClient builds the ARM client: bounded in time, and never following a redirect. ARM
+// does not redirect, and Go forwards the Authorization header on a redirect to the same
+// host name on another port or scheme, past the IsOperationURL check.
+func newARMClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = armResponseHeaderTimeout
+	// Every worker of every controller talks to the same host; the default of 2 idle
+	// connections per host would repeat the TLS handshake for most calls.
+	transport.MaxIdleConnsPerHost = 16
+	return &http.Client{
+		Transport: transport,
+		Timeout:   armRequestTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 // apiVersion is the Azure API Management control-plane API version every
 // request in this package targets.

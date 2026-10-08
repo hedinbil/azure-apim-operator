@@ -100,17 +100,19 @@ spec:
 
 ### Step 3: Configure Authentication
 
-Set up Azure Workload Identity by configuring environment variables in the operator deployment:
+The operator authenticates with Azure Workload Identity only. Set the managed identity in
+the chart values; the chart annotates the ServiceAccount and labels the pod, and the
+Workload Identity webhook injects `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`:
 
 ```yaml
-env:
-  - name: AZURE_CLIENT_ID
-    value: "<your-managed-identity-client-id>"
-  - name: AZURE_TENANT_ID
-    value: "<your-azure-tenant-id>"
+serviceAccount:
+  workloadIdentity:
+    enabled: true
+    clientID: "<your-managed-identity-client-id>"
+    tenantID: "<your-azure-tenant-id>"
 ```
 
-Or use a Service Account with Workload Identity annotations:
+The resulting ServiceAccount looks like this:
 
 ```yaml
 apiVersion: v1
@@ -197,13 +199,13 @@ spec:
 ```
 
 The operator will automatically:
-1. Detect the ReplicaSet when pods are ready
-2. Create an `APIMAPIDeployment` resource
+1. Create an `APIMAPIDeployment` for the `APIMAPI` (same name, owned by it; it holds the import state and stays)
+2. Detect the ReplicaSet when its pods are ready, and wait for a rolling update to finish
 3. Fetch the OpenAPI specification
-4. Register the API in Azure APIM
-5. Poll APIM async import status when Azure returns `202 Accepted`
+4. Import the API into Azure APIM, with its path, backend URL and subscription requirement in the same request, unless APIM already holds this exact state
+5. Follow the import on later reconciles when Azure returns `202 Accepted`
 6. Assign products and tags
-7. Clean up intermediate resources
+7. Write the API host to the `APIMAPI` status
 
 ### Step 6: Verify Installation
 
@@ -242,13 +244,10 @@ graph TB
             RS[ReplicaSet<br/>app.kubernetes.io/name: my-api]
             Pod1[Pod 1<br/>Ready]
             Pod2[Pod 2<br/>Ready]
-            Ingress[Ingress<br/>example.com]
             APIMAPI[APIMAPI CR<br/>Defines API config]
             
             RS --> Pod1
             RS --> Pod2
-            Pod1 --> Ingress
-            Pod2 --> Ingress
         end
         
         subgraph OperatorNS["apim-operator Namespace"]
@@ -257,7 +256,7 @@ graph TB
         end
         
         subgraph CRDs["Custom Resources"]
-            APIMAPIDeploy[APIMAPIDeployment CR<br/>Intermediate Resource]
+            APIMAPIDeploy[APIMAPIDeployment CR<br/>Import state, one per APIMAPI]
             APIMProduct[APIMProduct CR]
             APIMTag[APIMTag CR]
         end
@@ -272,32 +271,29 @@ graph TB
         RSWatcher[ReplicaSetWatcher<br/>Controller]
         DeployController[APIMAPIDeployment<br/>Controller]
         APIController[APIMAPI<br/>Controller]
-        ServiceController[APIMService<br/>Controller]
         ProductController[APIMProduct<br/>Controller]
         TagController[APIMTag<br/>Controller]
     end
     
     %% Watch Flow
     RS -.watches.-> RSWatcher
-    RSWatcher -.checks.-> Pod1
-    RSWatcher -.checks.-> Pod2
-    RSWatcher -.checks.-> Ingress
     RSWatcher -.reads.-> APIMAPI
-    RSWatcher -.reads.-> APIMService
     
-    %% Creation Flow
-    RSWatcher -.creates.-> APIMAPIDeploy
+    %% Creation and signal flow
+    APIController -.creates and updates.-> APIMAPIDeploy
+    RSWatcher -.signals.-> APIMAPIDeploy
     
     %% Deployment Flow
     APIMAPIDeploy -.watches.-> DeployController
-    DeployController -.fetches.-> Ingress
+    DeployController -.checks.-> Pod1
+    DeployController -.checks.-> Pod2
+    DeployController -.reads.-> APIMService
     DeployController -.fetches.-> OpenAPI[OpenAPI Spec<br/>/swagger.json]
     DeployController -.authenticates.-> AAD
     DeployController -.registers.-> APIM
     
     %% Configuration Flow
     APIMAPI -.managed by.-> APIController
-    APIMService -.managed by.-> ServiceController
     APIMProduct -.managed by.-> ProductController
     APIMTag -.managed by.-> TagController
     
@@ -312,9 +308,9 @@ graph TB
     classDef azure fill:#0078d4,stroke:#fff,color:#fff
     classDef operator fill:#ffa500,stroke:#fff,color:#fff
     
-    class RS,Pod1,Pod2,Ingress k8sResource
+    class RS,Pod1,Pod2 k8sResource
     class APIMAPI,APIMAPIDeploy,APIMService,APIMProduct,APIMTag crd
-    class RSWatcher,DeployController,APIController,ServiceController,ProductController,TagController controller
+    class RSWatcher,DeployController,APIController,ProductController,TagController controller
     class APIM,AAD azure
     class Operator operator
 ```
@@ -328,6 +324,7 @@ sequenceDiagram
     participant Dev as Developer
     participant K8s as Kubernetes API
     participant RS as ReplicaSet
+    participant APICtrl as APIMAPI<br/>Controller
     participant RSWatcher as ReplicaSetWatcher<br/>Controller
     participant DeployCtrl as APIMAPIDeployment<br/>Controller
     participant App as Application Pod
@@ -335,40 +332,36 @@ sequenceDiagram
     participant AAD as Azure AD
 
     Dev->>K8s: Deploy Application<br/>with APIMAPI CR
+    APICtrl->>K8s: Create or update APIMAPIDeployment<br/>(owned by the APIMAPI)
     K8s->>RS: Create ReplicaSet
     RS->>App: Create Pods
     
-    Note over RS,App: Wait for Pods to be Ready
+    RSWatcher->>RS: Watch ReplicaSet readiness
+    RSWatcher->>K8s: Annotate APIMAPIDeployment<br/>(first ready pod, or all pods ready)
     
-    RSWatcher->>RS: Watch ReplicaSet changes
-    RSWatcher->>App: Check Pod readiness
-    RSWatcher->>K8s: Check Ingress exists
-    
-    alt All conditions met
-        RSWatcher->>K8s: Create APIMAPIDeployment CR
-    end
-    
-    DeployCtrl->>K8s: Watch APIMAPIDeployment
+    DeployCtrl->>K8s: Find matching ReplicaSets, a ready pod,<br/>no older revision still serving
     DeployCtrl->>App: Fetch OpenAPI Spec<br/>(/swagger.json)
-    App-->>DeployCtrl: Return OpenAPI JSON
+    App-->>DeployCtrl: Return OpenAPI JSON or YAML
     
-    DeployCtrl->>AAD: Authenticate<br/>(Managed Identity/Service Principal)
-    AAD-->>DeployCtrl: Bearer Token
-    
-    DeployCtrl->>AzureAPIM: PUT /apis/{apiId}<br/>Import OpenAPI Definition
-    AzureAPIM-->>DeployCtrl: API Created/Updated
-    
-    DeployCtrl->>AzureAPIM: PATCH /apis/{apiId}<br/>Set Service URL
-    AzureAPIM-->>DeployCtrl: Service URL Updated
-    
-    DeployCtrl->>AzureAPIM: PUT /products/{productId}/apis/{apiId}<br/>Assign Products
-    AzureAPIM-->>DeployCtrl: Products Assigned
-    
-    DeployCtrl->>AzureAPIM: PUT /apis/{apiId}/tags/{tagId}<br/>Assign Tags
-    AzureAPIM-->>DeployCtrl: Tags Assigned
-    
-    DeployCtrl->>K8s: Update APIMAPIDeployment Status
-    DeployCtrl->>K8s: Delete APIMAPIDeployment CR<br/>(Cleanup)
+    alt Desired state already applied
+        DeployCtrl->>K8s: Phase Succeeded, nothing written
+    else
+        DeployCtrl->>AAD: Authenticate<br/>(Workload Identity)
+        AAD-->>DeployCtrl: Bearer Token
+        
+        DeployCtrl->>AzureAPIM: PUT /apis/{apiId}<br/>Document, path, serviceUrl, subscriptionRequired
+        AzureAPIM-->>DeployCtrl: 200/201, or 202 with an operation URL
+        
+        opt 202 Accepted
+            DeployCtrl->>K8s: Record status.pendingImport
+            DeployCtrl->>AzureAPIM: Read the operation on later reconciles
+        end
+        
+        DeployCtrl->>AzureAPIM: PUT /products/{productId}/apis/{apiId}<br/>Assign Products
+        DeployCtrl->>AzureAPIM: PUT /apis/{apiId}/tags/{tagId}<br/>Assign Tags
+        
+        DeployCtrl->>K8s: APIMAPIDeployment phase Succeeded,<br/>APIMAPI status OK with apiHost
+    end
     
     Note over AzureAPIM: API is now available<br/>through APIM Gateway
 ```
@@ -381,7 +374,6 @@ graph LR
         A[Deployment]
         B[ReplicaSet]
         C[Pods]
-        D[Ingress]
         E[Service]
     end
     
@@ -397,7 +389,6 @@ graph LR
         K[ReplicaSetWatcher]
         L[APIMAPIDeployment]
         M[APIMAPI]
-        N[APIMService]
         O[APIMProduct]
         P[APIMTag]
     end
@@ -409,12 +400,12 @@ graph LR
     
     A --> B
     B --> C
-    C --> D
-    C --> E
+    E --> C
     
     B -->|Watches| K
     F -->|References| H
-    K -->|Creates| G
+    M -->|Creates and updates| G
+    K -->|Signals| G
     G -->|Triggers| L
     
     L -->|Fetches OpenAPI| E
@@ -423,7 +414,6 @@ graph LR
     L -->|Assigns| I
     L -->|Assigns| J
     
-    H -->|Manages| N
     F -->|Manages| M
     I -->|Manages| O
     J -->|Manages| P
@@ -436,7 +426,6 @@ graph LR
     style K fill:#4ecdc4
     style L fill:#4ecdc4
     style M fill:#4ecdc4
-    style N fill:#4ecdc4
     style O fill:#4ecdc4
     style P fill:#4ecdc4
     style Q fill:#0078d4
@@ -448,33 +437,41 @@ graph LR
 ```mermaid
 flowchart TD
     Start([Application Deployment]) --> Deploy[Deploy to Kubernetes]
+    Deploy --> CreateCR[APIMAPI controller creates or updates<br/>the APIMAPIDeployment]
     Deploy --> RS[ReplicaSet Created]
-    RS --> Ready{Pods Ready?}
-    Ready -->|No| Wait[Wait for Pods]
+    RS --> Signal[Pods ready: ReplicaSet watcher<br/>signals the APIMAPIDeployment]
+    CreateCR --> Ready
+    Signal --> Ready{Matching ReplicaSet<br/>with a ready pod?}
+    Ready -->|No| Wait[WaitingForMatch / WaitingForReadyPod<br/>recheck in 2 min]
     Wait --> Ready
-    Ready -->|Yes| IngressCheck{Ingress Exists?}
-    IngressCheck -->|No| WaitIngress[Wait for Ingress]
-    WaitIngress --> IngressCheck
-    IngressCheck -->|Yes| CreateCR[Create APIMAPIDeployment CR]
-    
-    CreateCR --> FetchOpenAPI[Fetch OpenAPI Spec<br/>from Application]
-    FetchOpenAPI --> Auth[Authenticate with Azure AD]
-    Auth --> ImportAPI[Import API to Azure APIM]
-    ImportAPI --> SetServiceURL[Set Service URL]
-    SetServiceURL --> AssignProducts{Products<br/>Configured?}
+    Ready -->|Yes| Rollout{Older revision<br/>still serving?}
+    Rollout -->|Yes| WaitRollout[WaitingForRollout<br/>recheck in 30 s]
+    WaitRollout --> Rollout
+    Rollout -->|No| FetchOpenAPI[Fetch OpenAPI Spec<br/>from Application]
+    FetchOpenAPI --> InSync{Desired hash equals<br/>applied hash?}
+    InSync -->|Yes| End
+    InSync -->|No| Gate{Retry policy<br/>allows a write?}
+    Gate -->|No: Backoff, Stalled, Invalid| Held([Wait for nextAttemptAt,<br/>a spec change or the retry annotation])
+    Gate -->|Yes| ImportAPI[PUT API to Azure APIM<br/>with path, serviceUrl, subscriptionRequired]
+    ImportAPI --> Pending{202 Accepted?}
+    Pending -->|Yes| Follow[Record pendingImport,<br/>read the operation later]
+    Follow --> AssignProducts
+    Pending -->|No| AssignProducts{Products<br/>Configured?}
     AssignProducts -->|Yes| AssignProd[Assign to Products]
     AssignProducts -->|No| AssignTags
     AssignProd --> AssignTags{Tags<br/>Configured?}
     AssignTags -->|Yes| AssignTag[Assign Tags]
     AssignTags -->|No| UpdateStatus
-    AssignTag --> UpdateStatus[Update Status]
-    UpdateStatus --> Cleanup[Delete APIMAPIDeployment CR]
-    Cleanup --> End([API Available in APIM])
+    AssignTag --> UpdateStatus[Update APIMAPIDeployment<br/>and APIMAPI status]
+    UpdateStatus --> End([API Available in APIM])
     
     style Start fill:#90EE90
     style End fill:#90EE90
     style Ready fill:#FFD700
-    style IngressCheck fill:#FFD700
+    style Rollout fill:#FFD700
+    style InSync fill:#FFD700
+    style Gate fill:#FFD700
+    style Pending fill:#FFD700
     style AssignProducts fill:#FFD700
     style AssignTags fill:#FFD700
 ```
@@ -491,41 +488,38 @@ The operator consists of several specialized controllers:
 
 - **Purpose**: Monitors Kubernetes ReplicaSets and triggers API registration
 - **Behavior**:
-  - Watches for ReplicaSet changes
-  - Matches ReplicaSets to `APIMAPI` resources using `app.kubernetes.io/name` labels
-  - Verifies that pods are ready and running
-  - Creates an intermediate `APIMAPIDeployment` CR when all conditions are met
+  - Reacts when a ReplicaSet gets its first ready pod, or all its pods ready
+  - Matches ReplicaSets to `APIMAPI` resources by `spec.target.selector`, or by the `app.kubernetes.io/name` label when no selector is set
+  - Makes sure the matching `APIMAPIDeployment` exists and annotates it, which makes the deployment controller reconcile it
 
 #### 2. **APIMAPIDeployment Controller**
 
 - **Purpose**: Handles the actual API registration in Azure APIM
 - **Behavior**:
   - Watches for `APIMAPIDeployment` resources
+  - Waits for a matching ReplicaSet with a ready pod and for a rolling update to finish
   - Fetches OpenAPI/Swagger specification from the application endpoint
-  - Logs the fetched Swagger/OpenAPI payload for debugging
+  - Skips APIM entirely when the desired state (spec and document hash) is already applied
   - Authenticates with Azure AD using Workload Identity
-  - Registers or updates the API in Azure APIM via Azure Management API
-  - Polls APIM long-running operation status when import returns `202 Accepted`
-  - Updates service URLs to point to the Kubernetes service
+  - Imports the API into Azure APIM with one `PUT` that also sets the path, backend service URL and subscription requirement
+  - When APIM answers `202 Accepted`, records the operation in `status.pendingImport` and reads it on later reconciles instead of waiting or importing again
   - Assigns products and tags if configured
-  - Cleans up the intermediate CR after successful deployment
+  - Backs off after failed writes, and stops (`Stalled` or `Invalid`) until the spec changes or the `apim.operator.io/retry` annotation is set
+  - Keeps the resource and its status after the import; it goes away with its `APIMAPI`
 
 #### 3. **APIMAPI Controller**
 
 - **Purpose**: Manages the lifecycle of `APIMAPI` resources
-- **Behavior**: Handles updates and status tracking
+- **Behavior**: Creates the `APIMAPIDeployment` for each `APIMAPI` and keeps its spec in line; sets the ArgoCD external-link annotation from `status.apiHost`
 
-#### 4. **APIMService Controller**
+`APIMService` has no controller: it is a configuration record the other controllers read to locate the APIM instance.
 
-- **Purpose**: Manages Azure APIM service configuration
-- **Behavior**: Retrieves and stores APIM service details (hostnames, etc.)
-
-#### 5. **APIMProduct Controller**
+#### 4. **APIMProduct Controller**
 
 - **Purpose**: Creates and manages APIM Products
 - **Behavior**: Synchronizes Product definitions with Azure APIM
 
-#### 6. **APIMTag Controller**
+#### 5. **APIMTag Controller**
 
 - **Purpose**: Creates and manages APIM Tags
 - **Behavior**: Synchronizes Tag definitions with Azure APIM
@@ -607,7 +601,7 @@ metadata:
   name: my-product
   namespace: default
 spec:
-  productID: my-product
+  productId: my-product
   displayName: My Product
   description: Product description
   apimService: my-apim-service
@@ -625,7 +619,7 @@ metadata:
   name: my-tag
   namespace: default
 spec:
-  tagID: my-tag
+  tagId: my-tag
   displayName: My Tag
   apimService: my-apim-service
 ```
@@ -669,29 +663,10 @@ metadata:
     azure.workload.identity/client-id: "<managed-identity-client-id>"
 ```
 
-4. **Set Environment Variables** in the operator deployment:
-
-```yaml
-env:
-  - name: AZURE_CLIENT_ID
-    value: "<managed-identity-client-id>"
-  - name: AZURE_TENANT_ID
-    value: "<azure-tenant-id>"
-```
-
-### Alternative: Service Principal
-
-If you prefer using a Service Principal, you can set the following environment variables:
-
-```yaml
-env:
-  - name: AZURE_CLIENT_ID
-    value: "<service-principal-client-id>"
-  - name: AZURE_CLIENT_SECRET
-    value: "<service-principal-secret>"
-  - name: AZURE_TENANT_ID
-    value: "<azure-tenant-id>"
-```
+4. **Environment variables** are not set by hand: the Workload Identity webhook injects
+   `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` into the pod (labelled
+   `azure.workload.identity/use: "true"` by the chart). A service principal secret is not
+   supported; the operator uses Workload Identity only.
 
 ---
 
@@ -739,11 +714,10 @@ image:
   tag: v1.0.0
   pullPolicy: IfNotPresent
 
-env:
-  - name: AZURE_CLIENT_ID
-    value: "<your-client-id>"
-  - name: AZURE_TENANT_ID
-    value: "<your-tenant-id>"
+serviceAccount:
+  workloadIdentity:
+    clientID: "<your-client-id>"
+    tenantID: "<your-tenant-id>"
 
 resources:
   limits:
@@ -774,23 +748,21 @@ exact commit that is running.
 
 ## 🚢 Releases
 
-CI publishes to **two registries** on every build (same flow as
-`k8m8-operator` / `nova-operator` / `helmut-operator`):
+Two workflows follow the shared operator release contract (the same as
+`k8m8-operator` / `nova-operator` / `helmut-operator`). Pull requests and `main` pushes
+only build and validate; a `vX.Y.Z` tag publishes:
 
-- **ACR** (internal deploys, via Azure OIDC login):
-  - `.github/workflows/build-image-to-acr.yml` → `hedinit.azurecr.io/azure-apim-operator`
-  - `.github/workflows/build-helm-chart-to-acr.yml` → `oci://hedinit.azurecr.io/helm-charts/azure-apim-operator`
-- **GHCR** (public consumers, via `GITHUB_TOKEN`):
-  - `.github/workflows/build-image-to-ghcr.yml` → `ghcr.io/hedinbil/azure-apim-operator`
-  - `.github/workflows/build-helm-chart-to-ghcr.yml` → `oci://ghcr.io/hedinbil/charts/azure-apim-operator`
+- `.github/workflows/publish-image.yml` → the image `azure-apim-operator:vX.Y.Z` to ACR,
+  and to `ghcr.io/hedinbil` as a secondary target.
+- `.github/workflows/publish-chart.yml` → the chart to `charts-src/azure-apim-operator` in
+  ACR, which Helmut mirrors into `helm-charts`, the path the clusters consume; and to
+  `oci://ghcr.io/hedinbil/charts` as a secondary target.
 
 Releases are cut by pushing a semver git tag:
 
 1. Bump `version` and `appVersion` in `charts/azure-apim-operator/Chart.yaml` (kept equal).
 2. Merge to `main`, then tag the commit `vX.Y.Z` and push the tag.
-3. The tag build pushes the **immutable** image tag `vX.Y.Z` (besides the
-   rolling `latest` / `vX.Y.Z-<sha>` / `vX.Y.Z-latest` tags) to both registries
-   and the chart version `X.Y.Z`. The deployment defaults its image to
+3. The tag build pushes the immutable image tag `vX.Y.Z` and the chart version `X.Y.Z`. The deployment defaults its image to
    `v<appVersion>`, so the chart pin alone determines the exact code deployed
    and ArgoCD rolls pods on sync.
 
@@ -810,9 +782,8 @@ The operator requires specific RBAC permissions to function. These are automatic
 
 ### Required Permissions
 
-- **Watch ReplicaSets** - To detect application deployments
-- **Watch Pods** - To check pod readiness
-- **Watch Ingress** - To verify ingress existence
+- **Read ReplicaSets** - To detect application deployments
+- **Read Pods** - To check pod readiness
 - **Manage CRDs** - To create and manage custom resources
 - **Update Status** - To update resource status
 
@@ -842,7 +813,7 @@ The operator exposes health check endpoints:
 
 ### Metrics
 
-The operator exposes Prometheus metrics on the metrics endpoint (default: port 8443).
+The operator exposes Prometheus metrics as plain HTTP on port 8080 (chart values `metrics.enabled`, on by default, and `metrics.port`). The chart ships no Service; the pod carries a Datadog openmetrics annotation so the node agent scrapes it.
 
 ### Logging
 
@@ -916,24 +887,23 @@ kubectl apply -f config/crd/bases/
 #### 4. Import Returns 202 But Endpoints Are Missing
 
 **Symptoms**:
-- Logs show `✅ API imported to APIM`, but new endpoints are not visible in APIM
+- The `APIMAPIDeployment` is in phase `Importing` with `status.pendingImport` set, and new endpoints are not visible in APIM yet
 - Azure import request returns `202 Accepted`
 
 **What it means**:
-- Azure APIM import is asynchronous and may still be processing (or may fail later)
+- Azure APIM import is asynchronous and may still be processing (or may fail later). The operator records the operation and reads it on later reconciles; it does not import again while it runs
 
 **What to check in logs**:
-- `📄 Swagger content` - confirms exact document fetched by operator
-- `⏳ Polling APIM async import status` - confirms async polling started
-- `⌛ APIM async import still in progress` - operation still running
-- `✅ APIM async import completed` - operation reached terminal success
-- `❌ APIM async import did not complete successfully` - operation failed
+- `📥 OpenAPI definition downloaded` - the document was fetched (with its size in `bytes`)
+- `⏳ APIM accepted the import; following it` - APIM answered `202`; the operation is recorded
+- `⏳ APIM is still importing the definition it accepted at ...` - operation still running
+- `✅ APIM finished the import it accepted at ...` - operation succeeded; products, tags and status follow
+- `🚫 APIM reported that the import it accepted at ... failed` - operation failed; counted as a failed write
 
 **Solution**:
-- Ensure operator version includes async polling for `202 Accepted` imports
-- Verify the logged Swagger content contains expected new endpoints
-- If async operation fails, inspect the error body in operator logs for APIM validation details
-- Re-run deployment only after fixing the reported APIM validation error
+- Wait: the operation is read every 15 seconds at first, then less often, for up to two hours
+- If it fails, read `status.lastError` on the `APIMAPIDeployment` for APIM's validation details
+- Fix the document and roll out the application; a `Stalled` or `Invalid` deployment can also be reset with the `apim.operator.io/retry` annotation (see [Troubleshooting](docs/troubleshooting.md#retries-and-recovery))
 
 #### 5. Duplicate Operation Error on Re-Import
 
@@ -984,9 +954,9 @@ kubectl get apimapideployment -A -o yaml
 kubectl get clusterrole azure-apim-operator-manager-role -o yaml
 kubectl get clusterrolebinding azure-apim-operator-manager-rolebinding -o yaml
 
-# Tail operator logs and focus on OpenAPI import lifecycle
+# Tail operator logs and focus on the OpenAPI import lifecycle and APIM writes
 kubectl logs -f -l app.kubernetes.io/name=azure-apim-operator -n apim-operator \
-  | egrep "Swagger content|Polling APIM async import status|async import|API imported to APIM"
+  | egrep "OpenAPI definition downloaded|APIM write|APIM accepted the import|importing the definition|import it accepted"
 ```
 
 ---
@@ -1002,13 +972,11 @@ kubectl logs -f -l app.kubernetes.io/name=azure-apim-operator -n apim-operator \
        app.kubernetes.io/name: my-api
    ```
 
-2. **Create Ingress Early**: Ensure Ingress resources are created before or alongside Deployments
+2. **Health Checks**: Implement proper readiness and liveness probes in your applications
 
-3. **Health Checks**: Implement proper readiness and liveness probes in your applications
+3. **OpenAPI Endpoint**: Ensure your OpenAPI/Swagger endpoint is accessible and returns valid JSON
 
-4. **OpenAPI Endpoint**: Ensure your OpenAPI/Swagger endpoint is accessible and returns valid JSON
-
-5. **Set `operationId` on Every Operation**: Your OpenAPI spec **must** include a stable, unique `operationId` for each operation. APIM uses the `operationId` as the internal resource name to match incoming operations against existing ones during re-imports. Without it, APIM auto-generates resource names on first import and generates *different* names on subsequent imports, causing `ValidationError: Operation already exists` failures.
+4. **Set `operationId` on Every Operation**: Your OpenAPI spec **must** include a stable, unique `operationId` for each operation. APIM uses the `operationId` as the internal resource name to match incoming operations against existing ones during re-imports. Without it, APIM auto-generates resource names on first import and generates *different* names on subsequent imports, causing `ValidationError: Operation already exists` failures.
 
    Common framework examples:
 

@@ -26,7 +26,9 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -306,6 +308,92 @@ var _ = Describe("APIMProduct Controller", func() {
 			Expect(deleted[0].ServiceName).To(Equal(apimServiceName))
 			Expect(deleted[0].BearerToken).To(Equal("token"))
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
+		It("should requeue after one backoff step, without an error, when releasing the finalizer fails after the delete", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			deletes := 0
+			newReconciler := func(c client.Client) *APIMProductReconciler {
+				return &APIMProductReconciler{
+					Client:        c,
+					Scheme:        k8sClient.Scheme(),
+					getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+					upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+					deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+						deletes++
+						return nil
+					},
+					retry: &retryPolicy{BaseDelay: 3 * time.Minute, MaxDelay: 30 * time.Minute, MaxAttempts: 5},
+				}
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
+			_, err := newReconciler(k8sClient).Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+
+			By("refusing the update that releases the finalizer")
+			base, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+			Expect(err).NotTo(HaveOccurred())
+			refusing := interceptor.NewClient(base, interceptor.Funcs{
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if p, ok := obj.(*apimv1.APIMProduct); ok && !controllerutil.ContainsFinalizer(p, productFinalizer) {
+						return errors.NewServiceUnavailable("finalizer update refused by the test")
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			})
+			result, err := newReconciler(refusing).Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred(), "an error would hand the DELETE to the rate limiter")
+			Expect(result).To(Equal(ctrl.Result{RequeueAfter: 3 * time.Minute}))
+			Expect(deletes).To(Equal(1))
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed(), "the finalizer still holds the resource")
+
+			By("letting the resource go on the next reconcile; a second DELETE is harmless")
+			result, err = newReconciler(k8sClient).Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(deletes).To(Equal(2))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue())
+		})
+
+		It("should release the finalizer even when the reconcile's context is cancelled during the delete", func() {
+			restore := stubAzureIdentityEnv()
+			defer restore()
+
+			reconcileCtx, cancelReconcile := context.WithCancel(ctx)
+			defer cancelReconcile()
+			controllerReconciler := &APIMProductReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				getToken:      func(context.Context, string, string) (string, error) { return "token", nil },
+				upsertProduct: func(context.Context, apim.APIMProductConfig) error { return nil },
+				deleteProduct: func(context.Context, apim.APIMProductConfig) error {
+					// APIM removed the product; the operator is told to stop right after.
+					cancelReconcile()
+					return nil
+				},
+			}
+			req := reconcile.Request{NamespacedName: typeNamespacedName}
+			setDeletionPolicy(ctx, typeNamespacedName, apimv1.DeletionPolicyDelete)
+			_, err := controllerReconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			product := &apimv1.APIMProduct{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, product)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, product)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(reconcileCtx, req)
+
+			Expect(reconcileCtx.Err()).To(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeZero())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, &apimv1.APIMProduct{}))).To(BeTrue(),
+				"the finalizer is released on a context the cancellation cannot reach")
 		})
 
 		It("should keep the resource when the product cannot be deleted in APIM", func() {

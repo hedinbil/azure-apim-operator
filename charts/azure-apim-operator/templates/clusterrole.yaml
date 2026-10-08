@@ -6,9 +6,6 @@ metadata:
     app.kubernetes.io/name: {{ include "azure-apim-operator.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 rules:
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
@@ -26,7 +23,7 @@ rules:
     verbs: ["update"]
   - apiGroups: ["apim.operator.io"]
     resources: ["apimapideployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]   
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apim.operator.io"]
     resources: ["apimapideployments/status"]
     verbs: ["get", "update", "patch"]

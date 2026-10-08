@@ -103,8 +103,10 @@ func TestRetryCasesClassifyRelevantStatuses(t *testing.T) {
 		{"401 expired or wrong token", http.MethodPut, 401, "InvalidAuthenticationToken", errorClassPermanent},
 		{"401 on a GET", http.MethodGet, 401, "", errorClassPermanent},
 		{"402", http.MethodPut, 402, "", errorClassTransient},
-		{"403 missing role", http.MethodPut, 403, "AuthorizationFailed", errorClassPermanent},
-		{"403 on a GET", http.MethodGet, 403, "AuthorizationFailed", errorClassPermanent},
+		{"403 without a transient code", http.MethodPut, 403, "LinkedAuthorizationFailed", errorClassPermanent},
+		{"403 on a GET", http.MethodGet, 403, "LinkedAuthorizationFailed", errorClassPermanent},
+		// A role assignment takes minutes to reach every ARM front end.
+		{"403 AuthorizationFailed while a role assignment propagates", http.MethodPut, 403, "AuthorizationFailed", errorClassTransient},
 		{"404 on PUT (API missing for a product link)", http.MethodPut, 404, "ResourceNotFound", errorClassPermanent},
 		{"404 on PATCH", http.MethodPatch, 404, "ResourceNotFound", errorClassPermanent},
 		{"404 on DELETE", http.MethodDelete, 404, "ResourceNotFound", errorClassPermanent},
@@ -206,8 +208,10 @@ func TestRetryCasesClassifyUnlistedCodes(t *testing.T) {
 		{"ValidationError 400", 400, "ValidationError", "", errorClassPermanent},
 		{"ValidationError with a field detail", 400, "ValidationError", "InvalidField", errorClassPermanent},
 		{"InvalidAuthenticationToken 401", 401, "InvalidAuthenticationToken", "", errorClassPermanent},
-		{"ExpiredAuthenticationToken 401", 401, "ExpiredAuthenticationToken", "", errorClassPermanent},
-		{"AuthorizationFailed 403", 403, "AuthorizationFailed", "", errorClassPermanent},
+		// A cached token can expire between being handed out and being used.
+		{"ExpiredAuthenticationToken 401", 401, "ExpiredAuthenticationToken", "", errorClassTransient},
+		{"AuthorizationFailed 403", 403, "AuthorizationFailed", "", errorClassTransient},
+		{"LinkedAuthorizationFailed 403", 403, "LinkedAuthorizationFailed", "", errorClassPermanent},
 		{"ResourceNotFound 404 PUT", 404, "ResourceNotFound", "", errorClassPermanent},
 		{"MethodNotAllowedInPricingTier 400", 400, "MethodNotAllowedInPricingTier", "", errorClassPermanent},
 		{"ValidationError on a 500 stays transient", 500, "ValidationError", "", errorClassTransient},
@@ -372,7 +376,8 @@ func TestRetryCasesClassifyWrappedErrors(t *testing.T) {
 			Err: apim.ErrImportWaitTimeout}, errorClassTransient},
 		{"wait timeout joined with a permanent error", errors.Join(rcPermanentErr, apim.ErrImportWaitTimeout), errorClassTransient},
 		{"async failed sentinel, bare", apim.ErrAsyncOperationFailed, errorClassTransient},
-		{"async failed, unknown code", &apim.Error{Code: "ValidationError", Err: apim.ErrAsyncOperationFailed}, errorClassTransient},
+		{"async failed, unknown code", &apim.Error{Code: "OperationAborted", Err: apim.ErrAsyncOperationFailed}, errorClassTransient},
+		{"async failed, document rejected", &apim.Error{Code: "ValidationError", Err: apim.ErrAsyncOperationFailed}, errorClassPermanent},
 		{"plain unknown error", errors.New("something odd"), errorClassTransient},
 	}
 	for _, tc := range cases {
@@ -448,7 +453,8 @@ func TestRetryCasesClassifyRealARMAnswers(t *testing.T) {
 		{"400 non-JSON", answer{400, `<html>bad request</html>`}, errorClassPermanent},
 		{"401", answer{401, `{"error":{"code":"InvalidAuthenticationToken","message":"The access token is invalid."}}`},
 			errorClassPermanent},
-		{"403", answer{403, `{"error":{"code":"AuthorizationFailed","message":"no role"}}`}, errorClassPermanent},
+		{"403", answer{403, `{"error":{"code":"LinkedAuthorizationFailed","message":"no role"}}`}, errorClassPermanent},
+		{"403 AuthorizationFailed", answer{403, `{"error":{"code":"AuthorizationFailed","message":"no role yet"}}`}, errorClassTransient},
 		{"404 on PUT", answer{404, `{"error":{"code":"ResourceNotFound","message":"API not found"}}`}, errorClassPermanent},
 		{"409", answer{409, `{"error":{"code":"Conflict","message":"operation in progress"}}`}, errorClassTransient},
 		{"412", answer{412, `{"error":{"code":"PreconditionFailed","message":"etag mismatch"}}`}, errorClassTransient},
@@ -498,14 +504,11 @@ func TestRetryCasesClassifyRealARMAnswers(t *testing.T) {
 	}
 }
 
-// TestRetryCasesClassifyRealAsyncImport runs an import that APIM accepts with 202 and
-// then either never finishes (wait timeout) or fails (async result), with the wait
-// shortened to milliseconds.
+// TestRetryCasesClassifyRealAsyncImport runs an import that APIM accepts with 202: the
+// import returns at once with the operation to follow, and reading that operation later
+// either says it still runs (and, past maxPendingImportAge, counts as a timed-out wait) or
+// that it failed (async result). Every one of those outcomes classifies as transient.
 func TestRetryCasesClassifyRealAsyncImport(t *testing.T) {
-	prevTimeout, prevInterval := apim.AsyncWaitTimeout, apim.AsyncPollInterval
-	apim.AsyncWaitTimeout, apim.AsyncPollInterval = 40*time.Millisecond, 5*time.Millisecond
-	defer func() { apim.AsyncWaitTimeout, apim.AsyncPollInterval = prevTimeout, prevInterval }()
-
 	var mu sync.Mutex
 	var pollBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +525,7 @@ func TestRetryCasesClassifyRealAsyncImport(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"code":"ResourceNotFound"}}`))
 		default:
 			w.Header().Set("Azure-AsyncOperation", "/operations/op-rc")
+			w.Header().Set("Retry-After", "20")
 			w.WriteHeader(http.StatusAccepted)
 		}
 	}))
@@ -531,43 +535,91 @@ func TestRetryCasesClassifyRealAsyncImport(t *testing.T) {
 	cfg := apim.APIMDeploymentConfig{SubscriptionID: "sub-rc", ResourceGroup: "rg-rc", ServiceName: "apim-rc",
 		APIID: "orders", RoutePrefix: "/orders", BearerToken: "tok"}
 
+	started := time.Now()
+	written, err := apim.ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{"openapi":"3.0.0"}`))
+	if err != nil {
+		t.Fatalf("import = %v, want the 202 as a WriteResult", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Errorf("import took %s; it must return as soon as APIM answers 202", elapsed)
+	}
+	if !written.Accepted() || written.OperationURL != server.URL+"/operations/op-rc" {
+		t.Fatalf("WriteResult = %+v, want the operation URL resolved against the endpoint", written)
+	}
+	if written.RetryAfter != 20*time.Second {
+		t.Errorf("RetryAfter = %s, want 20s", written.RetryAfter)
+	}
+
 	cases := []struct {
 		name     string
 		pollBody string
+		status   apim.OperationStatus
 		sentinel error
 		code     string
 	}{
-		{"still running: wait timeout", `{"status":"InProgress"}`, apim.ErrImportWaitTimeout, ""},
+		{"still running", `{"status":"InProgress"}`, apim.OperationRunning, nil, ""},
 		{"DeadOperationMonitor", `{"status":"Failed","error":{"code":"InternalServerError","details":[{"code":"DeadOperationMonitor"}]}}`,
-			apim.ErrAsyncOperationFailed, "InternalServerError"},
-		{"Timeout", `{"status":"Failed","error":{"code":"Timeout","message":"took too long"}}`, apim.ErrAsyncOperationFailed, "Timeout"},
-		{"Canceled", `{"status":"Canceled"}`, apim.ErrAsyncOperationFailed, ""},
-		// An async failure is never permanent: the operation result carries no status.
-		{"unlisted code", `{"status":"Failed","error":{"code":"ValidationError","message":"bad doc"}}`,
-			apim.ErrAsyncOperationFailed, "ValidationError"},
+			apim.OperationFailed, apim.ErrAsyncOperationFailed, "InternalServerError"},
+		{"Timeout", `{"status":"Failed","error":{"code":"Timeout","message":"took too long"}}`, apim.OperationFailed,
+			apim.ErrAsyncOperationFailed, "Timeout"},
+		{"Canceled", `{"status":"Canceled"}`, apim.OperationFailed, apim.ErrAsyncOperationFailed, ""},
+		{"unlisted code", `{"status":"Failed","error":{"code":"OperationAborted","message":"aborted"}}`,
+			apim.OperationFailed, apim.ErrAsyncOperationFailed, "OperationAborted"},
+		// APIM rejected the document itself: importing it again cannot help.
+		{"document rejected", `{"status":"Failed","error":{"code":"ValidationError","message":"bad doc"}}`,
+			apim.OperationFailed, apim.ErrAsyncOperationFailed, "ValidationError"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mu.Lock()
 			pollBody = tc.pollBody
 			mu.Unlock()
-			started := time.Now()
-			err := apim.ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{"openapi":"3.0.0"}`))
-			if elapsed := time.Since(started); elapsed > 2*time.Second {
-				t.Errorf("import took %s; the shortened wait was not used", elapsed)
+			state, err := apim.GetOperationState(context.Background(), "tok", written.OperationURL)
+			if err != nil {
+				t.Fatalf("GetOperationState = %v, want a reading", err)
 			}
-			if !errors.Is(err, tc.sentinel) {
-				t.Fatalf("import = %v, want errors.Is %v", err, tc.sentinel)
+			if state.Status != tc.status {
+				t.Fatalf("status = %s, want %s", state.Status, tc.status)
+			}
+			if tc.sentinel == nil {
+				return
+			}
+			if !errors.Is(state.Err, tc.sentinel) {
+				t.Fatalf("state.Err = %v, want errors.Is %v", state.Err, tc.sentinel)
 			}
 			var apimErr *apim.Error
-			if !errors.As(err, &apimErr) || apimErr.Code != tc.code {
-				t.Errorf("import = %#v, want *apim.Error with code %q", err, tc.code)
+			if !errors.As(state.Err, &apimErr) || apimErr.Code != tc.code {
+				t.Errorf("state.Err = %#v, want *apim.Error with code %q", state.Err, tc.code)
 			}
-			if got := classifyAPIMError(err); got != errorClassTransient {
-				t.Errorf("class = %s, want transient", got)
+			want := errorClassTransient
+			if permanentAsyncCodes[tc.code] {
+				want = errorClassPermanent
+			}
+			if got := classifyAPIMError(state.Err); got != want {
+				t.Errorf("class = %s, want %s", got, want)
 			}
 		})
 	}
+
+	// An import still running past maxPendingImportAge counts as a timed-out wait: transient.
+	t.Run("still running past the limit", func(t *testing.T) {
+		mu.Lock()
+		pollBody = `{"status":"InProgress"}`
+		mu.Unlock()
+		now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+		pending := &apimv1.APIMPendingImport{OperationURL: written.OperationURL, DesiredHash: "h",
+			StartedAt: now.Add(-maxPendingImportAge - time.Second).Format(time.RFC3339)}
+		outcome := checkPendingImport(context.Background(), pending, "h", now,
+			func(ctx context.Context, operationURL string) (apim.OperationState, error) {
+				return apim.GetOperationState(ctx, "tok", operationURL)
+			})
+		if outcome.step != pendingImportFailed || !errors.Is(outcome.err, apim.ErrImportWaitTimeout) {
+			t.Fatalf("outcome = %+v, want Failed with ErrImportWaitTimeout", outcome)
+		}
+		if got := classifyAPIMError(outcome.err); got != errorClassTransient {
+			t.Errorf("class = %s, want transient", got)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1015,7 +1067,7 @@ var rcPermanentErrors = []struct {
 	{"400", rcAPIMErr(http.MethodPut, 400, "ValidationError", "")},
 	{"400 non-JSON", rcAPIMErr(http.MethodPut, 400, "", "")},
 	{"401", rcAPIMErr(http.MethodPut, 401, "InvalidAuthenticationToken", "")},
-	{"403", rcAPIMErr(http.MethodPatch, 403, "AuthorizationFailed", "")},
+	{"403", rcAPIMErr(http.MethodPatch, 403, "LinkedAuthorizationFailed", "")},
 	{"404 PUT", rcAPIMErr(http.MethodPut, 404, "ResourceNotFound", "")},
 	{"404 PATCH", rcAPIMErr(http.MethodPatch, 404, "ResourceNotFound", "")},
 	{"404 DELETE", rcAPIMErr(http.MethodDelete, 404, "", "")},

@@ -113,7 +113,7 @@ var _ = Describe("APIMProduct retry state machine (envtest, fake ARM)", func() {
 		return waits
 	}
 	busy := peARMError(http.StatusServiceUnavailable, "ServiceUnavailable", "APIM is busy")
-	forbidden := peARMError(http.StatusForbidden, "AuthorizationFailed", "no write permission")
+	forbidden := peARMError(http.StatusForbidden, "LinkedAuthorizationFailed", "no write permission")
 
 	// driveTo puts the product's current write (upsert, or delete once deleting) into
 	// state and returns the consecutive failures that state has. Backoff is left in the
@@ -587,7 +587,7 @@ var _ = Describe("APIMProduct retry state machine (envtest, fake ARM)", func() {
 				"ValidationError/InvalidParameter"),
 			Entry("401", peARMError(http.StatusUnauthorized, "InvalidAuthenticationToken", "token expired"),
 				"InvalidAuthenticationToken"),
-			Entry("403", forbidden, "AuthorizationFailed"),
+			Entry("403", forbidden, "LinkedAuthorizationFailed"),
 			Entry("404 on a PUT", peARMError(http.StatusNotFound, "ResourceNotFound", "no such service"), "ResourceNotFound"),
 		)
 
@@ -888,7 +888,7 @@ var _ = Describe("APIMProduct retry state machine (envtest, fake ARM)", func() {
 				"has subscriptions"),
 			Entry("401", peARMError(http.StatusUnauthorized, "InvalidAuthenticationToken", "token expired"),
 				"InvalidAuthenticationToken"),
-			Entry("403", forbidden, "AuthorizationFailed"),
+			Entry("403", forbidden, "LinkedAuthorizationFailed"),
 		)
 
 		It("retries an Invalid delete after a spec change", func() {

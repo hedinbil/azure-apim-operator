@@ -28,18 +28,13 @@ type ReplicaSetWatcherReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=apim.operator.io,resources=replicasetwatchers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapis,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apim.operator.io,resources=apimapideployments,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ReplicaSetWatcherReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := ctrl.Log.WithName("replicasetwatcher_controller")
-
-	// logger.Info("🔁 Starting reconciliation", "replicaSet", req.Name)
 
 	// Fetch the ReplicaSet that triggered this reconciliation.
 	var rs appsv1.ReplicaSet
@@ -208,8 +203,6 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return rs.Status.ReadyReplicas > 0
 			},
 			UpdateFunc: func(e event.UpdateEvent) bool {
-				// Only reconcile on ReplicaSet updates when the status changes
-				// Specifically, when ReadyReplicas changes, indicating pods becoming ready
 				oldRS, ok := e.ObjectOld.(*appsv1.ReplicaSet)
 				if !ok {
 					return false
@@ -218,26 +211,34 @@ func (r *ReplicaSetWatcherReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if !ok {
 					return false
 				}
-
-				// Skip updates on old ReplicaSet revisions that have been scaled down to 0.
-				// When a Deployment is updated, the old ReplicaSet is scaled down to 0,
-				// and we should not process these old revisions even if ReadyReplicas changes.
-				if newRS.Spec.Replicas != nil && *newRS.Spec.Replicas == 0 {
-					return false
-				}
-
-				// Reconcile only when ReadyReplicas changes from 0 to greater than 0.
-				// This ensures we only trigger APIM deployments when pods actually become ready,
-				// not when they decrease or change in other ways.
-				// This handles the case where a ReplicaSet is created with ReadyReplicas = 0,
-				// and then pods become ready later.
-				return oldRS.Status.ReadyReplicas == 0 && newRS.Status.ReadyReplicas > 0
+				return replicaSetReadinessSignal(oldRS, newRS)
 			},
 			DeleteFunc:  func(e event.DeleteEvent) bool { return false },
 			GenericFunc: func(e event.GenericEvent) bool { return false },
 		}).
 		Named("replicasetwatcher").
 		Complete(r)
+}
+
+// replicaSetReadinessSignal reports whether an update of a ReplicaSet should make its APIs
+// deploy: its first pod became ready, or all the pods it wants became ready.
+//
+// The first is the earliest the new version can answer; the second is usually the moment
+// a rolling update ends. The deployment controller does not fetch the document while an
+// older revision still has ready pods (replicaSetsStillRollingOut), because the OpenAPI URL,
+// a Service, would still reach them; it looks again on its own until they are gone. A
+// ReplicaSet scaled down to 0, the old revision of a rollout, never signals.
+func replicaSetReadinessSignal(oldRS, newRS *appsv1.ReplicaSet) bool {
+	want := int32(1)
+	if newRS.Spec.Replicas != nil {
+		want = *newRS.Spec.Replicas
+	}
+	if want == 0 {
+		return false
+	}
+	firstReady := oldRS.Status.ReadyReplicas == 0 && newRS.Status.ReadyReplicas > 0
+	allReady := oldRS.Status.ReadyReplicas < want && newRS.Status.ReadyReplicas >= want
+	return firstReady || allReady
 }
 
 // isPodReady checks if a pod is in the Ready condition.

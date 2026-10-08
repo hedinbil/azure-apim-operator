@@ -424,7 +424,7 @@ var _ = Describe("APIMInboundPolicy APIM writes", func() {
 		Entry("400 with a transient Azure code is transient", http.StatusBadRequest, "ManagementApiRequestFailed", phaseBackoff),
 		Entry("400 ValidationError is permanent", http.StatusBadRequest, "ValidationError", phaseInvalid),
 		Entry("401 is permanent", http.StatusUnauthorized, "InvalidAuthenticationToken", phaseInvalid),
-		Entry("403 is permanent", http.StatusForbidden, "AuthorizationFailed", phaseInvalid),
+		Entry("403 is permanent", http.StatusForbidden, "LinkedAuthorizationFailed", phaseInvalid),
 		// The API is not imported yet, typically because its APIMAPIDeployment waits for a
 		// ready pod while the policy applied in the same sync is reconciled at once. It
 		// clears up when the import lands, so the policy retries rather than gives up.
@@ -491,7 +491,7 @@ var _ = Describe("APIMInboundPolicy APIM writes", func() {
 	})
 
 	It("retries an Invalid policy once per new value of the retry annotation", func() {
-		arm.respond(http.StatusForbidden, inboundPolicyARMError("AuthorizationFailed", "no access"))
+		arm.respond(http.StatusForbidden, inboundPolicyARMError("LinkedAuthorizationFailed", "no access"))
 		reconcileOnce()
 		Expect(getPolicy().Status.Phase).To(Equal(phaseInvalid))
 

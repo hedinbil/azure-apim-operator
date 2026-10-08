@@ -568,7 +568,7 @@ func tpeQuietLogger() logr.Logger { return logr.Discard() }
 // failNow403 makes the resource Invalid with a 403.
 func (h *tpeHarness) failNow403() {
 	GinkgoHelper()
-	h.arm.reply(tpeFail(http.StatusForbidden, "AuthorizationFailed"))
+	h.arm.reply(tpeFail(http.StatusForbidden, "LinkedAuthorizationFailed"))
 	Expect(h.reconcile()).To(BeZero())
 }
 

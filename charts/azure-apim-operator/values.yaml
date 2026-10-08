@@ -65,6 +65,12 @@ securityContext:
     drop:
       - "ALL"
 
+# Soft memory limit for the Go runtime; keep it below resources.limits.memory.
+goMemLimit: 200MiB
+
+# Must exceed the manager's 150 s graceful shutdown (cmd/main.go).
+terminationGracePeriodSeconds: 180
+
 resources:
   limits:
     cpu: 500m

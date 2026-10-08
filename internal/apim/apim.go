@@ -4,6 +4,7 @@
 package apim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,31 +55,34 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 	return etag, true, nil
 }
 
-// ImportOpenAPIDefinitionToAPIM imports an OpenAPI/Swagger definition into Azure API Management.
-// It creates or updates an API in APIM with the provided OpenAPI content, route prefix, and optional revision.
-// The function uses the Azure Management API to perform the import operation.
-// For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
+// ImportOpenAPIDefinitionToAPIM starts the import of an OpenAPI/Swagger definition into
+// Azure API Management: it creates or updates the API with the document, route prefix and
+// optional revision. It does not wait for APIM to finish. A WriteResult that is Accepted
+// carries the operation APIM is still running; the caller records it and reads it later
+// (see GetOperationState) and must not write the API again until it has ended.
 //
-// The document goes inside a JSON envelope together with the backend serviceUrl. Sent as a
-// bare document, APIM takes the backend from the document's own servers (or host/basePath)
-// field, which many frameworks fill with the host the document was fetched from: the
-// in-cluster address the operator used. The API then pointed at that address, or at nothing,
-// until the later serviceUrl PATCH, and kept doing so while that PATCH was backing off.
-func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
+// The document goes inside a JSON envelope together with the backend serviceUrl and the
+// subscription requirement. Sent as a bare document, APIM takes the backend from the
+// document's own servers (or host/basePath) field, which many frameworks fill with the host
+// the document was fetched from: the in-cluster address the operator used.
+func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) (WriteResult, error) {
 	body, format, err := importEnvelope(apimParams, openApiContent)
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM import body", "apiID", apimParams.APIID)
-		return err
+		return WriteResult{}, err
 	}
 
-	etag := ifMatchForUpsert(ctx, apimParams)
+	etag, err := ifMatchForUpsert(ctx, apimParams)
+	if err != nil {
+		return WriteResult{}, err
+	}
 
 	// Build the Azure Management API URL for importing the API. APIM addresses
 	// a revision as "apiId;rev=n".
 	importURL, err := url.Parse(revisionURL(apimParams, apimParams.APIID, apimParams.Revision))
 	if err != nil {
 		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
-		return fmt.Errorf("failed to build request: %w", err)
+		return WriteResult{}, fmt.Errorf("failed to build request: %w", err)
 	}
 	if apimParams.Revision != "" {
 		q := importURL.Query()
@@ -91,24 +95,21 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		"url", importURL.String(),
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
-		"serviceUrl", apimParams.ServiceURL,
+		"serviceUrl", RedactURL(apimParams.ServiceURL),
 		"format", format,
 		"ifMatch", etag,
+		"bytes", len(openApiContent),
 	)
 
-	logger.Info("📄 OpenAPI document ready for import", "apiID", apimParams.APIID, "bytes", len(openApiContent))
-
-	return doAPIUpsert(ctx, apimParams, armRequest{
-		operation: "import API",
-		method:    http.MethodPut,
-		url:       importURL.String(),
-		token:     apimParams.BearerToken,
-		body:      body,
-		// Set If-Match header for conditional updates (etag) or unconditional updates (*)
-		// GetAPI already formats the etag with quotes, so we can use it directly
+	return startAPIWrite(ctx, apimParams, armRequest{
+		operation:   "import API",
+		method:      http.MethodPut,
+		url:         importURL.String(),
+		token:       apimParams.BearerToken,
+		body:        body,
 		contentType: contentTypeJSON,
 		ifMatch:     etag,
-	}, "imported API into")
+	})
 }
 
 // importEnvelope wraps an OpenAPI or Swagger document in the ARM body that imports it and
@@ -119,7 +120,13 @@ func importEnvelope(apimParams APIMDeploymentConfig, openApiContent []byte) ([]b
 	if err != nil {
 		return nil, "", err
 	}
-	body, err := json.Marshal(map[string]any{
+	// An Encoder without HTML escaping: json.Marshal would turn every <, > and & of the
+	// document into a six-byte escape, growing a large document by half for nothing.
+	var body bytes.Buffer
+	body.Grow(len(doc) + 512)
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(map[string]any{
 		"properties": map[string]any{
 			"format":               format,
 			"value":                string(doc),
@@ -127,191 +134,124 @@ func importEnvelope(apimParams APIMDeploymentConfig, openApiContent []byte) ([]b
 			serviceURLProperty:     apimParams.ServiceURL,
 			"subscriptionRequired": apimParams.SubscriptionRequired,
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, "", fmt.Errorf("marshal import body: %w", err)
 	}
-	return body, format, nil
+	return bytes.TrimSuffix(body.Bytes(), []byte("\n")), format, nil
 }
 
-// importFormat returns APIM's import format for a document and the document as JSON:
-// "swagger-json" for Swagger 2.0, otherwise "openapi+json". A JSON document is passed
-// through byte for byte; a YAML one is converted, since APIM has no Swagger-YAML format and
-// one JSON path keeps the two versions alike. The fetcher has already checked that the
-// document declares openapi or swagger; anything else is left to APIM to reject (400,
-// which the controllers treat as Invalid).
+// maxSwaggerYAMLConversion bounds the Swagger 2.0 YAML documents converted to JSON. The
+// conversion builds the whole document in memory at roughly seventy times its size.
+const maxSwaggerYAMLConversion = 2 << 20
+
+// importFormat returns APIM's import format for a document and the document to send:
+//   - JSON: "swagger-json" for Swagger 2.0, otherwise "openapi+json", byte for byte.
+//   - YAML OpenAPI 3: "openapi", byte for byte. Converting it would apply YAML 1.1 rules and
+//     change the definition (version 1.0 becomes the number 1, an enum value yes becomes true).
+//   - YAML Swagger 2.0: converted to JSON as "swagger-json", since APIM has no Swagger-YAML
+//     format. That conversion has the YAML 1.1 caveat above.
+//
+// The fetcher has already checked that the document declares openapi or swagger; anything
+// else is left to APIM to reject (400, which the controllers treat as Invalid).
 func importFormat(openApiContent []byte) (string, []byte, error) {
-	doc := openApiContent
-	if !json.Valid(doc) {
-		converted, err := yaml.YAMLToJSON(openApiContent)
-		if err != nil {
-			return "", nil, fmt.Errorf("OpenAPI document is neither JSON nor YAML: %w", err)
-		}
-		doc = converted
+	info, err := inspectDocument(openApiContent)
+	if err != nil {
+		return "", nil, fmt.Errorf("OpenAPI document: %w", err)
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(doc, &top); err != nil {
-		return "", nil, fmt.Errorf("OpenAPI document is not a JSON object: %w", err)
+	switch {
+	case info.json && info.version == versionSwagger:
+		return "swagger-json", openApiContent, nil
+	case info.json:
+		return "openapi+json", openApiContent, nil
+	case info.version != versionSwagger:
+		return "openapi", openApiContent, nil
+	case len(openApiContent) > maxSwaggerYAMLConversion:
+		return "", nil, fmt.Errorf("swagger 2.0 YAML of %d bytes is too large to convert to JSON (at most %d); serve the document as JSON: %w",
+			len(openApiContent), maxSwaggerYAMLConversion, ErrUnsupportedDocument)
 	}
-	if _, ok := top["swagger"]; ok {
-		return "swagger-json", doc, nil
+	converted, err := yaml.YAMLToJSON(openApiContent)
+	if err != nil {
+		return "", nil, fmt.Errorf("convert Swagger 2.0 YAML to JSON: %w", err)
 	}
-	return "openapi+json", doc, nil
+	return "swagger-json", converted, nil
 }
 
-// ifMatchForUpsert picks the If-Match header for a PUT on an API: the current
-// etag when the API exists (a conditional update), "*" when it does not or
-// when a new revision is being created.
-func ifMatchForUpsert(ctx context.Context, apimParams APIMDeploymentConfig) string {
-	var etag string
-	if apimParams.Revision == "" {
-		existingEtag, exists, err := GetAPI(ctx, apimParams)
-		if err != nil {
-			logger.Error(err, "⚠️ Failed to check if API exists, will use If-Match: *", "apiID", apimParams.APIID)
-			etag = "*"
-		} else if exists {
-			if existingEtag != "" {
-				// Use the actual etag for conditional update
-				etag = existingEtag
-				logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", etag)
-			} else {
-				// Fallback to unconditional update if no etag
-				etag = "*"
-				logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
-			}
-		} else {
-			// API doesn't exist, use "*" for create
-			etag = "*"
-			logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
-		}
-	} else {
-		// Revisions are always new, use "*"
-		etag = "*"
+// ifMatchForUpsert picks the If-Match header for a PUT on an API: the current etag when the
+// API exists (a conditional update), "*" when it does not or when a new revision is being
+// created. Any failure of the existence check other than a 404 is returned: an APIM that
+// cannot answer a GET is not sent the heaviest write it has.
+func ifMatchForUpsert(ctx context.Context, apimParams APIMDeploymentConfig) (string, error) {
+	if apimParams.Revision != "" {
 		logger.Info("📝 Creating new revision", "apiID", apimParams.APIID, "revision", apimParams.Revision)
+		return "*", nil
 	}
-	return etag
+	existingEtag, exists, err := GetAPI(ctx, apimParams)
+	switch {
+	case err != nil:
+		logger.Error(err, "❌ Failed to check whether the API exists", "apiID", apimParams.APIID)
+		return "", err
+	case !exists:
+		logger.Info("🆕 API does not exist, will create", "apiID", apimParams.APIID)
+		return "*", nil
+	case existingEtag == "":
+		logger.Info("🔍 Found existing API but no etag, using If-Match: *", "apiID", apimParams.APIID)
+		return "*", nil
+	default:
+		logger.Info("🔍 Found existing API, will update with etag", "apiID", apimParams.APIID, "etag", existingEtag)
+		return existingEtag, nil
+	}
 }
 
-// doAPIUpsert sends a prepared PUT for an API and waits for APIM to finish
-// it, including the asynchronous (202) case. verb is what the success log
-// says was done, e.g. "imported API into".
-func doAPIUpsert(ctx context.Context, apimParams APIMDeploymentConfig, request armRequest, verb string) error {
-	resp, err := request.send(ctx)
-	if err != nil {
-		logger.Error(err, "❌ APIM API returned error", "apiID", apimParams.APIID)
-		return err
+// startAPIWrite sends a prepared PUT for an API. A 200 or 201 means APIM finished the write;
+// a 202 means it accepted it and runs it in the background, and the WriteResult carries the
+// operation to follow. It never waits.
+//
+// The PUT runs on a context detached from ctx, bounded by armRequestTimeout: once sent, it
+// is allowed to come back with APIM's answer even when the reconcile is cancelled (the
+// operator shutting down, the reconcile timing out). Cut off, it would leave APIM running
+// an import nobody recorded, and the next attempt would import on top of it.
+func startAPIWrite(ctx context.Context, apimParams APIMDeploymentConfig, request armRequest) (WriteResult, error) {
+	// A reconcile already cancelled sends nothing; only a write already on its way is let finish.
+	if err := ctx.Err(); err != nil {
+		return WriteResult{}, fmt.Errorf("%s: %w", request.operation, err)
 	}
-
-	// Azure APIM may return 202 (Accepted) for asynchronous import operations.
-	// Poll completion explicitly so we don't report success while the import later fails.
-	if resp.statusCode == http.StatusAccepted {
-		if err := waitForAsyncImportCompletion(ctx, apimParams.BearerToken, apimParams.APIID, request.operation, resp); err != nil {
-			logger.Error(err, "❌ APIM async import did not complete successfully", "apiID", apimParams.APIID)
-			return err
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), armRequestTimeout)
+	defer cancel()
+	resp, err := request.send(writeCtx)
+	if err != nil {
+		logger.Error(err, "❌ APIM API returned error", "apiID", apimParams.APIID, "operation", request.operation)
+		if writeOutcomeUnknown(err) {
+			return WriteResult{}, fmt.Errorf("%w: %w", ErrWriteOutcomeUnknown, err)
 		}
+		return WriteResult{}, err
 	}
-
-	logger.Info("✅ Successfully "+verb+" APIM",
-		"apiID", apimParams.APIID,
-		"status", resp.status,
-		"statusCode", resp.statusCode,
-	)
-
-	return nil
+	if resp.statusCode != http.StatusAccepted {
+		logger.Info("✅ APIM finished the write", "apiID", apimParams.APIID, "operation", request.operation, "statusCode", resp.statusCode)
+		return WriteResult{}, nil
+	}
+	result, err := acceptedWrite(request.operation, request.method, resp.header)
+	if err != nil {
+		logger.Error(err, "❌ APIM accepted the write without an operation to follow", "apiID", apimParams.APIID)
+		return WriteResult{}, err
+	}
+	logger.Info("⏳ APIM accepted the write and runs it in the background", "apiID", apimParams.APIID,
+		"operation", request.operation, "operationURL", result.OperationURL)
+	return result, nil
 }
 
-// AssignServiceUrlToApi updates the backend service URL for an existing API in Azure APIM.
-// This is used to point an API to a different backend service without re-importing the OpenAPI definition.
-func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) error {
-	patchURL := serviceURL(config, "apis", config.APIID)
-
-	// Marshalled, not formatted: a quote or backslash in serviceUrl used to
-	// break out of the string and change the request body (APIM-16).
-	body, err := json.Marshal(map[string]any{
-		"properties": map[string]any{serviceURLProperty: config.ServiceURL},
-	})
+// RedactURL drops credentials and the query string from a URL before it is logged or
+// written to a status: a backend or OpenAPI URL can carry a function key or basic-auth
+// credentials.
+func RedactURL(raw string) string {
+	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("marshal serviceUrl patch body: %w", err)
+		return "<unparseable URL>"
 	}
-
-	// Log what we're about to do
-	logger.Info("🔧 Patching APIM service URL",
-		"method", http.MethodPatch,
-		"url", patchURL,
-		"apiID", config.APIID,
-		"serviceUrl", config.ServiceURL,
-	)
-
-	resp, err := armRequest{
-		operation:   "patch serviceUrl",
-		method:      http.MethodPatch,
-		url:         patchURL,
-		token:       config.BearerToken,
-		body:        body,
-		contentType: contentTypeJSON,
-		dependent:   true,
-	}.send(ctx)
-	if err != nil {
-		logger.Error(err, "❌ PATCH returned error", "apiID", config.APIID)
-		return err
+	parsed.User = nil
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "<redacted>"
 	}
-
-	logger.Info("✅ Successfully patched serviceUrl",
-		"apiID", config.APIID,
-		"status", resp.status,
-		"serviceUrl", config.ServiceURL,
-	)
-
-	return nil
-}
-
-// SetSubscriptionRequired updates the subscription requirement setting for an existing API in Azure APIM.
-// This controls whether a subscription key is required to access the API.
-func SetSubscriptionRequired(ctx context.Context, config APIMDeploymentConfig) error {
-	logger.Info("🔍 SetSubscriptionRequired called",
-		"apiID", config.APIID,
-		"subscriptionRequired", config.SubscriptionRequired,
-	)
-
-	patchURL := serviceURL(config, "apis", config.APIID)
-
-	// Build the JSON body with the subscriptionRequired property.
-	body, err := json.Marshal(map[string]any{
-		"properties": map[string]any{"subscriptionRequired": config.SubscriptionRequired},
-	})
-	if err != nil {
-		return fmt.Errorf("marshal subscriptionRequired patch body: %w", err)
-	}
-
-	// Log what we're about to do
-	logger.Info("🔧 Patching APIM subscription requirement",
-		"method", http.MethodPatch,
-		"url", patchURL,
-		"apiID", config.APIID,
-		"subscriptionRequired", config.SubscriptionRequired,
-	)
-
-	resp, err := armRequest{
-		operation:   "patch subscriptionRequired",
-		method:      http.MethodPatch,
-		url:         patchURL,
-		token:       config.BearerToken,
-		body:        body,
-		contentType: contentTypeJSON,
-		dependent:   true,
-	}.send(ctx)
-	if err != nil {
-		logger.Error(err, "❌ PATCH returned error", "apiID", config.APIID)
-		return err
-	}
-
-	logger.Info("✅ Successfully patched subscriptionRequired",
-		"apiID", config.APIID,
-		"status", resp.status,
-		"subscriptionRequired", config.SubscriptionRequired,
-	)
-
-	return nil
+	return parsed.String()
 }
 
 // GetAPIMServiceDetails retrieves hostname information for an Azure APIM service instance.

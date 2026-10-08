@@ -1,10 +1,10 @@
 package apim
 
-// Exhaustive cases for the ARM request helper, the typed errors it returns and the
-// async (202) wait, run against an httptest server standing in for ARM. The point is
-// that a controller always gets back something it can classify: an *Error with the
-// HTTP status, the Azure codes and the method, a wait timeout it can tell apart, or a
-// transport error that is clearly not an ARM answer.
+// Exhaustive cases for the ARM request helper, the typed errors it returns, the 202 answer
+// of an API upsert and the read of the operation behind it, run against an httptest server
+// standing in for ARM. The point is that a controller always gets back something it can
+// classify: an *Error with the HTTP status, the Azure codes and the method, an operation
+// to follow, or a transport error that is clearly not an ARM answer.
 
 import (
 	"bufio"
@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -74,23 +75,43 @@ func TestCallRequestShapes(t *testing.T) {
 
 	openAPI := []byte(`{"openapi":"3.0.0"}`)
 	// The import goes as a JSON envelope: the document unchanged in properties.value,
-	// with the path and the backend serviceUrl set in the same write.
-	importBody := func(t *testing.T, body []byte) {
-		t.Helper()
-		var env struct {
-			Properties map[string]any `json:"properties"`
-		}
-		if err := json.Unmarshal(body, &env); err != nil {
-			t.Fatalf("import body is not JSON: %v (%s)", err, body)
-		}
-		want := map[string]any{
-			"format": "openapi+json", "value": string(openAPI), "path": "/orders",
-			"serviceUrl": "https://orders.internal", "subscriptionRequired": true,
-		}
-		if !reflect.DeepEqual(env.Properties, want) {
-			t.Errorf("import properties = %v, want %v", env.Properties, want)
+	// with the path, the backend serviceUrl and the subscription requirement set in the
+	// same write. There are no separate PATCH requests for them any more.
+	importBodyWith := func(subscriptionRequired bool) func(t *testing.T, body []byte) {
+		return func(t *testing.T, body []byte) {
+			t.Helper()
+			var env struct {
+				Properties map[string]any `json:"properties"`
+			}
+			if err := json.Unmarshal(body, &env); err != nil {
+				t.Fatalf("import body is not JSON: %v (%s)", err, body)
+			}
+			want := map[string]any{
+				"format": "openapi+json", "value": string(openAPI), "path": "/orders",
+				"serviceUrl": "https://orders.internal", "subscriptionRequired": subscriptionRequired,
+			}
+			if !reflect.DeepEqual(env.Properties, want) {
+				t.Errorf("import properties = %v, want %v", env.Properties, want)
+			}
 		}
 	}
+	importBody := importBodyWith(true)
+	importWith := func(cfg APIMDeploymentConfig) func(ctx context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := ImportOpenAPIDefinitionToAPIM(ctx, cfg, openAPI)
+			return err
+		}
+	}
+	upsertWebSocketWith := func(cfg APIMDeploymentConfig) func(ctx context.Context) error {
+		return func(ctx context.Context) error {
+			_, err := UpsertWebSocketAPI(ctx, cfg)
+			return err
+		}
+	}
+	revision2 := deploymentConfig()
+	revision2.Revision = "2"
+	noSubscription := deploymentConfig()
+	noSubscription.SubscriptionRequired = false
 	importQuery := map[string]string{}
 	importRevQuery := map[string]string{"createRevision": "true"}
 	wsProps := map[string]any{
@@ -109,93 +130,50 @@ func TestCallRequestShapes(t *testing.T) {
 			return err
 		}, []hcWant{{method: http.MethodGet, path: "/apis/orders"}}},
 
-		{"import new API", getAbsent, func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
-		}, []hcWant{
+		{"import new API", getAbsent, importWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
 				contentType: "application/json", body: importBody},
 		}},
-		{"import existing API with weak etag", getWithETag(`W/"e1"`), func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
-		}, []hcWant{
+		{"import existing API with weak etag", getWithETag(`W/"e1"`), importWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: `"e1"`,
 				contentType: "application/json", body: importBody},
 		}},
-		{"import existing API with unquoted etag", getWithETag(`e2`), func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
-		}, []hcWant{
+		{"import existing API with unquoted etag", getWithETag(`e2`), importWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: `"e2"`,
 				contentType: "application/json", body: importBody},
 		}},
-		{"import existing API without etag", getWithETag(""), func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
-		}, []hcWant{
+		{"import existing API without etag", getWithETag(""), importWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
 				contentType: "application/json", body: importBody},
 		}},
-		{"import when the etag GET fails", func(w http.ResponseWriter, r *http.Request, _ []byte) {
-			if r.Method == http.MethodGet {
-				hcRespond(w, http.StatusInternalServerError, nil, `{"error":{"code":"InternalServerError"}}`)
-				return
-			}
-			hcRespond(w, http.StatusCreated, nil, `{}`)
-		}, func(ctx context.Context) error {
-			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
-		}, []hcWant{
+		{"import with subscriptionRequired false sends it, not omits it", getAbsent, importWith(noSubscription), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
-				contentType: "application/json", body: importBody},
+				contentType: "application/json", body: importBodyWith(false)},
 		}},
-		{"import revision skips the GET", ok, func(ctx context.Context) error {
-			cfg := deploymentConfig()
-			cfg.Revision = "2"
-			return ImportOpenAPIDefinitionToAPIM(ctx, cfg, openAPI)
-		}, []hcWant{
+		{"import revision skips the GET", ok, importWith(revision2), []hcWant{
 			{method: http.MethodPut, path: "/apis/orders;rev=2", query: importRevQuery, ifMatch: "*",
 				contentType: "application/json", body: importBody},
 		}},
 
-		{"websocket new API", getAbsent, func(ctx context.Context) error {
-			return UpsertWebSocketAPI(ctx, deploymentConfig())
-		}, []hcWant{
+		{"websocket new API", getAbsent, upsertWebSocketWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", ifMatch: "*", contentType: contentTypeJSON,
 				body: hcPropsEqual(wsProps)},
 		}},
-		{"websocket existing API", getWithETag(`"w1"`), func(ctx context.Context) error {
-			return UpsertWebSocketAPI(ctx, deploymentConfig())
-		}, []hcWant{
+		{"websocket existing API", getWithETag(`"w1"`), upsertWebSocketWith(deploymentConfig()), []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", ifMatch: `"w1"`, contentType: contentTypeJSON,
 				body: hcPropsEqual(wsProps)},
 		}},
-		{"websocket revision", ok, func(ctx context.Context) error {
-			cfg := deploymentConfig()
-			cfg.Revision = "2"
-			return UpsertWebSocketAPI(ctx, cfg)
-		}, []hcWant{
+		{"websocket revision", ok, upsertWebSocketWith(revision2), []hcWant{
 			{method: http.MethodPut, path: "/apis/orders;rev=2", ifMatch: "*", contentType: contentTypeJSON,
 				body: hcPropsEqual(wsProps)},
 		}},
-
-		{"serviceUrl patch", ok, func(ctx context.Context) error {
-			return AssignServiceUrlToApi(ctx, deploymentConfig())
-		}, []hcWant{{method: http.MethodPatch, path: "/apis/orders", contentType: contentTypeJSON,
-			body: hcPropsEqual(map[string]any{"serviceUrl": "https://orders.internal"})}}},
-		{"subscriptionRequired patch true", ok, func(ctx context.Context) error {
-			return SetSubscriptionRequired(ctx, deploymentConfig())
-		}, []hcWant{{method: http.MethodPatch, path: "/apis/orders", contentType: contentTypeJSON,
-			body: hcPropsEqual(map[string]any{"subscriptionRequired": true})}}},
-		{"subscriptionRequired patch false is sent, not omitted", ok, func(ctx context.Context) error {
-			cfg := deploymentConfig()
-			cfg.SubscriptionRequired = false
-			return SetSubscriptionRequired(ctx, cfg)
-		}, []hcWant{{method: http.MethodPatch, path: "/apis/orders", contentType: contentTypeJSON,
-			body: hcPropsEqual(map[string]any{"subscriptionRequired": false})}}},
 
 		{"product assignment per product", ok, func(ctx context.Context) error {
 			return AssignProductsToAPI(ctx, deploymentConfig())
@@ -370,10 +348,19 @@ func TestEveryCallAcceptsEvery2xx(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", call.name, status), func(t *testing.T) {
 				body := `{"properties":{}}`
 				fake := newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
-					// A 202 without operation headers: nothing to poll, so nothing waits.
+					// A 202 without operation headers: nothing to follow.
 					hcRespond(w, status, nil, body)
 				})
 				err := call.run(context.Background())
+				if call.async && status == http.StatusAccepted {
+					// An API upsert APIM accepted without naming an operation may still be
+					// running; reporting it as done would let the next write overlap it.
+					var apimErr *Error
+					if !errors.Is(err, ErrNoOperationURL) || !errors.As(err, &apimErr) || apimErr.StatusCode != http.StatusAccepted {
+						t.Fatalf("%s() with a bare 202 = %v, want ErrNoOperationURL with status 202", call.name, err)
+					}
+					return
+				}
 				if call.name == "GetAPIMServiceDetails" && status == http.StatusNoContent {
 					// A read with no body cannot be parsed into hostnames; it must say so
 					// rather than return two empty hosts as if all were well.
@@ -387,7 +374,7 @@ func TestEveryCallAcceptsEvery2xx(t *testing.T) {
 				}
 				for _, r := range fake.requests() {
 					if strings.HasPrefix(r.escapedPath, "/operations") {
-						t.Errorf("polled %s without an operation header", r.escapedPath)
+						t.Errorf("read %s without an operation header", r.escapedPath)
 					}
 				}
 				if sent, seen := fake.router.sent.Load(), len(fake.requests()); sent != int64(seen) || seen == 0 {
@@ -398,11 +385,14 @@ func TestEveryCallAcceptsEvery2xx(t *testing.T) {
 	}
 }
 
-// TestOnlyAPIUpsertsWaitFor202: product, tag, policy, patch and assignment calls take a
-// 202 as done even with an operation header; only the API import and websocket upsert
-// poll. Pins today's scope of the wait.
-func TestOnlyAPIUpsertsWaitFor202(t *testing.T) {
-	withAsyncTiming(t, time.Second, time.Millisecond)
+// TestOnlyAPIUpsertsReport202: product, tag, policy and assignment calls take a 202 as
+// done even with an operation header; only the API import and websocket upsert hand the
+// operation back. No call reads the operation. Pins today's scope of the 202 handling.
+func TestOnlyAPIUpsertsReport202(t *testing.T) {
+	upserts := map[string]func(ctx context.Context) (WriteResult, error){
+		"ImportOpenAPIDefinitionToAPIM": hcImport,
+		"UpsertWebSocketAPI":            hcUpsertWebSocket,
+	}
 	for _, call := range hcCalls() {
 		if !call.write {
 			continue
@@ -418,18 +408,24 @@ func TestOnlyAPIUpsertsWaitFor202(t *testing.T) {
 					hcRespond(w, http.StatusAccepted, http.Header{"Azure-Asyncoperation": {"/operations/x"}}, ``)
 				}
 			})
-			if err := call.run(context.Background()); err != nil {
+			if upsert, ok := upserts[call.name]; ok != call.async {
+				t.Fatalf("%s: async = %v but listed as an API upsert = %v", call.name, call.async, ok)
+			} else if ok {
+				result, err := upsert(context.Background())
+				if err != nil {
+					t.Fatalf("%s() = %v, want nil", call.name, err)
+				}
+				if result.OperationURL != hcUnroutableHost+"/operations/x" {
+					t.Errorf("%s() OperationURL = %q, want the Azure-AsyncOperation", call.name, result.OperationURL)
+				}
+			} else if err := call.run(context.Background()); err != nil {
 				t.Fatalf("%s() = %v, want nil", call.name, err)
 			}
 			if sent, seen := fake.router.sent.Load(), len(fake.requests()); sent != int64(seen) {
-				t.Errorf("httpClient sent %d requests and the fake saw %d: polls included, every request must go through httpClient", sent, seen)
+				t.Errorf("httpClient sent %d requests and the fake saw %d: every request must go through httpClient", sent, seen)
 			}
-			polls := fake.countPath("/operations/")
-			if call.polls && polls != 1 {
-				t.Errorf("%s polled %d times, want 1", call.name, polls)
-			}
-			if !call.polls && polls != 0 {
-				t.Errorf("%s polled %d times, want 0", call.name, polls)
+			if reads := fake.countPath("/operations/"); reads != 0 {
+				t.Errorf("%s read the operation %d times, want 0", call.name, reads)
 			}
 		})
 	}
@@ -454,7 +450,14 @@ func TestEveryCallTypesEveryErrorStatus(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", call.name, status), func(t *testing.T) {
 				body := fmt.Sprintf(`{"error":{"code":"Code%d","message":"message %d","details":[{"code":"Detail%d"}]}}`,
 					status, status, status)
-				fake := newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				fake := newHCFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					if r.Method == http.MethodGet && call.method != http.MethodGet {
+						// The etag lookup before an API upsert: the API is new, so the
+						// failure under test is the write's. A failed lookup has its own
+						// test (TestFailedExistenceCheckSendsNoUpsert).
+						hcRespond(w, http.StatusNotFound, nil, `{"error":{"code":"ResourceNotFound"}}`)
+						return
+					}
 					hcRespond(w, status, nil, body)
 				})
 				err := call.run(context.Background())
@@ -485,11 +488,16 @@ func TestEveryCallTypesEveryErrorStatus(t *testing.T) {
 				if apimErr.Method != call.method {
 					t.Errorf("Method = %q, want %q", apimErr.Method, call.method)
 				}
-				if apimErr.Operation == "" || strings.Contains(apimErr.Operation, "(poll)") {
+				if apimErr.Operation == "" || apimErr.Operation == "get API" && call.name != "GetAPI" {
 					t.Errorf("Operation = %q, want the call's own operation", apimErr.Operation)
 				}
-				if errors.Is(err, ErrImportWaitTimeout) || errors.Is(err, ErrAsyncOperationFailed) {
+				if errors.Is(err, ErrImportWaitTimeout) || errors.Is(err, ErrAsyncOperationFailed) || errors.Is(err, ErrNoOperationURL) {
 					t.Errorf("an HTTP failure must not match an async sentinel: %v", err)
+				}
+				// Only an API write that a gateway answered leaves its outcome unknown.
+				gateway := status == http.StatusBadGateway || status == http.StatusGatewayTimeout
+				if got := errors.Is(err, ErrWriteOutcomeUnknown); got != (call.async && gateway) {
+					t.Errorf("errors.Is(err, ErrWriteOutcomeUnknown) = %v for %s with %d", got, call.name, status)
 				}
 				if got := IsNotFound(err); got != (status == http.StatusNotFound) {
 					t.Errorf("IsNotFound = %v for %d", got, status)
@@ -500,18 +508,23 @@ func TestEveryCallTypesEveryErrorStatus(t *testing.T) {
 
 				// One failing write is one request: retrying is the controller's job, and
 				// a call that kept going after a failure would hide which step broke.
-				writes := 0
-				for _, r := range fake.requests() {
-					if r.method != http.MethodGet {
-						writes++
-					}
-				}
-				if call.write && writes != 1 {
+				if writes := fake.countWrites(); call.write && writes != 1 {
 					t.Errorf("%s sent %d write requests after a %d, want exactly 1", call.name, writes, status)
 				}
 			})
 		}
 	}
+}
+
+// countWrites counts the requests the fake saw that were not GETs.
+func (f *hcFake) countWrites() int {
+	writes := 0
+	for _, r := range f.requests() {
+		if r.method != http.MethodGet {
+			writes++
+		}
+	}
+	return writes
 }
 
 // TestErrorWrappingKeepsTheType: the controller may wrap what it gets back; the status
@@ -594,6 +607,19 @@ func TestErrorBodiesOverHTTP(t *testing.T) {
 		{name: "plain text is trimmed", contentType: "text/plain", body: "  upstream connect error \n", message: "upstream connect error"},
 		{name: "long text is truncated", contentType: "text/plain", body: longText,
 			message: strings.Repeat("y", maxErrorBodyInMessage) + "…"},
+		{name: "long JSON message is truncated", body: `{"error":{"code":"ValidationError","message":"` + longText + `"}}`,
+			code: "ValidationError", message: strings.Repeat("y", maxErrorBodyInMessage) + "…"},
+		{name: "long JSON detail message is truncated",
+			body: `{"error":{"code":"ValidationError","message":"m","details":[{"code":"D","message":"` + longText + `"}]}}`,
+			code: "ValidationError", detail: "D", message: "m " + strings.Repeat("y", maxErrorBodyInMessage-2) + "…"},
+		{name: "long multi-byte JSON message never splits a rune", body: `{"error":{"code":"C","message":"` + multiByte + `"}}`,
+			code: "C",
+			check: func(t *testing.T, message string) {
+				if !utf8.ValidString(message) || !strings.HasSuffix(message, "…") || len(message) > maxErrorBodyInMessage+len("…") {
+					t.Errorf("message %d bytes, valid UTF-8 %v; want a valid cut of at most %d bytes plus the ellipsis",
+						len(message), utf8.ValidString(message), maxErrorBodyInMessage)
+				}
+			}},
 		{name: "truncation never splits a rune", contentType: "text/plain", body: multiByte,
 			check: func(t *testing.T, message string) {
 				if !utf8.ValidString(message) {
@@ -665,34 +691,32 @@ func TestErrorRenderingCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Async (202) wait.
+// 202 Accepted: the operation goes back to the caller, nothing waits for it.
 // ---------------------------------------------------------------------------
 
-// hcAsyncUpserts are the two calls that wait for a 202.
+// hcAsyncUpserts are the two calls that answer a 202 with a WriteResult.
 var hcAsyncUpserts = []struct {
 	name      string
 	operation string
-	run       func(ctx context.Context) error
+	run       func(ctx context.Context) (WriteResult, error)
 }{
-	{"import", "import API", func(ctx context.Context) error {
+	{"import", "import API", func(ctx context.Context) (WriteResult, error) {
 		return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{}`))
 	}},
-	{"websocket", "upsert WebSocket API", func(ctx context.Context) error {
-		return UpsertWebSocketAPI(ctx, deploymentConfig())
-	}},
+	{"websocket", "upsert WebSocket API", hcUpsertWebSocket},
 }
 
 // hcAsyncFake answers the etag GET with 404, the PUT with 202 plus accepted headers,
-// and every /operations/ request with poll(n), n counting from 1. accepted may refer to
+// and every /operations/ request with read(n), n counting from 1. accepted may refer to
 // the fake's own URL through the placeholder "{host}".
-func hcAsyncFake(t *testing.T, accepted http.Header, poll func(n int, w http.ResponseWriter, r *http.Request)) (*hcFake, *atomic.Int32) {
+func hcAsyncFake(t *testing.T, accepted http.Header, read func(n int, w http.ResponseWriter, r *http.Request)) (*hcFake, *atomic.Int32) {
 	t.Helper()
-	var polls atomic.Int32
+	var reads atomic.Int32
 	var host atomic.Value
 	fake := newHCFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/operations/"):
-			poll(int(polls.Add(1)), w, r)
+			read(int(reads.Add(1)), w, r)
 		case r.Method == http.MethodGet:
 			hcRespond(w, http.StatusNotFound, nil, `{"error":{"code":"ResourceNotFound"}}`)
 		default:
@@ -706,21 +730,31 @@ func hcAsyncFake(t *testing.T, accepted http.Header, poll func(n int, w http.Res
 		}
 	})
 	host.Store(fake.server.URL)
-	return fake, &polls
+	return fake, &reads
 }
 
-func TestAsyncPollURLSources(t *testing.T) {
+// hcSucceeded answers an operation read with Succeeded.
+func hcSucceeded(_ int, w http.ResponseWriter, _ *http.Request) {
+	hcRespond(w, http.StatusOK, nil, `{"status":"Succeeded"}`)
+}
+
+// TestAcceptedOperationURLSources: where the operation URL of a 202 comes from, for both
+// API upserts, and that the URL handed back reads the right operation. The write itself
+// never reads it.
+func TestAcceptedOperationURLSources(t *testing.T) {
 	cases := []struct {
 		name     string
 		accepted http.Header
-		// wantPath is the escaped path that must be polled; "" means no poll at all.
+		// wantPath is the escaped path the operation is read at; "" means the 202 is
+		// refused with ErrNoOperationURL.
 		wantPath  string
 		wantQuery url.Values
 	}{
 		{"Azure-AsyncOperation relative", http.Header{"Azure-Asyncoperation": {"/operations/aao"}}, "/operations/aao", url.Values{}},
 		{"Location relative", http.Header{"Location": {"/operations/loc"}}, "/operations/loc", url.Values{}},
-		{"Azure-AsyncOperation absolute", http.Header{"Azure-Asyncoperation": {"{host}/operations/abs"}}, "/operations/abs", url.Values{}},
-		{"Location absolute", http.Header{"Location": {"{host}/operations/locabs"}}, "/operations/locabs", url.Values{}},
+		{"Azure-AsyncOperation absolute", http.Header{"Azure-Asyncoperation": {hcUnroutableHost + "/operations/abs"}}, "/operations/abs", url.Values{}},
+		{"Location absolute", http.Header{"Location": {hcUnroutableHost + "/operations/locabs"}}, "/operations/locabs", url.Values{}},
+		{"absolute in another case", http.Header{"Location": {"HTTP://ARM.INVALID/operations/upper"}}, "/operations/upper", url.Values{}},
 		{"Azure-AsyncOperation wins over Location", http.Header{
 			"Azure-Asyncoperation": {"/operations/preferred"},
 			"Location":             {"/operations/ignored"},
@@ -733,228 +767,213 @@ func TestAsyncPollURLSources(t *testing.T) {
 		{"query string is kept", http.Header{"Azure-Asyncoperation": {"/operations/q?api-version=2021-08-01&asyncResponse=true"}},
 			"/operations/q", url.Values{"api-version": {"2021-08-01"}, "asyncResponse": {"true"}}},
 		{"neither header", http.Header{}, "", nil},
+		// The fake's own address is reachable but is not the ARM endpoint the package is
+		// configured for: the operator's token must not be sent there.
+		{"absolute on another host", http.Header{"Azure-Asyncoperation": {"{host}/operations/abs"}}, "", nil},
+		{"Location on another host", http.Header{"Location": {"{host}/operations/locabs"}}, "", nil},
+		{"credentials in the URL", http.Header{"Location": {"http://user:pw@arm.invalid/operations/x"}}, "", nil},
+		{"relative without a leading slash", http.Header{"Azure-Asyncoperation": {"operations/noslash"}}, "", nil},
 	}
 	for _, upsert := range hcAsyncUpserts {
 		for _, tc := range cases {
 			t.Run(upsert.name+"/"+tc.name, func(t *testing.T) {
-				withAsyncTiming(t, 2*time.Second, time.Millisecond)
-				fake, polls := hcAsyncFake(t, tc.accepted, func(_ int, w http.ResponseWriter, _ *http.Request) {
-					hcRespond(w, http.StatusOK, nil, `{"status":"Succeeded"}`)
-				})
-				if err := upsert.run(context.Background()); err != nil {
-					t.Fatalf("%s = %v, want nil", upsert.name, err)
+				fake, reads := hcAsyncFake(t, tc.accepted, hcSucceeded)
+				result, err := upsert.run(context.Background())
+				if got := reads.Load(); got != 0 {
+					t.Errorf("the write read its operation %d times, want 0", got)
 				}
 				if tc.wantPath == "" {
-					if polls.Load() != 0 {
-						t.Errorf("polled %d times without an operation header", polls.Load())
+					var apimErr *Error
+					if !errors.Is(err, ErrNoOperationURL) || !errors.As(err, &apimErr) {
+						t.Fatalf("%s = %+v, %v; want ErrNoOperationURL", upsert.name, result, err)
+					}
+					if apimErr.StatusCode != http.StatusAccepted || apimErr.Operation != upsert.operation || apimErr.Method != http.MethodPut {
+						t.Errorf("err = %+v, want status 202 on the %s PUT", apimErr, upsert.operation)
 					}
 					return
 				}
-				if polls.Load() != 1 {
-					t.Fatalf("polled %d times, want 1", polls.Load())
+				if err != nil {
+					t.Fatalf("%s = %v, want nil", upsert.name, err)
 				}
-				var pollReq hcRecorded
+				if !result.Accepted() {
+					t.Fatalf("WriteResult = %+v, want Accepted", result)
+				}
+
+				// The URL handed back reads the operation with a bare authenticated GET.
+				state, err := GetOperationState(context.Background(), "tok", result.OperationURL)
+				if err != nil || state.Status != OperationSucceeded {
+					t.Fatalf("GetOperationState(%q) = %+v, %v; want Succeeded", result.OperationURL, state, err)
+				}
+				var readReq hcRecorded
 				for _, r := range fake.requests() {
 					if strings.HasPrefix(r.escapedPath, "/operations/") {
-						pollReq = r
+						readReq = r
 					}
 				}
-				if pollReq.escapedPath != tc.wantPath {
-					t.Errorf("polled %s, want %s", pollReq.escapedPath, tc.wantPath)
+				if readReq.escapedPath != tc.wantPath {
+					t.Errorf("read %s, want %s", readReq.escapedPath, tc.wantPath)
 				}
-				if !reflect.DeepEqual(url.Values(pollReq.query), tc.wantQuery) {
-					t.Errorf("poll query = %v, want %v", pollReq.query, tc.wantQuery)
+				if !reflect.DeepEqual(url.Values(readReq.query), tc.wantQuery) {
+					t.Errorf("read query = %v, want %v", readReq.query, tc.wantQuery)
 				}
-				// The poll is an authenticated GET with nothing else on it.
-				if pollReq.method != http.MethodGet || len(pollReq.body) != 0 {
-					t.Errorf("poll = %s with %d body bytes, want a bare GET", pollReq.method, len(pollReq.body))
+				if readReq.method != http.MethodGet || len(readReq.body) != 0 {
+					t.Errorf("read = %s with %d body bytes, want a bare GET", readReq.method, len(readReq.body))
 				}
-				if pollReq.header.Get("Authorization") != "Bearer tok" {
-					t.Errorf("poll Authorization = %q", pollReq.header.Get("Authorization"))
+				if readReq.header.Get("Authorization") != "Bearer tok" {
+					t.Errorf("read Authorization = %q", readReq.header.Get("Authorization"))
 				}
-				if pollReq.header.Get("If-Match") != "" || pollReq.header.Get("Content-Type") != "" {
-					t.Errorf("poll carries write headers: %v", pollReq.header)
+				if readReq.header.Get("If-Match") != "" || readReq.header.Get("Content-Type") != "" {
+					t.Errorf("read carries write headers: %v", readReq.header)
 				}
 			})
 		}
 	}
 }
 
-// TestAsyncPollURLWithoutLeadingSlashFails: a relative URL ARM never sends, but if it
-// did the wait must fail rather than report a completed import it never saw.
-func TestAsyncPollURLWithoutLeadingSlashFails(t *testing.T) {
-	withAsyncTiming(t, time.Second, time.Millisecond)
-	hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"operations/noslash"}}, func(_ int, w http.ResponseWriter, _ *http.Request) {
-		hcRespond(w, http.StatusOK, nil, `{"status":"Succeeded"}`)
-	})
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`)); err == nil {
-		t.Fatal("import = nil, want an error for an unresolvable poll URL")
-	}
-}
-
-func TestAsyncPollSequences(t *testing.T) {
+// TestOperationStateAnswers covers every answer an operation read can get: the forms of
+// "still running", the forms of "done", and the forms of "ended Failed or Canceled".
+func TestOperationStateAnswers(t *testing.T) {
 	type answer struct {
 		status int
 		body   string
 	}
-	inProgressForms := map[string]answer{
-		"status InProgress":            {http.StatusOK, `{"status":"InProgress"}`},
-		"status Running":               {http.StatusOK, `{"status":"Running"}`},
-		"202 empty":                    {http.StatusAccepted, ``},
-		"202 with status":              {http.StatusAccepted, `{"status":"InProgress"}`},
-		"provisioningState InProgress": {http.StatusOK, `{"properties":{"provisioningState":"InProgress"}}`},
-	}
-	terminals := []struct {
-		name    string
-		answer  answer
-		wantErr bool
-		code    string
-		detail  string
+	cases := []struct {
+		name   string
+		answer answer
+		want   OperationStatus
+		code   string
+		detail string
 	}{
-		{"Succeeded", answer{http.StatusOK, `{"status":"Succeeded"}`}, false, "", ""},
-		{"succeeded lowercase", answer{http.StatusOK, `{"status":"succeeded"}`}, false, "", ""},
-		{"Success", answer{http.StatusOK, `{"status":"Success"}`}, false, "", ""},
-		{"provisioningState Succeeded", answer{http.StatusOK, `{"properties":{"provisioningState":"Succeeded"}}`}, false, "", ""},
-		{"200 without status", answer{http.StatusOK, `{}`}, false, "", ""},
-		{"201 without status", answer{http.StatusCreated, `{"id":"x"}`}, false, "", ""},
-		{"204", answer{http.StatusNoContent, ``}, false, "", ""},
+		{"status InProgress", answer{http.StatusOK, `{"status":"InProgress"}`}, OperationRunning, "", ""},
+		{"status Running", answer{http.StatusOK, `{"status":"Running"}`}, OperationRunning, "", ""},
+		{"unknown status", answer{http.StatusOK, `{"status":"Updating"}`}, OperationRunning, "", ""},
+		{"202 empty", answer{http.StatusAccepted, ``}, OperationRunning, "", ""},
+		{"202 with status", answer{http.StatusAccepted, `{"status":"InProgress"}`}, OperationRunning, "", ""},
+		{"202 claiming success", answer{http.StatusAccepted, `{"status":"Succeeded"}`}, OperationRunning, "", ""},
+		{"provisioningState InProgress", answer{http.StatusOK, `{"properties":{"provisioningState":"InProgress"}}`}, OperationRunning, "", ""},
+
+		{"Succeeded", answer{http.StatusOK, `{"status":"Succeeded"}`}, OperationSucceeded, "", ""},
+		{"succeeded lowercase", answer{http.StatusOK, `{"status":"succeeded"}`}, OperationSucceeded, "", ""},
+		{"Success", answer{http.StatusOK, `{"status":"Success"}`}, OperationSucceeded, "", ""},
+		{"provisioningState Succeeded", answer{http.StatusOK, `{"properties":{"provisioningState":"Succeeded"}}`}, OperationSucceeded, "", ""},
+		{"200 without status", answer{http.StatusOK, `{}`}, OperationSucceeded, "", ""},
+		{"201 without status", answer{http.StatusCreated, `{"id":"x"}`}, OperationSucceeded, "", ""},
+		{"204", answer{http.StatusNoContent, ``}, OperationSucceeded, "", ""},
+
 		{"Failed with nested error", answer{http.StatusOK,
 			`{"status":"Failed","error":{"code":"InternalServerError","message":"DeadOperationMonitor","details":[{"code":"DeadOperationMonitor","message":"monitor gone"}]}}`},
-			true, "InternalServerError", "DeadOperationMonitor"},
-		{"Failed with top-level code", answer{http.StatusOK, `{"status":"Failed","code":"Timeout","message":"slow"}`}, true, "Timeout", ""},
-		{"Failed without error", answer{http.StatusOK, `{"status":"Failed"}`}, true, "", ""},
-		{"failed lowercase", answer{http.StatusOK, `{"status":"failed","error":{"code":"Conflict"}}`}, true, "Conflict", ""},
-		{"Canceled", answer{http.StatusOK, `{"status":"Canceled"}`}, true, "", ""},
-		{"Cancelled", answer{http.StatusOK, `{"status":"Cancelled"}`}, true, "", ""},
-		{"provisioningState Failed", answer{http.StatusOK, `{"properties":{"provisioningState":"Failed"}}`}, true, "", ""},
+			OperationFailed, "InternalServerError", "DeadOperationMonitor"},
+		{"Failed with top-level code", answer{http.StatusOK, `{"status":"Failed","code":"Timeout","message":"slow"}`}, OperationFailed, "Timeout", ""},
+		{"Failed without error", answer{http.StatusOK, `{"status":"Failed"}`}, OperationFailed, "", ""},
+		{"failed lowercase", answer{http.StatusOK, `{"status":"failed","error":{"code":"Conflict"}}`}, OperationFailed, "Conflict", ""},
+		{"Canceled", answer{http.StatusOK, `{"status":"Canceled"}`}, OperationFailed, "", ""},
+		{"Cancelled", answer{http.StatusOK, `{"status":"Cancelled"}`}, OperationFailed, "", ""},
+		{"provisioningState Failed", answer{http.StatusOK, `{"properties":{"provisioningState":"Failed"}}`}, OperationFailed, "", ""},
 	}
-	inProgressNames := []string{"status InProgress", "status Running", "202 empty", "202 with status", "provisioningState InProgress"}
-
-	for _, upsert := range hcAsyncUpserts {
-		for _, n := range []int{0, 1, 4} {
-			for _, ipName := range inProgressNames {
-				if n == 0 && ipName != inProgressNames[0] {
-					continue // the in-progress form is irrelevant when there is none
-				}
-				ip := inProgressForms[ipName]
-				for _, term := range terminals {
-					t.Run(fmt.Sprintf("%s/%d x %s then %s", upsert.name, n, ipName, term.name), func(t *testing.T) {
-						withAsyncTiming(t, 5*time.Second, time.Millisecond)
-						_, polls := hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/seq"}},
-							func(k int, w http.ResponseWriter, _ *http.Request) {
-								if k <= n {
-									hcRespond(w, ip.status, nil, ip.body)
-									return
-								}
-								hcRespond(w, term.answer.status, nil, term.answer.body)
-							})
-						err := upsert.run(context.Background())
-						if got := int(polls.Load()); got != n+1 {
-							t.Errorf("polled %d times, want %d", got, n+1)
-						}
-						if !term.wantErr {
-							if err != nil {
-								t.Fatalf("%s = %v, want nil", upsert.name, err)
-							}
-							return
-						}
-						var apimErr *Error
-						if !errors.As(err, &apimErr) {
-							t.Fatalf("%s = %v (%T), want *apim.Error", upsert.name, err, err)
-						}
-						if !errors.Is(err, ErrAsyncOperationFailed) || errors.Is(err, ErrImportWaitTimeout) {
-							t.Errorf("err = %v, want ErrAsyncOperationFailed only", err)
-						}
-						if apimErr.StatusCode != 0 {
-							t.Errorf("StatusCode = %d, want 0 for an async result", apimErr.StatusCode)
-						}
-						if apimErr.Code != term.code || apimErr.DetailCode != term.detail {
-							t.Errorf("codes = %q/%q, want %q/%q", apimErr.Code, apimErr.DetailCode, term.code, term.detail)
-						}
-						if apimErr.Operation != upsert.operation || apimErr.Method != http.MethodGet {
-							t.Errorf("Operation/Method = %q/%q, want %q/GET", apimErr.Operation, apimErr.Method, upsert.operation)
-						}
-						if !strings.Contains(apimErr.Message, "operation status") {
-							t.Errorf("Message = %q, want it to name the operation status", apimErr.Message)
-						}
-					})
-				}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				hcRespond(w, tc.answer.status, nil, tc.answer.body)
+			})
+			state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/seq")
+			if err != nil {
+				t.Fatalf("GetOperationState() error = %v", err)
 			}
-		}
-	}
-}
-
-// TestAsyncUnknownStatusKeepsPolling: a status this package does not know is neither
-// success nor failure; it polls until the wait runs out.
-func TestAsyncUnknownStatusKeepsPolling(t *testing.T) {
-	withAsyncTiming(t, 60*time.Millisecond, 2*time.Millisecond)
-	_, polls := hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/unknown"}},
-		func(_ int, w http.ResponseWriter, _ *http.Request) {
-			hcRespond(w, http.StatusOK, nil, `{"status":"Updating"}`)
+			if state.Status != tc.want {
+				t.Fatalf("Status = %s, want %s", state.Status, tc.want)
+			}
+			if tc.want != OperationFailed {
+				if state.Err != nil {
+					t.Errorf("Err = %v, want nil for %s", state.Err, state.Status)
+				}
+				return
+			}
+			var apimErr *Error
+			if !errors.As(state.Err, &apimErr) {
+				t.Fatalf("Err = %v (%T), want *apim.Error", state.Err, state.Err)
+			}
+			if !errors.Is(state.Err, ErrAsyncOperationFailed) || errors.Is(state.Err, ErrImportWaitTimeout) {
+				t.Errorf("Err = %v, want ErrAsyncOperationFailed only", state.Err)
+			}
+			if apimErr.StatusCode != 0 {
+				t.Errorf("StatusCode = %d, want 0 for an async result", apimErr.StatusCode)
+			}
+			if apimErr.Code != tc.code || apimErr.DetailCode != tc.detail {
+				t.Errorf("codes = %q/%q, want %q/%q", apimErr.Code, apimErr.DetailCode, tc.code, tc.detail)
+			}
+			if apimErr.Method != http.MethodGet {
+				t.Errorf("Method = %q, want GET", apimErr.Method)
+			}
+			if apimErr.Operation != "APIM write of the API" {
+				t.Errorf("Operation = %q, want APIM write of the API", apimErr.Operation)
+			}
+			if !strings.Contains(apimErr.Message, "operation status") {
+				t.Errorf("Message = %q, want it to name the operation status", apimErr.Message)
+			}
 		})
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, ErrImportWaitTimeout) {
-		t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
-	}
-	if polls.Load() < 2 {
-		t.Errorf("polled %d times, want it to keep polling", polls.Load())
 	}
 }
 
-func TestAsyncPollHTTPErrors(t *testing.T) {
+// TestOperationReadHTTPErrors: a read that fails is returned as the read's own *Error, so
+// the caller reads again later; only a 404 says the operation is gone. A 400 or 422 whose
+// Azure code is not one of APIM's busy codes is the operation's own outcome (Failed), with
+// the status kept; TestOperationRead4xxClassification has the full table.
+func TestOperationReadHTTPErrors(t *testing.T) {
 	statuses := []int{
 		http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
-		http.StatusConflict, http.StatusTooManyRequests,
+		http.StatusConflict, http.StatusUnprocessableEntity, http.StatusTooManyRequests,
 		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout,
 	}
-	for _, upsert := range hcAsyncUpserts {
-		for _, status := range statuses {
-			for _, afterInProgress := range []int{0, 2} {
-				t.Run(fmt.Sprintf("%s/%d after %d in progress", upsert.name, status, afterInProgress), func(t *testing.T) {
-					withAsyncTiming(t, 5*time.Second, time.Millisecond)
-					_, polls := hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/err"}},
-						func(k int, w http.ResponseWriter, _ *http.Request) {
-							if k <= afterInProgress {
-								hcRespond(w, http.StatusOK, nil, `{"status":"InProgress"}`)
-								return
-							}
-							hcRespond(w, status, nil, fmt.Sprintf(`{"error":{"code":"Poll%d","message":"poll failed"}}`, status))
-						})
-					err := upsert.run(context.Background())
-					var apimErr *Error
-					if !errors.As(err, &apimErr) {
-						t.Fatalf("%s = %v (%T), want *apim.Error", upsert.name, err, err)
-					}
-					if apimErr.StatusCode != status || apimErr.Code != fmt.Sprintf("Poll%d", status) {
-						t.Errorf("status/code = %d/%q, want %d/Poll%d", apimErr.StatusCode, apimErr.Code, status, status)
-					}
-					// GET matters: the controller treats a 404 on a GET as transient (the
-					// operation URL may have expired) and a 404 on a write as permanent.
-					if apimErr.Method != http.MethodGet {
-						t.Errorf("Method = %q, want GET", apimErr.Method)
-					}
-					if apimErr.Operation != upsert.operation+" (poll)" {
-						t.Errorf("Operation = %q, want %q", apimErr.Operation, upsert.operation+" (poll)")
-					}
-					if errors.Is(err, ErrAsyncOperationFailed) || errors.Is(err, ErrImportWaitTimeout) {
-						t.Errorf("a poll HTTP failure must not match an async sentinel: %v", err)
-					}
-					// The wait stops at the first HTTP failure; the controller decides what next.
-					if got := int(polls.Load()); got != afterInProgress+1 {
-						t.Errorf("polled %d times, want %d", got, afterInProgress+1)
-					}
-				})
+	for _, status := range statuses {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			fake := newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				hcRespond(w, status, nil, fmt.Sprintf(`{"error":{"code":"Read%d","message":"read failed"}}`, status))
+			})
+			state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/err")
+			if n := len(fake.requests()); n != 1 {
+				t.Errorf("sent %d requests, want 1: retrying is the caller's job", n)
 			}
-		}
+			if status == http.StatusNotFound {
+				if err != nil || state.Status != OperationGone {
+					t.Fatalf("GetOperationState() = %+v, %v; want Gone", state, err)
+				}
+				return
+			}
+			if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+				var failed *Error
+				if err != nil || state.Status != OperationFailed || !errors.As(state.Err, &failed) {
+					t.Fatalf("GetOperationState() = %+v, %v; want Failed with an *apim.Error", state, err)
+				}
+				if failed.StatusCode != status || failed.Code != fmt.Sprintf("Read%d", status) ||
+					failed.Operation != "APIM write of the API" || !errors.Is(state.Err, ErrAsyncOperationFailed) {
+					t.Errorf("Err = %+v, want status %d, code Read%d, the write's operation and ErrAsyncOperationFailed",
+						failed, status, status)
+				}
+				return
+			}
+			var apimErr *Error
+			if !errors.As(err, &apimErr) {
+				t.Fatalf("GetOperationState() = %+v, %v (%T); want *apim.Error", state, err, err)
+			}
+			if apimErr.StatusCode != status || apimErr.Code != fmt.Sprintf("Read%d", status) {
+				t.Errorf("status/code = %d/%q, want %d/Read%d", apimErr.StatusCode, apimErr.Code, status, status)
+			}
+			if apimErr.Method != http.MethodGet || apimErr.Operation != "read APIM operation" {
+				t.Errorf("Method/Operation = %q/%q, want GET/read APIM operation", apimErr.Method, apimErr.Operation)
+			}
+			if errors.Is(err, ErrAsyncOperationFailed) || errors.Is(err, ErrImportWaitTimeout) {
+				t.Errorf("a read HTTP failure must not match an async sentinel: %v", err)
+			}
+		})
 	}
 }
 
-func TestAsyncPollNonJSONBodies(t *testing.T) {
+func TestOperationReadNonJSONBodies(t *testing.T) {
 	cases := []struct {
 		name    string
 		status  int
 		body    string
-		wantErr bool // false: success (terminal HTTP status without a status field)
+		wantErr bool // false: Succeeded (terminal HTTP status without a status field)
 	}{
 		{"200 HTML is a terminal status", http.StatusOK, `<html>ok</html>`, false},
 		{"200 truncated JSON is a terminal status", http.StatusOK, `{"status":"Succ`, false},
@@ -964,180 +983,97 @@ func TestAsyncPollNonJSONBodies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			withAsyncTiming(t, 2*time.Second, time.Millisecond)
-			hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/nj"}},
-				func(_ int, w http.ResponseWriter, _ *http.Request) {
-					hcRespond(w, tc.status, http.Header{"Content-Type": {"text/html"}}, tc.body)
-				})
-			err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+			newHCFake(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				hcRespond(w, tc.status, http.Header{"Content-Type": {"text/html"}}, tc.body)
+			})
+			state, err := GetOperationState(context.Background(), "tok", hcUnroutableHost+"/operations/nj")
 			if tc.wantErr {
 				var apimErr *Error
 				if !errors.As(err, &apimErr) || apimErr.StatusCode != tc.status {
-					t.Fatalf("import = %v, want *apim.Error with %d", err, tc.status)
+					t.Fatalf("GetOperationState() = %+v, %v; want *apim.Error with %d", state, err, tc.status)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("import = %v, want nil", err)
+			if err != nil || state.Status != OperationSucceeded {
+				t.Fatalf("GetOperationState() = %+v, %v; want Succeeded", state, err)
 			}
 		})
 	}
 }
 
-func TestAsyncWaitTimeoutError(t *testing.T) {
+// TestAPIUpsertNeverWaits: an operation that stays running for good, behind a 202 asking
+// to come back in an hour, still leaves the write at once, with a context that has no
+// deadline at all.
+func TestAPIUpsertNeverWaits(t *testing.T) {
 	for _, upsert := range hcAsyncUpserts {
 		t.Run(upsert.name, func(t *testing.T) {
-			withAsyncTiming(t, 40*time.Millisecond, 5*time.Millisecond)
-			_, polls := hcAsyncFake(t, http.Header{"Location": {"/operations/slow"}},
+			_, reads := hcAsyncFake(t, http.Header{"Location": {"/operations/slow"}, "Retry-After": {"3600"}},
 				func(_ int, w http.ResponseWriter, _ *http.Request) {
 					hcRespond(w, http.StatusAccepted, nil, ``)
 				})
 			start := time.Now()
-			err := upsert.run(context.Background())
-			elapsed := time.Since(start)
-
-			if !errors.Is(err, ErrImportWaitTimeout) {
-				t.Fatalf("%s = %v, want ErrImportWaitTimeout", upsert.name, err)
+			result, err := upsert.run(context.Background())
+			if err != nil {
+				t.Fatalf("%s = %v, want nil", upsert.name, err)
 			}
-			if !errors.Is(fmt.Errorf("controller: %w", err), ErrImportWaitTimeout) {
-				t.Error("the timeout must survive wrapping")
+			if elapsed := time.Since(start); elapsed > 2*time.Second {
+				t.Errorf("%s took %s; a 202 must return at once", upsert.name, elapsed)
 			}
-			var apimErr *Error
-			if !errors.As(err, &apimErr) {
-				t.Fatalf("timeout = %T, want *apim.Error", err)
+			if result.OperationURL != hcUnroutableHost+"/operations/slow" || result.RetryAfter != time.Hour {
+				t.Errorf("WriteResult = %+v, want the operation and a 1h Retry-After", result)
 			}
-			if apimErr.Operation != upsert.operation || apimErr.Method != http.MethodGet || apimErr.StatusCode != 0 {
-				t.Errorf("timeout = %+v, want operation %q, GET, no status", apimErr, upsert.operation)
-			}
-			if !strings.Contains(apimErr.Message, "40ms") {
-				t.Errorf("Message = %q, want it to say how long it waited", apimErr.Message)
-			}
-			if errors.Is(err, ErrAsyncOperationFailed) {
-				t.Error("a timeout is not a failed operation")
-			}
-			if elapsed < 40*time.Millisecond || elapsed > 2*time.Second {
-				t.Errorf("gave up after %s, want about 40ms", elapsed)
-			}
-			if polls.Load() < 2 {
-				t.Errorf("polled %d times before giving up, want several", polls.Load())
+			if reads.Load() != 0 {
+				t.Errorf("read the operation %d times, want 0", reads.Load())
 			}
 		})
-	}
-}
-
-// TestAsyncZeroWaitPollsNothing: with no time to wait there is nothing to poll for; it
-// times out at once.
-func TestAsyncZeroWaitPollsNothing(t *testing.T) {
-	withAsyncTiming(t, 0, time.Millisecond)
-	_, polls := hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/zero"}},
-		func(_ int, w http.ResponseWriter, _ *http.Request) {
-			hcRespond(w, http.StatusOK, nil, `{"status":"Succeeded"}`)
-		})
-	err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, ErrImportWaitTimeout) {
-		t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
-	}
-	if polls.Load() != 0 {
-		t.Errorf("polled %d times, want 0", polls.Load())
-	}
-}
-
-func TestAsyncWaitHonoursCancellation(t *testing.T) {
-	withAsyncTiming(t, time.Minute, 5*time.Millisecond)
-	_, polls := hcAsyncFake(t, http.Header{"Azure-Asyncoperation": {"/operations/cancel"}},
-		func(_ int, w http.ResponseWriter, _ *http.Request) {
-			hcRespond(w, http.StatusOK, nil, `{"status":"InProgress"}`)
-		})
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		// Cancel once the wait is clearly under way.
-		for polls.Load() < 2 {
-			time.Sleep(time.Millisecond)
-		}
-		cancel()
-	}()
-	start := time.Now()
-	err := ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), []byte(`{}`))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("import = %v, want context.Canceled", err)
-	}
-	if time.Since(start) > 5*time.Second {
-		t.Error("cancellation did not stop the wait")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Retry-After on the 202 and on poll answers.
+// Retry-After on the 202.
 // ---------------------------------------------------------------------------
 
-func TestAsyncRetryAfterCases(t *testing.T) {
+// TestAcceptedRetryAfterCases: the Retry-After on a 202 goes back to the caller as a
+// duration; anything unusable comes back as zero (the caller's own default applies).
+func TestAcceptedRetryAfterCases(t *testing.T) {
 	future := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(http.TimeFormat) }
-	// boundedWait is the wait of the cases where a Retry-After is honoured and bounded:
-	// their one poll comes after a sleep to the deadline, so the count does not depend on
-	// how long a localhost round trip takes. pollingWait is for the cases that poll more
-	// than once; it leaves room for slow round trips (-race on a loaded CI runner) while
-	// an ignored Retry-After would still show up as hundreds of polls.
-	const (
-		boundedWait = 60 * time.Millisecond
-		pollingWait = 500 * time.Millisecond
-	)
+	const longest = time.Duration(math.MaxInt64)
 	cases := []struct {
-		name string
-		// onAccepted / onPoll are the Retry-After values on the 202 and on every poll answer.
-		onAccepted string
-		onPoll     string
-		wait       time.Duration
-		// minPolls and maxPolls bound the polls with a 1ms interval; a Retry-After that is
-		// honoured and bounded leaves exactly one poll, at the end of the wait.
-		minPolls, maxPolls int32
+		name     string
+		value    string
+		min, max time.Duration
 	}{
-		{"seconds on the 202, bounded", "3600", "3600", boundedWait, 1, 1},
-		// The first poll comes after the 1ms interval, the second at the deadline. A first
-		// round trip slower than the whole wait leaves only the one.
-		{"seconds only on the poll answer, bounded", "", "3600", pollingWait, 1, 2},
-		{"HTTP date on the 202, bounded", future(time.Hour), future(time.Hour), boundedWait, 1, 1},
-		{"HTTP date in a year, bounded", future(365 * 24 * time.Hour), future(365 * 24 * time.Hour), boundedWait, 1, 1},
-		{"68 years in seconds, bounded", "2147483648", "2147483648", boundedWait, 1, 1},
-		// seconds*time.Second would wrap negative here; unbounded, the wait busy-polled ARM
-		// (over a thousand GETs in 60ms) instead of polling once at the end of the wait.
-		{"seconds that overflow time.Duration, bounded", "9223372037", "9223372037", boundedWait, 1, 1},
-		{"seconds far beyond int64 fall back to the interval", "99999999999999999999", "99999999999999999999", pollingWait, 3, 1 << 30},
-		{"zero falls back to the interval", "0", "0", pollingWait, 3, 1 << 30},
-		{"negative falls back to the interval", "-5", "-5", pollingWait, 3, 1 << 30},
-		{"date in the past falls back to the interval", "Mon, 02 Jan 2006 15:04:05 GMT", "Mon, 02 Jan 2006 15:04:05 GMT", pollingWait, 3, 1 << 30},
-		{"garbage falls back to the interval", "later", "later", pollingWait, 3, 1 << 30},
-		{"fraction falls back to the interval", "1.5", "1.5", pollingWait, 3, 1 << 30},
+		{"absent", "", 0, 0},
+		{"seconds", "30", 30 * time.Second, 30 * time.Second},
+		{"an hour in seconds", "3600", time.Hour, time.Hour},
+		{"HTTP date in an hour", future(time.Hour), time.Hour - 5*time.Second, time.Hour},
+		{"HTTP date in a year", future(365 * 24 * time.Hour), 365*24*time.Hour - 5*time.Second, 365 * 24 * time.Hour},
+		{"68 years in seconds", "2147483648", 2147483648 * time.Second, 2147483648 * time.Second},
+		// seconds*time.Second would wrap negative here; it comes back as the longest delay.
+		{"seconds that overflow time.Duration", "9223372037", longest, longest},
+		{"seconds far beyond int64", "99999999999999999999", 0, 0},
+		{"zero", "0", 0, 0},
+		{"negative", "-5", 0, 0},
+		{"date in the past", "Mon, 02 Jan 2006 15:04:05 GMT", 0, 0},
+		{"garbage", "later", 0, 0},
+		{"fraction", "1.5", 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			withAsyncTiming(t, tc.wait, time.Millisecond)
 			accepted := http.Header{"Azure-Asyncoperation": {"/operations/ra"}}
-			if tc.onAccepted != "" {
-				accepted.Set("Retry-After", tc.onAccepted)
+			if tc.value != "" {
+				accepted.Set("Retry-After", tc.value)
 			}
-			_, polls := hcAsyncFake(t, accepted, func(_ int, w http.ResponseWriter, _ *http.Request) {
-				h := http.Header{}
-				if tc.onPoll != "" {
-					h.Set("Retry-After", tc.onPoll)
-				}
-				hcRespond(w, http.StatusOK, h, `{"status":"InProgress"}`)
-			})
-			start := time.Now()
-			err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
-			elapsed := time.Since(start)
-			if !errors.Is(err, ErrImportWaitTimeout) {
-				t.Fatalf("import = %v, want ErrImportWaitTimeout", err)
+			_, reads := hcAsyncFake(t, accepted, hcSucceeded)
+			result, err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte(`{}`))
+			if err != nil {
+				t.Fatalf("import = %v, want nil", err)
 			}
-			// The bound is checked on time, not on poll counts: a Retry-After of an hour
-			// that was not bounded would wait an hour.
-			if elapsed < tc.wait {
-				t.Errorf("gave up after %s, before the %s wait was over", elapsed, tc.wait)
+			if result.RetryAfter < tc.min || result.RetryAfter > tc.max {
+				t.Errorf("RetryAfter = %s, want between %s and %s", result.RetryAfter, tc.min, tc.max)
 			}
-			if elapsed > tc.wait+2*time.Second {
-				t.Errorf("waited %s; the wait must never outlast AsyncWaitTimeout (%s) by more than a round trip", elapsed, tc.wait)
-			}
-			if got := polls.Load(); got < tc.minPolls || got > tc.maxPolls {
-				t.Errorf("polled %d times, want between %d and %d", got, tc.minPolls, tc.maxPolls)
+			if reads.Load() != 0 {
+				t.Errorf("read the operation %d times, want 0", reads.Load())
 			}
 		})
 	}
@@ -1146,8 +1082,8 @@ func TestAsyncRetryAfterCases(t *testing.T) {
 // TestRetryAfterOverflowIsBounded pins the parser directly: a number of seconds too
 // large for time.Duration must not come back as a negative or tiny delay.
 // time.Duration(seconds) * time.Second overflows int64 for anything above
-// 9223372036 s; unchecked, that gave a negative or arbitrary short delay and the wait
-// polled with no pause.
+// 9223372036 s; unchecked, that gave a negative or arbitrary short delay, and a caller
+// would read the operation again with no pause.
 func TestRetryAfterOverflowIsBounded(t *testing.T) {
 	def := 10 * time.Second
 	for _, value := range []string{"9223372037", "18446744074", "9223372036854775807"} {
@@ -1187,6 +1123,10 @@ func TestEveryCallReportsTransportFailures(t *testing.T) {
 			}
 			if IsNotFound(err) {
 				t.Error("a transport failure is not a 404")
+			}
+			// The API upserts fail on their existence check, before any write went out.
+			if errors.Is(err, ErrWriteOutcomeUnknown) {
+				t.Errorf("%s() = %v, want no ErrWriteOutcomeUnknown: nothing was written", call.name, err)
 			}
 		})
 	}

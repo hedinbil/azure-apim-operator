@@ -24,6 +24,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -49,6 +50,10 @@ import (
 	"github.com/hedinit/azure-apim-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
+
+// gracefulShutdownTimeout is how long the manager waits for running reconciles when it
+// stops. charts/azure-apim-operator sets terminationGracePeriodSeconds above it.
+const gracefulShutdownTimeout = 150 * time.Second
 
 var (
 	// scheme is the Kubernetes runtime scheme that defines how API types are serialized.
@@ -199,6 +204,7 @@ func main() {
 		})
 	}
 
+	shutdownTimeout := gracefulShutdownTimeout
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  cacheOptions(),
@@ -207,17 +213,13 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "50287eb5.operator.io",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		// The process ends as soon as the manager stops, so stepping down on the way out is
+		// safe, and the next pod takes over without waiting out the lease.
+		LeaderElectionReleaseOnCancel: true,
+		// Long enough for a write to APIM already sent (bounded by the ARM client's two
+		// minutes) to come back and be recorded; the pod's terminationGracePeriodSeconds
+		// must exceed it.
+		GracefulShutdownTimeout: &shutdownTimeout,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

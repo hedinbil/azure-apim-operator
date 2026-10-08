@@ -73,8 +73,7 @@ const oldImportPUTsFloor = int(incidentHorizon / (oldAsyncWait + oldRequeue))
 // windows through the mod-3 pattern gives 2956 exactly (395 x 202, 1576 x 412, 985 x 422).
 const oldImportPUTsForScript = 2956
 
-// incidentClock is a settable clock shared by the retry policy and the fake ARM, which
-// moves it forward to stand in for the time the operator spends waiting on an import.
+// incidentClock is a settable clock shared by the retry policy and the fake ARM.
 type incidentClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -114,12 +113,13 @@ type incidentImportAnswer struct {
 //   - 422 Management API request timed out on every third PUT, when every3rd422 is set;
 //   - 412 PreconditionFailed while an import it accepted earlier is still running;
 //   - otherwise 202 with an Azure-AsyncOperation URL; the import then runs opDuration of
-//     fake time, and polls answer InProgress until it ends, then Failed with
-//     InternalServerError / DeadOperationMonitor.
+//     fake time, and readings of the operation answer InProgress until it ends, then
+//     Failed with InternalServerError / DeadOperationMonitor.
 //
-// The real wait in the apim package is shortened to milliseconds, so the fake moves the
-// clock by what the wait would have cost in production: until the import ends, at most
-// waitCost (apim.AsyncWaitTimeout before the test shortened it).
+// The operator never waits for a 202 inside a reconcile: it records the operation and
+// reads it on later reconciles, which the replay schedules on the fake clock. overlaps
+// counts the import PUTs that arrived while an import the fake accepted earlier was still
+// running: overlapping imports, the pattern of the incident, which must never happen.
 type incidentImportARM struct {
 	server      *httptest.Server
 	clock       *incidentClock
@@ -127,17 +127,19 @@ type incidentImportARM struct {
 	apiPath     string
 
 	opDuration   time.Duration
-	waitCost     time.Duration
 	every3rd422  bool
 	retryAfter   string
 	recoverAfter int
 
-	mu       sync.Mutex
-	opEnd    time.Time
-	answers  []incidentImportAnswer
-	etagGets int
-	polls    int
-	others   []string
+	mu    sync.Mutex
+	opEnd time.Time
+	// acceptedEnd is when the last import this fake accepted (202) ends; zero before any.
+	acceptedEnd time.Time
+	overlaps    int
+	answers     []incidentImportAnswer
+	etagGets    int
+	polls       int
+	others      []string
 }
 
 func newIncidentImportARM(clock *incidentClock, subscription, resourceGroup, service, apiID string) *incidentImportARM {
@@ -178,6 +180,9 @@ func (f *incidentImportARM) serve(w http.ResponseWriter, r *http.Request) {
 		k := len(f.answers) + 1
 		// bytes is the size of the document the import carries, inside its JSON envelope.
 		answer := incidentImportAnswer{at: now, bytes: len(importedDocument(string(body)))}
+		if now.Before(f.acceptedEnd) {
+			f.overlaps++
+		}
 		switch {
 		case f.recoverAfter > 0 && k > f.recoverAfter:
 			answer.status = http.StatusCreated
@@ -193,11 +198,7 @@ func (f *incidentImportARM) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			answer.status = http.StatusAccepted
 			f.opEnd = now.Add(f.opDuration)
-			wait := f.waitCost
-			if f.opDuration < wait {
-				wait = f.opDuration
-			}
-			f.clock.advance(wait)
+			f.acceptedEnd = f.opEnd
 			w.Header().Set("Azure-AsyncOperation", fmt.Sprintf("/incident-ops/op-%d?api-version=2021-08-01", k))
 			f.setRetryAfter(w)
 			w.WriteHeader(http.StatusAccepted)
@@ -237,6 +238,14 @@ func (f *incidentImportARM) importAnswers() []incidentImportAnswer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]incidentImportAnswer(nil), f.answers...)
+}
+
+// overlapCount is how many imports reached the fake while one it had accepted earlier was
+// still running, whatever the fake answered them.
+func (f *incidentImportARM) overlapCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.overlaps
 }
 
 func (f *incidentImportARM) importCount() int {

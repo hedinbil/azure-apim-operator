@@ -27,7 +27,7 @@ import (
 	"syscall"
 	"time"
 
-	"sigs.k8s.io/yaml"
+	"github.com/hedinit/azure-apim-operator/internal/apim"
 )
 
 const (
@@ -43,7 +43,6 @@ const (
 )
 
 var (
-	errNotOpenAPI       = errors.New("response is not an OpenAPI document: no top-level openapi or swagger field")
 	errBlockedOpenAPIIP = errors.New("destination address is not allowed for OpenAPI fetches")
 
 	// defaultOpenAPIFetcher is what the deployment controller uses unless a test injects one.
@@ -88,7 +87,7 @@ func newOpenAPIFetcher(timeout time.Duration, maxBytes int64, allowLoopback bool
 			Timeout:   timeout,
 			Transport: transport,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= maxOpenAPIRedirects {
+				if len(via) > maxOpenAPIRedirects {
 					return fmt.Errorf("stopped after %d redirects", maxOpenAPIRedirects)
 				}
 				return checkOpenAPIURL(req.URL)
@@ -98,11 +97,15 @@ func newOpenAPIFetcher(timeout time.Duration, maxBytes int64, allowLoopback bool
 	}
 }
 
+// azureWireServer is the Azure host agent every Azure VM reaches. It is not link-local, so
+// the checks below would let it through.
+var azureWireServer = net.IPv4(168, 63, 129, 16)
+
 // blockedDestination reports whether an OpenAPI fetch may not connect to ip. Cluster
 // Services use private ranges, so those stay open; everything that would reach the node,
-// the pod itself or the cloud metadata endpoint is refused.
+// the pod itself, the cloud metadata endpoint or the Azure host agent is refused.
 func blockedDestination(ip net.IP, allowLoopback bool) bool {
-	if ip == nil {
+	if ip == nil || ip.Equal(azureWireServer) {
 		return true
 	}
 	if ip.IsLoopback() {
@@ -146,14 +149,21 @@ func (f *openAPIFetcher) Fetch(ctx context.Context, rawURL string) ([]byte, erro
 	}
 	req.Header.Set("Accept", "application/json, application/yaml, text/yaml;q=0.9, */*;q=0.1")
 
+	// The URL can carry a key in its query string; errors, which end up in the status,
+	// name it without one. A *url.Error from Do repeats the full URL, so only its cause is kept.
+	shown := apim.RedactURL(u.String())
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", u.Redacted(), err)
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("GET %s: %w", shown, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GET %s: unexpected status %s", u.Redacted(), resp.Status)
+		return nil, fmt.Errorf("GET %s: unexpected status %s", shown, resp.Status)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxBytes+1))
@@ -163,24 +173,8 @@ func (f *openAPIFetcher) Fetch(ctx context.Context, rawURL string) ([]byte, erro
 	if int64(len(body)) > f.maxBytes {
 		return nil, fmt.Errorf("OpenAPI document exceeds %d bytes", f.maxBytes)
 	}
-	if err := validateOpenAPIDocument(body); err != nil {
-		return nil, err
+	if err := apim.ValidateOpenAPIDocument(body); err != nil {
+		return nil, fmt.Errorf("response is not a usable OpenAPI document: %w", err)
 	}
 	return body, nil
-}
-
-// validateOpenAPIDocument checks that body parses as JSON or YAML and declares an OpenAPI or
-// Swagger version, which is the least a document must have before it is forwarded to APIM.
-func validateOpenAPIDocument(body []byte) error {
-	var doc map[string]any
-	if err := yaml.Unmarshal(body, &doc); err != nil {
-		return fmt.Errorf("response is not a JSON or YAML document: %w", err)
-	}
-	if _, ok := doc["openapi"]; ok {
-		return nil
-	}
-	if _, ok := doc["swagger"]; ok {
-		return nil
-	}
-	return errNotOpenAPI
 }

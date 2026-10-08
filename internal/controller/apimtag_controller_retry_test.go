@@ -415,7 +415,7 @@ var _ = Describe("APIMTag Controller retry handling", func() {
 		},
 		Entry("400 ValidationError", http.StatusBadRequest, "ValidationError"),
 		Entry("401 Unauthorized", http.StatusUnauthorized, "InvalidAuthenticationToken"),
-		Entry("403 AuthorizationFailed", http.StatusForbidden, "AuthorizationFailed"),
+		Entry("403 LinkedAuthorizationFailed", http.StatusForbidden, "LinkedAuthorizationFailed"),
 		Entry("404 on PUT", http.StatusNotFound, "ResourceNotFound"),
 	)
 
@@ -502,7 +502,7 @@ var _ = Describe("APIMTag Controller retry handling", func() {
 	})
 
 	It("does not retrigger an Invalid tag on the same annotation value", func() {
-		setReplies(azureErr(http.StatusForbidden, "AuthorizationFailed", "no access"))
+		setReplies(azureErr(http.StatusForbidden, "LinkedAuthorizationFailed", "no access"))
 		reconcileTag()
 		Expect(getTag().Status.Phase).To(Equal(phaseInvalid))
 

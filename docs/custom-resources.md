@@ -104,7 +104,7 @@ Settings that only apply to one type live in a block named after the type (`webs
 | Field | Type | Description |
 |-------|------|-------------|
 | `importedAt` | string | Timestamp of last successful import (RFC 3339) |
-| `status` | string | Current status (`OK` or `Error`) |
+| `status` | string | `OK` once the API is written to APIM (or found in sync); `Error` when its `APIMAPIDeployment` is `Stalled` or `Invalid`. A deployment that is only backing off leaves it unchanged |
 | `apiHost` | string | Full APIM gateway URL (e.g., `https://apim.azure-api.net/my-api`; `wss://` for websocket APIs) |
 | `developerPortalHost` | string | APIM developer portal URL |
 
@@ -164,9 +164,9 @@ spec:
 
 ## APIMAPIDeployment
 
-A transient resource that triggers the API import workflow. Created automatically by the `ReplicaSetWatcher` controller when an application ReplicaSet becomes ready. Deleted automatically after a successful import.
+Carries one `APIMAPI` into APIM and holds the state of that import. The operator creates it with the same name as the `APIMAPI`, owned by it, and copies the `APIMAPI` spec onto it whenever the `APIMAPI` changes. It is not deleted after an import; it goes away with its `APIMAPI`. The ReplicaSet watcher annotates it when a matching workload becomes ready, which makes the operator reconcile it.
 
-You typically do not create this resource manually. The controller sets `spec.apimApiName` so the deployment can patch status back onto the source `APIMAPI` without relying on implicit name matching.
+You do not create or edit this resource yourself, except for the `apim.operator.io/retry` annotation (see [Retries and recovery](troubleshooting.md#retries-and-recovery)). The controller sets `spec.apimApiName` so the deployment can patch status back onto the source `APIMAPI` without relying on implicit name matching.
 
 **Namespace:** Same namespace as the application.
 
@@ -193,9 +193,34 @@ You typically do not create this resource manually. The controller sets `spec.ap
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `importedAt` | string | Timestamp of import |
-| `status` | string | Deployment status (`OK` or `Error`) |
-| `pendingImport` | object | An import APIM accepted (`202`) that was still running when the wait for it ended: `operationUrl`, `desiredHash`, `startedAt`. While it is set the operator reads it instead of writing the API again |
+| `phase` | string | `WaitingForMatch`, `WaitingForReadyPod`, `WaitingForRollout`, `Importing`, `Succeeded`, `Error`, `Backoff`, `Stalled` or `Invalid` (see below) |
+| `status` | string | `OK`, `Pending` or `Error` |
+| `message` | string | What the operator is doing or why it stopped |
+| `lastError` | string | The most recent error, if any |
+| `lastAttemptAt` | string | Time of the most recent reconcile attempt (RFC 3339) |
+| `observedGeneration` | int | The `APIMAPI` generation this status reflects |
+| `matchedReplicaSets` | []string | ReplicaSets currently matched to the `APIMAPI` |
+| `openApiHash` | string | Hash of the last fetched OpenAPI document |
+| `desiredHash` | string | Hash of the desired APIM state (spec, APIM location, document) |
+| `appliedHash` | string | Desired hash last fully applied in APIM. When it equals the desired hash, nothing is written |
+| `importedHash` | string | Desired hash the API itself was last written for. While it equals the desired hash, a failed product, tag or host step is retried without importing again |
+| `importedAt` | string | Time of the last successful reconcile in APIM |
+| `pendingImport` | object | An import APIM accepted (`202`) and is still running: `operationUrl`, `desiredHash`, `startedAt`. While it is set the operator reads the operation instead of writing the API again |
+| `consecutiveFailures` | int | Failed APIM writes in a row since the last success, spec change or retry annotation |
+| `nextAttemptAt` | string | Earliest time of the next APIM write while backing off (RFC 3339); empty otherwise |
+| `lastRetryAnnotation` | string | The `apim.operator.io/retry` value the operator last acted on |
+
+| Phase | Meaning |
+|-------|---------|
+| `WaitingForMatch` | No ReplicaSet matches the `APIMAPI`; rechecked every 2 minutes |
+| `WaitingForReadyPod` | Matching ReplicaSets have no ready pod yet; rechecked every 2 minutes |
+| `WaitingForRollout` | An older revision still has ready pods; rechecked every 30 seconds |
+| `Importing` | Writing to APIM, or waiting for an import APIM accepted (`pendingImport`) |
+| `Succeeded` | APIM holds the desired state |
+| `Error` | A step before the APIM write failed (missing `APIMService`, fetch, identity, token); retried after 30 or 60 seconds |
+| `Backoff` | An APIM write failed; the next one waits until `nextAttemptAt` |
+| `Stalled` | Five transient failures in a row; no more writes until reset |
+| `Invalid` | APIM rejected the request; no more writes until reset |
 
 ### Example
 
@@ -242,14 +267,18 @@ Manages a product in Azure APIM. Products group APIs and control access through 
 | `published` | bool | No | Whether the product is published and visible |
 | `apimService` | string | Yes | Name of the `APIMService` CR |
 | `deletionPolicy` | string | No | `Retain` (default) leaves the product in APIM when this resource is deleted. `Delete` removes it from APIM first, subscriptions included, via a finalizer |
-| `apiID` | string | No | API to associate with this product |
+| `apiID` | string | No | Ignored: the operator does not read it. Assign APIs to a product with `productIds` on the `APIMAPI` |
 
 ### Status Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | string | Lifecycle state (`Created` or `Error`) |
-| `message` | string | Error details or status context |
+| `phase` | string | `Created`, `Error`, `Backoff`, `Stalled` or `Invalid` (see [Retry status](#retry-status)) |
+| `message` | string | Status context; on a failed write, the step, the APIM error and what happens next |
+| `observedGeneration` | int | The `metadata.generation` the last APIM write was for |
+| `consecutiveFailures` | int | Failed APIM writes in a row |
+| `nextAttemptAt` | string | Earliest time of the next APIM write while backing off |
+| `lastRetryAnnotation` | string | The `apim.operator.io/retry` value the operator last acted on |
 
 ### Example
 
@@ -291,8 +320,12 @@ Manages a tag in Azure APIM. Tags are used for categorization and organization o
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | string | Lifecycle state (`Created` or `Error`) |
-| `message` | string | Error details or status context |
+| `phase` | string | `Created`, `Error`, `Backoff`, `Stalled` or `Invalid` (see [Retry status](#retry-status)) |
+| `message` | string | Status context; on a failed write, the step, the APIM error and what happens next |
+| `observedGeneration` | int | The `metadata.generation` the last APIM write was for |
+| `consecutiveFailures` | int | Failed APIM writes in a row |
+| `nextAttemptAt` | string | Earliest time of the next APIM write while backing off |
+| `lastRetryAnnotation` | string | The `apim.operator.io/retry` value the operator last acted on |
 
 ### Example
 
@@ -330,8 +363,12 @@ Manages inbound policies in Azure APIM. Policies can be applied at the API level
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | string | Lifecycle state (`Created` or `Error`) |
-| `message` | string | Error details or status context |
+| `phase` | string | `Created`, `Error`, `Backoff`, `Stalled` or `Invalid` (see [Retry status](#retry-status)) |
+| `message` | string | Status context; on a failed write, the step, the APIM error and what happens next |
+| `observedGeneration` | int | The `metadata.generation` the last APIM write was for |
+| `consecutiveFailures` | int | Failed APIM writes in a row |
+| `nextAttemptAt` | string | Earliest time of the next APIM write while backing off |
+| `lastRetryAnnotation` | string | The `apim.operator.io/retry` value the operator last acted on |
 
 ### Example: API-Level Policy
 
@@ -395,6 +432,27 @@ spec:
 ```
 
 **Note:** The `operationId` value must match the `operationId` in the imported OpenAPI spec. See [OpenAPI Spec Requirements](openapi-spec-requirements.md) for how to set operationId values in your API.
+
+## Retry status
+
+`APIMAPIDeployment`, `APIMProduct`, `APIMTag` and `APIMInboundPolicy` write to APIM and share one retry policy:
+
+| Phase | Meaning |
+|-------|---------|
+| `Backoff` | A write failed; the next one waits until `status.nextAttemptAt` (1, 2, 4, 8 minutes, +/-20 %, capped at 30 minutes) |
+| `Stalled` | Five transient failures in a row; no more writes until reset |
+| `Invalid` | APIM rejected the request (400, 401, 403, 404 on the resource's own path, a document APIM refused); no more writes until reset. A 403 with the Azure code `AuthorizationFailed` counts as transient |
+| `Error` | A step before the write failed (missing `APIMService`, missing identity, token); retried after 30 or 60 seconds, not counted |
+
+A write that fails only because something it depends on is not in APIM yet (the product or tag of an assignment, the API of a policy) keeps backing off, at most 30 minutes apart, and never becomes `Stalled`.
+
+To reset a `Stalled` or `Invalid` resource, change its spec or set the `apim.operator.io/retry` annotation to a new value. For an API, annotate the `APIMAPIDeployment` (same name as the `APIMAPI`):
+
+```bash
+kubectl annotate apimapideployment <name> -n <namespace> apim.operator.io/retry="$(date +%s)" --overwrite
+```
+
+See [Troubleshooting: Retries and recovery](troubleshooting.md#retries-and-recovery).
 
 ## Field validation
 

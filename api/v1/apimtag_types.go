@@ -20,8 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// APIMTag declares a tag in an Azure API Management instance that APIs can be tagged with.
 
 // APIMTagSpec defines the desired state of APIMTag.
 type APIMTagSpec struct {
