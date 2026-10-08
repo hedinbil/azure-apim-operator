@@ -9,6 +9,7 @@ package apim
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -72,14 +73,26 @@ func TestCallRequestShapes(t *testing.T) {
 	}
 
 	openAPI := []byte(`{"openapi":"3.0.0"}`)
+	// The import goes as a JSON envelope: the document unchanged in properties.value,
+	// with the path and the backend serviceUrl set in the same write.
 	importBody := func(t *testing.T, body []byte) {
 		t.Helper()
-		if string(body) != string(openAPI) {
-			t.Errorf("import body = %q, want the OpenAPI document unchanged", body)
+		var env struct {
+			Properties map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatalf("import body is not JSON: %v (%s)", err, body)
+		}
+		want := map[string]any{
+			"format": "openapi+json", "value": string(openAPI), "path": "/orders",
+			"serviceUrl": "https://orders.internal", "subscriptionRequired": true,
+		}
+		if !reflect.DeepEqual(env.Properties, want) {
+			t.Errorf("import properties = %v, want %v", env.Properties, want)
 		}
 	}
-	importQuery := map[string]string{"import": "true", "path": "/orders"}
-	importRevQuery := map[string]string{"import": "true", "path": "/orders", "createRevision": "true"}
+	importQuery := map[string]string{}
+	importRevQuery := map[string]string{"createRevision": "true"}
 	wsProps := map[string]any{
 		"type": "websocket", "displayName": "orders", "path": "orders",
 		"protocols": []any{"wss"}, "serviceUrl": "https://orders.internal", "subscriptionRequired": true,
@@ -101,28 +114,28 @@ func TestCallRequestShapes(t *testing.T) {
 		}, []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 		{"import existing API with weak etag", getWithETag(`W/"e1"`), func(ctx context.Context) error {
 			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
 		}, []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: `"e1"`,
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 		{"import existing API with unquoted etag", getWithETag(`e2`), func(ctx context.Context) error {
 			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
 		}, []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: `"e2"`,
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 		{"import existing API without etag", getWithETag(""), func(ctx context.Context) error {
 			return ImportOpenAPIDefinitionToAPIM(ctx, deploymentConfig(), openAPI)
 		}, []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 		{"import when the etag GET fails", func(w http.ResponseWriter, r *http.Request, _ []byte) {
 			if r.Method == http.MethodGet {
@@ -135,7 +148,7 @@ func TestCallRequestShapes(t *testing.T) {
 		}, []hcWant{
 			{method: http.MethodGet, path: "/apis/orders"},
 			{method: http.MethodPut, path: "/apis/orders", query: importQuery, ifMatch: "*",
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 		{"import revision skips the GET", ok, func(ctx context.Context) error {
 			cfg := deploymentConfig()
@@ -143,7 +156,7 @@ func TestCallRequestShapes(t *testing.T) {
 			return ImportOpenAPIDefinitionToAPIM(ctx, cfg, openAPI)
 		}, []hcWant{
 			{method: http.MethodPut, path: "/apis/orders;rev=2", query: importRevQuery, ifMatch: "*",
-				contentType: "application/vnd.oai.openapi+json", body: importBody},
+				contentType: "application/json", body: importBody},
 		}},
 
 		{"websocket new API", getAbsent, func(ctx context.Context) error {

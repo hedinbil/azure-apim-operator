@@ -139,7 +139,7 @@ func (f *deploymentFakeARM) classify(r *http.Request, body []byte) string {
 		return armStepServiceDetails
 	case r.URL.Path == apiPath && r.Method == http.MethodGet:
 		return armStepGetAPI
-	case r.URL.Path == apiPath && r.Method == http.MethodPut && r.URL.Query().Get("import") == "true":
+	case r.URL.Path == apiPath && r.Method == http.MethodPut && isImportEnvelope(body):
 		return armStepImport
 	case r.URL.Path == apiPath && r.Method == http.MethodPut:
 		return armStepWebSocket

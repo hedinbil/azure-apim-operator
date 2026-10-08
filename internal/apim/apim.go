@@ -12,10 +12,14 @@ import (
 	"strings"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/yaml"
 )
 
 // logger is the logger instance for APIM operations.
 var logger = ctrl.Log.WithName("apim")
+
+// serviceURLProperty is the API property that holds the backend address.
+const serviceURLProperty = "serviceUrl"
 
 // GetAPI retrieves an existing API from Azure APIM to get its etag.
 // This is used to properly update existing APIs with the correct If-Match header.
@@ -54,7 +58,19 @@ func GetAPI(ctx context.Context, config APIMDeploymentConfig) (etag string, exis
 // It creates or updates an API in APIM with the provided OpenAPI content, route prefix, and optional revision.
 // The function uses the Azure Management API to perform the import operation.
 // For updates, it properly handles the If-Match header to ensure existing APIs are updated correctly.
+//
+// The document goes inside a JSON envelope together with the backend serviceUrl. Sent as a
+// bare document, APIM takes the backend from the document's own servers (or host/basePath)
+// field, which many frameworks fill with the host the document was fetched from: the
+// in-cluster address the operator used. The API then pointed at that address, or at nothing,
+// until the later serviceUrl PATCH, and kept doing so while that PATCH was backing off.
 func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymentConfig, openApiContent []byte) error {
+	body, format, err := importEnvelope(apimParams, openApiContent)
+	if err != nil {
+		logger.Error(err, "❌ Failed to build APIM import body", "apiID", apimParams.APIID)
+		return err
+	}
+
 	etag := ifMatchForUpsert(ctx, apimParams)
 
 	// Build the Azure Management API URL for importing the API. APIM addresses
@@ -64,21 +80,20 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		logger.Error(err, "❌ Failed to build APIM request", "apiID", apimParams.APIID)
 		return fmt.Errorf("failed to build request: %w", err)
 	}
-	q := importURL.Query()
-	q.Set("import", "true")
-	q.Set("path", apimParams.RoutePrefix)
 	if apimParams.Revision != "" {
+		q := importURL.Query()
 		q.Set("createRevision", "true")
+		importURL.RawQuery = q.Encode()
 	}
-	importURL.RawQuery = q.Encode()
 
 	logger.Info("📤 Sending request to APIM",
 		"method", http.MethodPut,
 		"url", importURL.String(),
 		"apiID", apimParams.APIID,
 		"routePrefix", apimParams.RoutePrefix,
+		"serviceUrl", apimParams.ServiceURL,
+		"format", format,
 		"ifMatch", etag,
-		"contentType", "application/vnd.oai.openapi+json",
 	)
 
 	logger.Info("📄 OpenAPI document ready for import", "apiID", apimParams.APIID, "bytes", len(openApiContent))
@@ -88,12 +103,60 @@ func ImportOpenAPIDefinitionToAPIM(ctx context.Context, apimParams APIMDeploymen
 		method:    http.MethodPut,
 		url:       importURL.String(),
 		token:     apimParams.BearerToken,
-		body:      openApiContent,
+		body:      body,
 		// Set If-Match header for conditional updates (etag) or unconditional updates (*)
 		// GetAPI already formats the etag with quotes, so we can use it directly
-		contentType: "application/vnd.oai.openapi+json",
+		contentType: contentTypeJSON,
 		ifMatch:     etag,
 	}, "imported API into")
+}
+
+// importEnvelope wraps an OpenAPI or Swagger document in the ARM body that imports it and
+// sets the API's path, backend serviceUrl and subscription requirement in the same write.
+// It returns the body and the import format it chose.
+func importEnvelope(apimParams APIMDeploymentConfig, openApiContent []byte) ([]byte, string, error) {
+	format, doc, err := importFormat(openApiContent)
+	if err != nil {
+		return nil, "", err
+	}
+	body, err := json.Marshal(map[string]any{
+		"properties": map[string]any{
+			"format":               format,
+			"value":                string(doc),
+			"path":                 apimParams.RoutePrefix,
+			serviceURLProperty:     apimParams.ServiceURL,
+			"subscriptionRequired": apimParams.SubscriptionRequired,
+		},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal import body: %w", err)
+	}
+	return body, format, nil
+}
+
+// importFormat returns APIM's import format for a document and the document as JSON:
+// "swagger-json" for Swagger 2.0, otherwise "openapi+json". A JSON document is passed
+// through byte for byte; a YAML one is converted, since APIM has no Swagger-YAML format and
+// one JSON path keeps the two versions alike. The fetcher has already checked that the
+// document declares openapi or swagger; anything else is left to APIM to reject (400,
+// which the controllers treat as Invalid).
+func importFormat(openApiContent []byte) (string, []byte, error) {
+	doc := openApiContent
+	if !json.Valid(doc) {
+		converted, err := yaml.YAMLToJSON(openApiContent)
+		if err != nil {
+			return "", nil, fmt.Errorf("OpenAPI document is neither JSON nor YAML: %w", err)
+		}
+		doc = converted
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &top); err != nil {
+		return "", nil, fmt.Errorf("OpenAPI document is not a JSON object: %w", err)
+	}
+	if _, ok := top["swagger"]; ok {
+		return "swagger-json", doc, nil
+	}
+	return "openapi+json", doc, nil
 }
 
 // ifMatchForUpsert picks the If-Match header for a PUT on an API: the current
@@ -165,7 +228,7 @@ func AssignServiceUrlToApi(ctx context.Context, config APIMDeploymentConfig) err
 	// Marshalled, not formatted: a quote or backslash in serviceUrl used to
 	// break out of the string and change the request body (APIM-16).
 	body, err := json.Marshal(map[string]any{
-		"properties": map[string]any{"serviceUrl": config.ServiceURL},
+		"properties": map[string]any{serviceURLProperty: config.ServiceURL},
 	})
 	if err != nil {
 		return fmt.Errorf("marshal serviceUrl patch body: %w", err)

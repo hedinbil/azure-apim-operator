@@ -253,7 +253,10 @@ var _ = Describe("APIM writers: cache staleness and concurrency", func() {
 					})).To(Succeed())
 				},
 				isWrite: func(r *http.Request) bool {
-					return r.Method == http.MethodPut && r.URL.Query().Get("import") == "true"
+					// These deployments have no products or tags, so their only PUT on
+					// .../apis/wcc-dep-<i> is the import.
+					return r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/apis/wcc-dep-") &&
+						!strings.Contains(r.URL.Path, "/products/")
 				},
 			},
 			{

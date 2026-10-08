@@ -69,7 +69,7 @@ func webSocketAPIBody(apimParams APIMDeploymentConfig) ([]byte, error) {
 			// tolerates one but the plain PUT rejects it.
 			"path":                 strings.TrimPrefix(apimParams.RoutePrefix, "/"),
 			"protocols":            webSocketProtocols(apimParams),
-			"serviceUrl":           apimParams.ServiceURL,
+			serviceURLProperty:     apimParams.ServiceURL,
 			"subscriptionRequired": apimParams.SubscriptionRequired,
 		},
 	})

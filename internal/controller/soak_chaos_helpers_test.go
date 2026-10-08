@@ -488,7 +488,7 @@ var soakRoutes = map[string]string{
 }
 
 // soakClassify names the step of a request.
-func soakClassify(method, rest string, query map[string][]string, body []byte) string {
+func soakClassify(method, rest string, body []byte) string {
 	if strings.HasPrefix(rest, "/asyncops/") {
 		return soakStepPoll
 	}
@@ -501,7 +501,7 @@ func soakClassify(method, rest string, query map[string][]string, body []byte) s
 	}
 	shape := method + " " + strings.Join(parts, "/")
 	switch {
-	case method == http.MethodPut && len(query["import"]) > 0:
+	case method == http.MethodPut && isImportEnvelope(body):
 		shape += " import"
 	case method == http.MethodPatch && strings.Contains(string(body), "serviceUrl"):
 		shape += " serviceUrl"
@@ -596,7 +596,7 @@ func (a *soakARM) admit(r *http.Request, body []byte) (*soakRequest, bool) {
 	if got := r.Header.Get("Authorization"); got != "Bearer "+a.token {
 		a.violate("%s %s: Authorization %q", o.kind, o.logical, got)
 	}
-	req := &soakRequest{o: o, svc: svc, idx: idx, rest: rest, step: soakClassify(r.Method, rest, r.URL.Query(), body)}
+	req := &soakRequest{o: o, svc: svc, idx: idx, rest: rest, step: soakClassify(r.Method, rest, body)}
 	req.delay = time.Duration(soakHash(a.plan.seed, o.logical, idx, r.Method, rest, "delay")%3) * time.Millisecond
 
 	switch req.step {

@@ -173,10 +173,11 @@ func (f *incidentImportARM) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `W/"incident-etag"`)
 		writeIncidentJSON(w, http.StatusOK, `{"name":"api"}`)
 
-	case r.URL.Path == f.apiPath && r.Method == http.MethodPut && r.URL.Query().Get("import") == "true":
+	case r.URL.Path == f.apiPath && r.Method == http.MethodPut && isImportEnvelope(body):
 		now := f.clock.now()
 		k := len(f.answers) + 1
-		answer := incidentImportAnswer{at: now, bytes: len(body)}
+		// bytes is the size of the document the import carries, inside its JSON envelope.
+		answer := incidentImportAnswer{at: now, bytes: len(importedDocument(string(body)))}
 		switch {
 		case f.recoverAfter > 0 && k > f.recoverAfter:
 			answer.status = http.StatusCreated

@@ -86,13 +86,19 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 
 			By("sending the document as an OpenAPI import with If-Match * for a new API")
 			imp := f.arm.last(depEnvImport)
-			Expect(imp.Body).To(Equal(depEnvDocV1))
-			Expect(imp.Query.Get("import")).To(Equal("true"))
-			Expect(imp.Query.Get("path")).To(Equal(depEnvRoutePrefix))
+			env, isImport := decodeImportEnvelope([]byte(imp.Body))
+			Expect(isImport).To(BeTrue(), "the import goes as a JSON envelope")
+			Expect(env.Properties.Value).To(Equal(depEnvDocV1))
+			Expect(env.Properties.Format).To(Equal("openapi+json"))
+			Expect(env.Properties.Path).To(Equal(depEnvRoutePrefix))
+			Expect(env.Properties.ServiceURL).To(Equal(depEnvBackend), "the backend is set in the import itself")
+			Expect(env.Properties.SubscriptionRequired).To(HaveValue(BeTrue()))
+			Expect(imp.Query.Has("import")).To(BeFalse())
+			Expect(imp.Query.Has("path")).To(BeFalse())
 			Expect(imp.Query.Get("api-version")).To(Equal("2021-08-01"))
 			Expect(imp.Query.Has("createRevision")).To(BeFalse())
 			Expect(imp.Header.Get("If-Match")).To(Equal("*"))
-			Expect(imp.Header.Get("Content-Type")).To(Equal("application/vnd.oai.openapi+json"))
+			Expect(imp.Header.Get("Content-Type")).To(Equal("application/json"))
 			Expect(imp.Header.Get("Authorization")).To(Equal("Bearer " + depEnvToken))
 			Expect(f.arm.last(depEnvServiceURL).Body).To(ContainSubstring(depEnvBackend))
 			Expect(f.arm.last(depEnvSubscriptionRequired).Body).To(ContainSubstring("true"))
@@ -571,7 +577,7 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 			Expect(f.reconcile()).To(BeZero())
 
 			Expect(f.arm.count(depEnvImport)).To(Equal(6))
-			Expect(f.arm.last(depEnvImport).Body).To(Equal(depEnvDocV2))
+			Expect(importedDocument(f.arm.last(depEnvImport).Body)).To(Equal(depEnvDocV2))
 			st := f.get().Status
 			Expect(st.Phase).To(Equal(apimDeploymentPhaseSucceeded))
 			Expect(st.DesiredHash).To(Equal(f.desiredHash(depEnvDocV2)))
@@ -614,7 +620,7 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 			f.toNextAttempt()
 			Expect(f.reconcile()).To(BeZero())
 			Expect(f.arm.count(depEnvImport)).To(Equal(2))
-			Expect(f.arm.last(depEnvImport).Body).To(Equal(depEnvDocV2))
+			Expect(importedDocument(f.arm.last(depEnvImport).Body)).To(Equal(depEnvDocV2))
 			st := f.get().Status
 			Expect(st.Phase).To(Equal(apimDeploymentPhaseSucceeded))
 			Expect(st.AppliedHash).To(Equal(f.desiredHash(depEnvDocV2)))
@@ -651,7 +657,7 @@ var _ = Describe("APIMAPIDeployment end to end against a fake ARM", func() {
 			Expect(st.NextAttemptAt).To(BeEmpty())
 			Expect(f.arm.count(depEnvImport)).To(Equal(5))
 			Expect(f.doc.fetches()).To(Equal(5))
-			Expect(f.arm.last(depEnvImport).Body).To(Equal(depEnvDocV1), "the fetches really alternated")
+			Expect(importedDocument(f.arm.last(depEnvImport).Body)).To(Equal(depEnvDocV1), "the fetches really alternated")
 		})
 
 		It("gives a Stalled deployment one more bounded round per event that brings a new document", func() {

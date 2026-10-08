@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,6 +158,46 @@ func (f *depEnvARM) serve(w http.ResponseWriter, r *http.Request) {
 
 // classify names the step a request belongs to. The websocket body also carries
 // serviceUrl and subscriptionRequired, so the method is checked before the body.
+// importEnvelope is the JSON body of an API import: the document in properties.value,
+// with the path and backend serviceUrl set in the same write.
+type importEnvelope struct {
+	Properties struct {
+		Format               string `json:"format"`
+		Value                string `json:"value"`
+		Path                 string `json:"path"`
+		ServiceURL           string `json:"serviceUrl"`
+		SubscriptionRequired *bool  `json:"subscriptionRequired"`
+	} `json:"properties"`
+}
+
+// decodeImportEnvelope parses a PUT body as an import envelope; ok is false for any other
+// body, e.g. a websocket API's properties or a policy.
+func decodeImportEnvelope(body []byte) (importEnvelope, bool) {
+	var env importEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return env, false
+	}
+	switch env.Properties.Format {
+	case "openapi+json", "swagger-json":
+		return env, true
+	}
+	// Other PUT bodies carry a format too, e.g. a policy's "rawxml".
+	return env, false
+}
+
+// isImportEnvelope reports whether a PUT on an API is an import rather than a websocket
+// API upsert.
+func isImportEnvelope(body []byte) bool {
+	_, ok := decodeImportEnvelope(body)
+	return ok
+}
+
+// importedDocument returns the OpenAPI document an import envelope carries.
+func importedDocument(body string) string {
+	env, _ := decodeImportEnvelope([]byte(body))
+	return env.Properties.Value
+}
+
 func (f *depEnvARM) classify(r *http.Request, body string) string {
 	p := r.URL.Path
 	isAPI := p == f.apiPath || strings.HasPrefix(p, f.apiPath+";rev=")
@@ -167,7 +208,7 @@ func (f *depEnvARM) classify(r *http.Request, body string) string {
 		return depEnvServiceDetails
 	case isAPI && r.Method == http.MethodGet:
 		return depEnvGetAPI
-	case isAPI && r.Method == http.MethodPut && r.URL.Query().Get("import") == "true":
+	case isAPI && r.Method == http.MethodPut && isImportEnvelope([]byte(body)):
 		return depEnvImport
 	case isAPI && r.Method == http.MethodPut:
 		return depEnvWebSocket

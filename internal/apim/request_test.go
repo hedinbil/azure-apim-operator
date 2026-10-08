@@ -2,8 +2,10 @@ package apim
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -310,17 +312,54 @@ func TestGetAPIFormatsTheETag(t *testing.T) {
 	}
 }
 
-// TestImportRequestShape pins the import PUT: query parameters, the literal ";rev="
-// separator, content type and the etag from the GET.
-func TestImportRequestShape(t *testing.T) {
+// importBody is the JSON envelope the import PUT sends.
+type importBody struct {
+	Properties struct {
+		Format               string `json:"format"`
+		Value                string `json:"value"`
+		Path                 string `json:"path"`
+		ServiceURL           string `json:"serviceUrl"`
+		SubscriptionRequired *bool  `json:"subscriptionRequired"`
+	} `json:"properties"`
+}
+
+// importFakeARM answers every request with ok and records the body of each PUT.
+func importFakeARM(t *testing.T, ok int) (*fakeARM, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var puts []string
 	fake := newFakeARM(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("ETag", `"e1"`)
 		}
-		writeJSON(w, http.StatusOK, `{}`)
+		if r.Method == http.MethodPut {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			puts = append(puts, string(b))
+			mu.Unlock()
+		}
+		writeJSON(w, ok, `{}`)
 	})
+	return fake, &puts
+}
+
+func decodeImportBody(t *testing.T, raw string) importBody {
+	t.Helper()
+	var b importBody
+	if err := json.Unmarshal([]byte(raw), &b); err != nil {
+		t.Fatalf("import body is not JSON: %v\n%s", err, raw)
+	}
+	return b
+}
+
+// TestImportRequestShape pins the import PUT: a JSON envelope carrying the document, the
+// path, the backend serviceUrl and the subscription requirement; no import/path query; the
+// literal ";rev=" separator; and the etag from the GET.
+func TestImportRequestShape(t *testing.T) {
+	fake, puts := importFakeARM(t, http.StatusOK)
 	cfg := deploymentConfig()
-	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{"openapi":"3.0.0"}`)); err != nil {
+	doc := `{"openapi":"3.0.0","info":{"title":"Orders"}}`
+	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
 		t.Fatalf("import = %v", err)
 	}
 	put := fake.request(1)
@@ -328,18 +367,28 @@ func TestImportRequestShape(t *testing.T) {
 		t.Fatalf("second request = %s, want PUT", put.Method)
 	}
 	q := put.URL.Query()
-	if q.Get("import") != "true" || q.Get("path") != "/orders" || q.Has("createRevision") {
-		t.Errorf("query = %v, want import=true, path=/orders, no createRevision", q)
+	if q.Has("import") || q.Has("path") || q.Has("createRevision") {
+		t.Errorf("query = %v, want only api-version: path and document travel in the body", q)
 	}
 	if got := put.Header.Get("If-Match"); got != `"e1"` {
 		t.Errorf("If-Match = %q, want the etag from GET", got)
 	}
-	if got := put.Header.Get("Content-Type"); got != "application/vnd.oai.openapi+json" {
-		t.Errorf("Content-Type = %q", got)
+	if got := put.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	b := decodeImportBody(t, (*puts)[0])
+	if b.Properties.Format != "openapi+json" || b.Properties.Value != doc {
+		t.Errorf("format/value = %q / %q, want openapi+json and the document unchanged", b.Properties.Format, b.Properties.Value)
+	}
+	if b.Properties.Path != cfg.RoutePrefix || b.Properties.ServiceURL != cfg.ServiceURL {
+		t.Errorf("path/serviceUrl = %q / %q, want %q / %q", b.Properties.Path, b.Properties.ServiceURL, cfg.RoutePrefix, cfg.ServiceURL)
+	}
+	if b.Properties.SubscriptionRequired == nil || *b.Properties.SubscriptionRequired != cfg.SubscriptionRequired {
+		t.Errorf("subscriptionRequired = %v, want %v", b.Properties.SubscriptionRequired, cfg.SubscriptionRequired)
 	}
 
 	// A revision skips the GET and addresses "orders;rev=3" with a literal separator.
-	fake = newFakeARM(t, func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusCreated, `{}`) })
+	fake, _ = importFakeARM(t, http.StatusCreated)
 	cfg.Revision = "3"
 	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(`{}`)); err != nil {
 		t.Fatalf("revision import = %v", err)
@@ -350,6 +399,78 @@ func TestImportRequestShape(t *testing.T) {
 	}
 	if put.URL.Query().Get("createRevision") != "true" || put.Header.Get("If-Match") != "*" {
 		t.Errorf("revision import must send createRevision=true and If-Match: *")
+	}
+}
+
+// TestImportSetsServiceURLOverTheDocumentsServers is the bug this envelope fixes: a
+// document whose servers point at the in-cluster address it was fetched from must still
+// import with the configured backend, in the import itself.
+func TestImportSetsServiceURLOverTheDocumentsServers(t *testing.T) {
+	_, puts := importFakeARM(t, http.StatusOK)
+	cfg := deploymentConfig()
+	cfg.ServiceURL = "https://sharc-api.crm-dev.external.hedinit.io"
+	doc := `{"openapi":"3.0.1","servers":[{"url":"http://crm-sharc-api.crm-sharc-dev.svc.cluster.local/"}]}`
+	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), cfg, []byte(doc)); err != nil {
+		t.Fatalf("import = %v", err)
+	}
+	b := decodeImportBody(t, (*puts)[0])
+	if b.Properties.ServiceURL != cfg.ServiceURL {
+		t.Errorf("serviceUrl = %q, want the configured %q, not the document's servers", b.Properties.ServiceURL, cfg.ServiceURL)
+	}
+	if b.Properties.Value != doc {
+		t.Errorf("the document must be sent unchanged; the envelope's serviceUrl wins in APIM")
+	}
+}
+
+// TestImportFormat pins the format chosen per document and the YAML-to-JSON conversion.
+func TestImportFormat(t *testing.T) {
+	cases := []struct {
+		name, doc, format string
+		wantJSON          string // empty: the document itself
+	}{
+		{"openapi 3 json", `{"openapi":"3.0.2","info":{}}`, "openapi+json", ""},
+		{"openapi 3.1 json", `{"openapi":"3.1.0"}`, "openapi+json", ""},
+		{"swagger 2 json", `{"swagger":"2.0","host":"svc.cluster.local"}`, "swagger-json", ""},
+		{"openapi 3 yaml", "openapi: 3.0.0\ninfo:\n  title: x\n", "openapi+json", `{"info":{"title":"x"},"openapi":"3.0.0"}`},
+		{"swagger 2 yaml", "swagger: '2.0'\nbasePath: /v1\n", "swagger-json", `{"basePath":"/v1","swagger":"2.0"}`},
+		{"json without version falls back", `{}`, "openapi+json", ""},
+		{"json keeps key order and spacing", "{ \"openapi\": \"3.0.0\",  \"a\": 1 }", "openapi+json", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			format, doc, err := importFormat([]byte(c.doc))
+			if err != nil {
+				t.Fatalf("importFormat = %v", err)
+			}
+			if format != c.format {
+				t.Errorf("format = %q, want %q", format, c.format)
+			}
+			want := c.wantJSON
+			if want == "" {
+				want = c.doc
+			}
+			if string(doc) != want {
+				t.Errorf("document = %s, want %s", doc, want)
+			}
+		})
+	}
+
+	for _, bad := range []string{"[1,2]", "- a\n- b\n", "key: [unclosed\n"} {
+		if _, _, err := importFormat([]byte(bad)); err == nil {
+			t.Errorf("importFormat(%q) = nil error, want one for a non-object document", bad)
+		}
+	}
+}
+
+// TestImportBadDocumentSendsNothing: a document the envelope cannot carry fails before any
+// request reaches ARM.
+func TestImportBadDocumentSendsNothing(t *testing.T) {
+	fake, _ := importFakeARM(t, http.StatusOK)
+	if err := ImportOpenAPIDefinitionToAPIM(context.Background(), deploymentConfig(), []byte("[1,2]")); err == nil {
+		t.Fatal("import of a JSON array succeeded, want an error")
+	}
+	if n := fake.count(); n != 0 {
+		t.Errorf("ARM saw %d requests, want 0", n)
 	}
 }
 
