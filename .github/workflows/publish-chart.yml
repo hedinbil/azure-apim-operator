@@ -22,7 +22,18 @@ permissions:
   packages: write
 
 jobs:
+  # Publish only what passed tests and lint.
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+  lint:
+    uses: ./.github/workflows/lint.yml
+    permissions:
+      contents: read
+
   chart:
+    needs: [test, lint]
     # This repo is public, so it uses the public copy of the shared workflow;
     # the internal hedin-github-actions repo is not accessible from public repos.
     uses: hedinbil/hedin-github-actions-public/.github/workflows/publish-operator-chart.yml@main
